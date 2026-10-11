@@ -21,7 +21,7 @@ const DEFAULT_PROFILES: UserProfile[] = [
     callsign: "N1NJA",
     displayName: "Radio Operator",
     dmrId: 5109999,
-    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100],
+    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990],
     badgeColor: "bg-cyan-500 text-slate-950",
     networkTag: "NinjaRadio Master"
   }

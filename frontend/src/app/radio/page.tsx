@@ -47,6 +47,7 @@ const ALL_TALKGROUPS = [
   { id: 5109, name: "RAPI Nusantara ASL", slot: 1, mode: "ANALOG", category: "RAPI" },
   { id: 5108, name: "11M CB Digital Gateway", slot: 1, mode: "CB", category: "CB" },
   { id: 5100, name: "Emergency SAR 911", slot: 1, mode: "P25", category: "Komunitas" },
+  { id: 9990, name: "Audio Test Echo / Parrot", slot: 2, mode: "DMR", category: "Amatir" },
 ];
 
 interface SmsItem {
@@ -70,7 +71,7 @@ export default function RadioPocketMode() {
     callsign: "N1NJA",
     displayName: "Radio Operator",
     dmrId: 5109999,
-    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100],
+    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990],
     badgeColor: "bg-cyan-500 text-slate-950",
     networkTag: "NinjaRadio Master"
   });
