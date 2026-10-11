@@ -189,7 +189,7 @@ export default function SettingsPage() {
     setNewPeerPort(peer.port || (peer.mode === "openbridge" ? 62030 : 62031));
     setNewPeerPassword(peer.password || "");
     setNewPeerMode(peer.mode || "homebrew");
-    setNewPeerDmrId(peer.dmrId ? String(peer.dmrId) : "");
+    setNewPeerDmrId(peer.dmrId ? String(peer.dmrId) : (peer as any).dmr_id ? String((peer as any).dmr_id) : "");
     setNewPeerCallsign(peer.callsign || "");
     setNewPeerColorCode(peer.colorCode || 1);
     setNewPeerSlots(peer.slots || "both");
@@ -243,6 +243,7 @@ export default function SettingsPage() {
       subscribedTgs: finalTgs,
       mode: newPeerMode,
       dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
+      dmr_id: newPeerDmrId ? Number(newPeerDmrId) : undefined,
       callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
       colorCode: Number(newPeerColorCode) || 1,
       slots: newPeerSlots,
