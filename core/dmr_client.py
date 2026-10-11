@@ -198,20 +198,38 @@ class HomeBrewClient:
         logger.info(f"[{self.name}] Sent RPTK auth hash response to {self.target_addr}")
 
     async def _send_rptc(self):
-        """Sends repeater configuration and talkgroup subscriptions (RPTC)."""
+        """Sends repeater configuration and talkgroup subscriptions (RPTC).
+        Follows standard HomeBrew DMR / MMDVM protocol byte lengths:
+        - callsign: 8 bytes
+        - rx_freq: 9 bytes
+        - tx_freq: 9 bytes
+        - tx_pwr: 2 bytes
+        - color_code: 2 bytes
+        - lat: 8 bytes
+        - lon: 9 bytes
+        - height: 3 bytes
+        - location: 20 bytes
+        - desc: 19 bytes
+        - slots: 1 byte (b"3" for duplex TS1+TS2, b"2" or b"1")
+        - url: 124 bytes
+        - soft_id: 40 bytes
+        - pkg_id: 40 bytes
+        - options: variable (e.g. OPTIONS:TS1_1=...;TS2_1=...;)
+        """
         callsign_bytes = self.callsign.ljust(8)[:8].encode("utf-8")
         rx_freq = b"438800000"
         tx_freq = b"438800000"
         tx_pwr = b"25"
         color_code = b"01"
-        lat = b"-06.2088"
-        lon = b"+106.845"
-        height = b"050"
-        location = "Jakarta, ID".ljust(20)[:20].encode("utf-8")
-        desc = "NinjaRadio Gateway".ljust(20)[:20].encode("utf-8")
-        url = "www.ninjaradio.id".ljust(20)[:20].encode("utf-8")
-        soft_id = "v2.0.0".ljust(10)[:10].encode("utf-8")
-        pkg_id = "FreeDMR".ljust(10)[:10].encode("utf-8")
+        lat = b"-06.2088"                           # 8 bytes
+        lon = b"+106.8450"                          # 9 bytes (fixed 1-byte shift)
+        height = b"050"                             # 3 bytes
+        location = "Jakarta, ID".ljust(20)[:20].encode("utf-8")     # 20 bytes
+        desc = "NinjaRadio".ljust(19)[:19].encode("utf-8")          # 19 bytes
+        slots = b"3"                                                # 1 byte (Both Slots 1 & 2 enabled)
+        url = "https://ninjaradio.id".ljust(124)[:124].encode("utf-8") # 124 bytes
+        soft_id = "MMDVM_Bridge".ljust(40)[:40].encode("utf-8")     # 40 bytes (standard MMDVM identifier)
+        pkg_id = "MMDVM".ljust(40)[:40].encode("utf-8")             # 40 bytes (standard MMDVM repeater package)
 
         opt_parts = []
         for i, tg in enumerate(self.ts1_tgs, start=1):
@@ -227,7 +245,7 @@ class HomeBrewClient:
 
         config_data = (
             callsign_bytes + rx_freq + tx_freq + tx_pwr + color_code +
-            lat + lon + height + location + desc + url + soft_id + pkg_id +
+            lat + lon + height + location + desc + slots + url + soft_id + pkg_id +
             options_bytes
         )
 
