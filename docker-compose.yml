@@ -36,6 +36,8 @@ services:
       - "${USRP_AUDIO_PORT:-32345}:${USRP_AUDIO_PORT:-32345}/udp"
     environment:
       - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
+    volumes:
+      - ninjaradio_data:/app/data
     networks:
       - ninjaradio_net
 

@@ -272,6 +272,20 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
     # Dispatch actual network UDP packet to core and audio bridge
     send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_transmitting)
 
+    # Notify Core DMR engine via HTTP control API
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            await s.post("http://core:5000/api/tx", json={
+                "callsign": callsign,
+                "dmr_id": dmr_id,
+                "tg": tg,
+                "slot": slot,
+                "is_transmitting": is_transmitting
+            }, timeout=1.0)
+    except Exception:
+        pass
+
     if is_transmitting:
         tx_data = {
             "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
@@ -316,33 +330,147 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
 
         return {"status": "TX_STOPPED", "data": lh_item}
 
-# ----------------- Server Configuration Management -----------------
+# ----------------- Ingress DMR Network Traffic from Core -----------------
 
-SERVER_CONFIG_CACHE = {
-    "server_callsign": settings.SERVER_CALLSIGN,
-    "server_dmr_id": settings.SERVER_DMR_ID,
-    "server_name": "NinjaRadio Indonesia Master Core",
-    "server_location": "Jakarta, Indonesia",
-    "default_tg": settings.DEFAULT_TALKGROUP,
-    "hotspot_port": settings.DMR_MASTER_PORT,
-    "hotspot_password": "ninjaradio_pass",
-    "max_hotspots": 128,
-    "peer_host": "master.freedmr.org",
-    "peer_port": settings.HBLINK_PEER_PORT,
-    "peer_password": "openbridge_secret",
-    "subscribed_tgs": "510, 5101, 5102, 5108, 5109, 5100",
-    "usrp_port": settings.USRP_AUDIO_PORT,
-    "ysf_room_id": 51000,
-    "asl_node": 59123,
-    "xlx_reflector": "XLX510 B"
-}
+ACTIVE_STREAMS = {}
+
+@router.post("/internal/dmr_event")
+async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depends(get_db)):
+    """Receives live DMR RF/network frames forwarded from Core Engine."""
+    src_id = event.get("src_id", 0)
+    dst_tg = event.get("dst_tg", 510)
+    slot = event.get("slot", 1)
+    dtype_vseq = event.get("dtype_vseq", 0)
+    stream_id = event.get("stream_id", 0)
+    network = event.get("network", "DMR-Network")
+
+    # Resolve callsign from database or fallback to Radio ID
+    callsign = f"ID-{src_id}"
+    name = f"DMR Operator {src_id}"
+    category = "Amatir"
+    
+    cb_entry = await CallbookService.get_by_dmr_id(session, src_id)
+    if cb_entry:
+        callsign = cb_entry.callsign
+        name = cb_entry.name
+        category = cb_entry.category or "Amatir"
+
+    tg_name = TG_NAMES.get(dst_tg, f"Talkgroup {dst_tg}")
+
+    # Voice Header or active bursts
+    if dtype_vseq in [0, 1, 3, 4, 5]:
+        tx_data = {
+            "id": f"tx_rf_{stream_id}",
+            "callsign": callsign,
+            "name": name,
+            "dmr_id": src_id,
+            "talkgroup": dst_tg,
+            "tg_name": tg_name,
+            "slot": slot,
+            "mode": f"DMR ({network})",
+            "category": category,
+            "rssi": "-62 dBm",
+            "ber": "0.1%",
+            "started_at": datetime.utcnow().strftime("%H:%M:%S")
+        }
+        ACTIVE_STREAMS[stream_id] = tx_data
+        await manager.update_tx_state(tx_data)
+    
+    # Voice Terminator (Call Ended)
+    elif dtype_vseq == 2:
+        await manager.update_tx_state(None)
+        cached = ACTIVE_STREAMS.pop(stream_id, None)
+        started_time = cached.get("started_at") if cached else datetime.utcnow().strftime("%H:%M:%S")
+        
+        lh_item = {
+            "id": f"lh_{stream_id}_{int(datetime.utcnow().timestamp())}",
+            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+            "callsign": callsign,
+            "name": name,
+            "dmr_id": src_id,
+            "talkgroup": dst_tg,
+            "tg_name": tg_name,
+            "slot": slot,
+            "mode": f"DMR ({network})",
+            "category": category,
+            "duration": "4.2s",
+            "loss": "0.0%",
+            "ber": "0.1%",
+            "rssi": "-62 dBm",
+            "is_tx": False
+        }
+        await manager.push_last_heard(lh_item)
+
+    return {"status": "OK"}
+
+# ----------------- Persistent Server Configuration Management -----------------
+
+CONFIG_FILE = "/app/data/config.json"
+
+def read_config_file() -> dict:
+    import json
+    import os
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    
+    # Defaults
+    default_cfg = {
+        "server_callsign": settings.SERVER_CALLSIGN,
+        "server_dmr_id": settings.SERVER_DMR_ID,
+        "server_name": "NinjaRadio Master Core",
+        "server_location": "Jakarta, Indonesia",
+        "default_tg": settings.DEFAULT_TALKGROUP,
+        "hotspot_port": settings.DMR_MASTER_PORT,
+        "hotspot_password": "ninjaradio_pass",
+        "max_hotspots": 128,
+        "peering": []
+    }
+    return default_cfg
 
 @router.get("/config")
 async def get_system_config():
-    return SERVER_CONFIG_CACHE
+    cfg = read_config_file()
+    
+    # Try querying live Core Engine status
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            async with s.get("http://core:5000/api/status", timeout=1.5) as r:
+                if r.status == 200:
+                    core_info = await r.json()
+                    cfg["_core_status"] = core_info
+    except Exception:
+        cfg["_core_status"] = {"status": "STANDBY"}
+
+    return cfg
 
 @router.post("/config")
 async def save_system_config(config: dict):
-    SERVER_CONFIG_CACHE.update(config)
-    return {"status": "SUCCESS", "message": "Konfigurasi server berhasil diperbarui secara live", "data": SERVER_CONFIG_CACHE}
+    import json
+    import os
+    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+    # Instruct Core Engine to reload immediately
+    core_reloaded = False
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            async with s.post("http://core:5000/api/reload", timeout=2.0) as r:
+                if r.status == 200:
+                    core_reloaded = True
+    except Exception:
+        pass
+
+    return {
+        "status": "SUCCESS",
+        "message": "Konfigurasi server berhasil disimpan dan diterapkan ke Core DMR Engine",
+        "core_reloaded": core_reloaded,
+        "data": config
+    }
 

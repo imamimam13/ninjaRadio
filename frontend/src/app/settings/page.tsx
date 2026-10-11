@@ -57,7 +57,7 @@ export default function SettingsPage() {
   const [maxHotspots, setMaxHotspots] = useState(128);
   const [allowLoop, setAllowLoop] = useState(false);
 
-  // 3. Multi-Peer OpenBridge & HBLink Peering
+  // 3. Multi-Peer OpenBridge & HBLink / OpenDMR Peering
   const [peerList, setPeerList] = useState<Array<{
     id: string;
     name: string;
@@ -66,42 +66,78 @@ export default function SettingsPage() {
     password: string;
     subscribedTgs: string;
     isActive: boolean;
-  }>>([
-    {
-      id: "peer_1",
-      name: "BrandMeister & FreeDMR Master",
-      host: "master.freedmr.org",
-      port: 62030,
-      password: "openbridge_secret",
-      subscribedTgs: "510, 5101, 5102, 5108, 5109, 5100",
-      isActive: true,
-    },
-  ]);
+    mode?: "homebrew" | "openbridge";
+    dmrId?: number;
+    callsign?: string;
+  }>>([]);
   const [showAddPeerModal, setShowAddPeerModal] = useState(false);
   const [newPeerName, setNewPeerName] = useState("");
   const [newPeerHost, setNewPeerHost] = useState("");
-  const [newPeerPort, setNewPeerPort] = useState(62030);
+  const [newPeerPort, setNewPeerPort] = useState(60231);
   const [newPeerPassword, setNewPeerPassword] = useState("");
-  const [newPeerTgs, setNewPeerTgs] = useState("510, 5101");
+  const [newPeerTgs, setNewPeerTgs] = useState("1025, 1023");
+  const [newPeerMode, setNewPeerMode] = useState<"homebrew" | "openbridge">("homebrew");
+  const [newPeerDmrId, setNewPeerDmrId] = useState("");
+  const [newPeerCallsign, setNewPeerCallsign] = useState("");
 
-  // Load saved peers from localStorage
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ninjaradio_peers");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) setPeerList(parsed);
-        } catch {}
+  const [coreStatus, setCoreStatus] = useState<any>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Load server configuration and live peer status from Backend API
+  const loadSystemConfig = async () => {
+    try {
+      const res = await fetch("/api/config");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.server_callsign) setServerCallsign(data.server_callsign);
+        if (data.server_dmr_id) setServerDmrId(data.server_dmr_id);
+        if (data.server_name) setServerName(data.server_name);
+        if (data.server_location) setServerLocation(data.server_location);
+        if (data.default_tg) setDefaultTg(data.default_tg);
+        if (data.hotspot_port) setHotspotPort(data.hotspot_port);
+        if (data.hotspot_password) setHotspotPassword(data.hotspot_password);
+        if (Array.isArray(data.peering) && data.peering.length > 0) {
+          setPeerList(data.peering);
+        }
+        if (data._core_status) {
+          setCoreStatus(data._core_status);
+        }
       }
+    } catch (err) {
+      console.warn("Failed to load /api/config:", err);
     }
+  };
+
+  useEffect(() => {
+    loadSystemConfig();
+    const interval = setInterval(loadSystemConfig, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  const savePeers = (updated: typeof peerList) => {
+  const savePeers = async (updated: typeof peerList) => {
     setPeerList(updated);
     if (typeof window !== "undefined") {
       localStorage.setItem("ninjaradio_peers", JSON.stringify(updated));
     }
+    // Auto-save to backend if unlocked or user changed peers
+    try {
+      await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          server_callsign: serverCallsign,
+          server_dmr_id: Number(serverDmrId),
+          server_name: serverName,
+          server_location: serverLocation,
+          default_tg: Number(defaultTg),
+          hotspot_port: Number(hotspotPort),
+          hotspot_password: hotspotPassword,
+          max_hotspots: Number(maxHotspots),
+          peering: updated,
+        })
+      });
+      loadSystemConfig();
+    } catch {}
   };
 
   const handleAddPeer = (e: React.FormEvent) => {
@@ -111,16 +147,21 @@ export default function SettingsPage() {
       id: `peer_${Date.now()}`,
       name: newPeerName.trim(),
       host: newPeerHost.trim(),
-      port: Number(newPeerPort) || 62030,
-      password: newPeerPassword.trim() || "openbridge_secret",
-      subscribedTgs: newPeerTgs.trim() || "510",
+      port: Number(newPeerPort) || 60231,
+      password: newPeerPassword.trim(),
+      subscribedTgs: newPeerTgs.trim() || "1025, 1023",
       isActive: true,
+      mode: newPeerMode,
+      dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
+      callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
     };
     savePeers([...peerList, newPeer]);
     setShowAddPeerModal(false);
     setNewPeerName("");
     setNewPeerHost("");
     setNewPeerPassword("");
+    setNewPeerDmrId("");
+    setNewPeerCallsign("");
     beepPlayer?.playTalkGrant();
   };
 
@@ -278,15 +319,46 @@ export default function SettingsPage() {
     }
   };
 
-  const handleSaveConfig = (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdminUnlocked) {
       handleToggleAdminMode();
       return;
     }
-    setSavedSuccess(true);
-    beepPlayer?.playTalkGrant();
-    setTimeout(() => setSavedSuccess(false), 2500);
+
+    setIsSaving(true);
+    try {
+      const payload = {
+        server_callsign: serverCallsign,
+        server_dmr_id: Number(serverDmrId),
+        server_name: serverName,
+        server_location: serverLocation,
+        default_tg: Number(defaultTg),
+        hotspot_port: Number(hotspotPort),
+        hotspot_password: hotspotPassword,
+        max_hotspots: Number(maxHotspots),
+        peering: peerList,
+      };
+
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        setSavedSuccess(true);
+        beepPlayer?.playTalkGrant();
+        setTimeout(() => {
+          loadSystemConfig();
+          setSavedSuccess(false);
+        }, 1500);
+      }
+    } catch (err) {
+      console.error("Save config error:", err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleExportJson = () => {
@@ -615,8 +687,31 @@ export default function SettingsPage() {
                       </div>
                       <div className="flex justify-between">
                         <span>Secret Key:</span>
-                        <span className="text-slate-500">••••••••</span>
+                        <span className="text-slate-500">{peer.password ? "••••••••" : "Tanpa Password"}</span>
                       </div>
+                      {/* Live Core Connection Status */}
+                      {(() => {
+                        const live = coreStatus?.peers?.find((p: any) => p.host === peer.host && Number(p.port) === Number(peer.port)) ||
+                                     coreStatus?.peers?.find((p: any) => p.name === peer.name);
+                        const isConnected = live?.state === "CONNECTED";
+                        const isHandshaking = live?.state === "LOGIN_SENT" || live?.state === "KEY_SENT" || live?.state === "LOGGING_IN";
+                        return (
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-800 text-[10px]">
+                            <span>Status DMR Engine:</span>
+                            <span className={`px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
+                              isConnected
+                                ? "bg-emerald-950 text-emerald-300 border border-emerald-700 shadow-sm"
+                                : isHandshaking
+                                ? "bg-amber-950 text-amber-300 border border-amber-700 animate-pulse"
+                                : peer.isActive
+                                ? "bg-rose-950 text-rose-300 border border-rose-800"
+                                : "bg-slate-900 text-slate-500"
+                            }`}>
+                              {live ? `${live.state} (RX: ${live.packets_rx || 0})` : (peer.isActive ? "CONNECTING..." : "NONAKTIF")}
+                            </span>
+                          </div>
+                        );
+                      })()}
                       <div className="pt-1.5 border-t border-slate-800">
                         <span className="text-slate-500 block mb-1">Subscribed Talkgroups:</span>
                         <div className="flex flex-wrap gap-1">
@@ -1083,14 +1178,67 @@ export default function SettingsPage() {
               </div>
 
               <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Secret Key / Passphrase OpenBridge</label>
+                <label className="block text-slate-400 mb-1 font-semibold">Tipe Protokol DMR</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewPeerMode("homebrew")}
+                    className={`p-2 rounded-xl border text-center transition-all ${
+                      newPeerMode === "homebrew"
+                        ? "bg-purple-600 text-white font-bold border-purple-400 shadow"
+                        : "bg-[#05080f] text-slate-400 border-slate-800"
+                    }`}
+                  >
+                    <div>📡 HomeBrew Protocol</div>
+                    <div className="text-[9px] opacity-80">(MMDVM / HomeBrew Master)</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewPeerMode("openbridge")}
+                    className={`p-2 rounded-xl border text-center transition-all ${
+                      newPeerMode === "openbridge"
+                        ? "bg-purple-600 text-white font-bold border-purple-400 shadow"
+                        : "bg-[#05080f] text-slate-400 border-slate-800"
+                    }`}
+                  >
+                    <div>🌐 OpenBridge Peering</div>
+                    <div className="text-[9px] opacity-80">(BrandMeister / FreeDMR Peer)</div>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Secret Key / Passphrase (Jika Ada)</label>
                 <input
                   type="password"
-                  placeholder="Passphrase rahasia peering"
+                  placeholder="Password hotspot / key peering (kosongkan jika tanpa password)"
                   value={newPeerPassword}
                   onChange={(e) => setNewPeerPassword(e.target.value)}
                   className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">DMR ID (Opsional)</label>
+                  <input
+                    type="number"
+                    placeholder={`Default: ${serverDmrId}`}
+                    value={newPeerDmrId}
+                    onChange={(e) => setNewPeerDmrId(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Callsign (Opsional)</label>
+                  <input
+                    type="text"
+                    placeholder={`Default: ${serverCallsign}`}
+                    value={newPeerCallsign}
+                    onChange={(e) => setNewPeerCallsign(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none font-mono uppercase"
+                  />
+                </div>
               </div>
 
               <div>
@@ -1098,12 +1246,12 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   required
-                  placeholder="Contoh: 510, 5101, 5109, 91"
+                  placeholder="Contoh: 1025, 1023, 510"
                   value={newPeerTgs}
                   onChange={(e) => setNewPeerTgs(e.target.value)}
                   className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none"
                 />
-                <p className="text-[10px] text-slate-500 mt-1">Daftar TG yang akan di-stream bolak-balik antara server Anda dan peer ini.</p>
+                <p className="text-[10px] text-slate-500 mt-1">Daftar TG yang akan didengarkan dan di-stream bolak-balik dengan server ini.</p>
               </div>
 
               <div className="flex gap-2 pt-2">
