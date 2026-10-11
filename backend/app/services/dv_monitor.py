@@ -19,12 +19,47 @@ SAMPLE_ACTIVE_USERS = [
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
+        self.client_sessions: Dict[WebSocket, Dict] = {}
         self.last_heard_history: List[Dict] = []
         self.current_tx: Dict = None
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.add(websocket)
+
+        # Detect Client IP
+        client_ip = "127.0.0.1"
+        if websocket.headers.get("x-forwarded-for"):
+            client_ip = websocket.headers.get("x-forwarded-for").split(",")[0].strip()
+        elif websocket.client:
+            client_ip = websocket.client.host
+
+        # Detect Device / OS
+        user_agent = websocket.headers.get("user-agent", "Unknown Device")
+        device_type = "Desktop PC / Mac"
+        if "Android" in user_agent:
+            device_type = "Android Mobile (Mumla/Browser)"
+        elif "iPhone" in user_agent or "iPad" in user_agent:
+            device_type = "Apple iOS (iPhone/iPad)"
+        elif "Mobile" in user_agent:
+            device_type = "Mobile Device"
+        elif "Linux" in user_agent:
+            device_type = "Linux PC / Gateway"
+
+        app_name = websocket.query_params.get("app", "NOC Dashboard")
+        callsign = websocket.query_params.get("callsign", "Web Operator")
+
+        session_id = f"client_{abs(id(websocket)) % 100000}"
+        self.client_sessions[websocket] = {
+            "id": session_id,
+            "ip": client_ip,
+            "device": device_type,
+            "app": app_name,
+            "callsign": callsign,
+            "connected_at": datetime.utcnow().strftime("%H:%M:%S"),
+            "status": "ONLINE"
+        }
+
         # Send initial state
         await websocket.send_json({
             "type": "INITIAL_STATE",
@@ -36,6 +71,10 @@ class ConnectionManager:
 
     def disconnect(self, websocket: WebSocket):
         self.active_connections.discard(websocket)
+        self.client_sessions.pop(websocket, None)
+
+    def get_connected_clients(self) -> List[Dict]:
+        return list(self.client_sessions.values())
 
     async def broadcast(self, message: Dict):
         dead_connections = set()

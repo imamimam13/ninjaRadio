@@ -60,6 +60,10 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
 async def get_last_heard():
     return manager.last_heard_history
 
+@router.get("/clients")
+async def get_connected_clients():
+    return manager.get_connected_clients()
+
 # ----------------- Multi-Logbook -----------------
 
 @router.get("/logbook", response_model=List[QsoLogResponse])
