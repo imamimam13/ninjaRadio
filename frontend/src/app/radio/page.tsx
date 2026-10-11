@@ -413,6 +413,13 @@ export default function RadioPocketMode() {
         bytes[i] = binaryStr.charCodeAt(i);
       }
       const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
+      let maxAmp = 0;
+      for (let i = 0; i < int16.length; i++) {
+        const abs = Math.abs(int16[i]);
+        if (abs > maxAmp) maxAmp = abs;
+      }
+      if (maxAmp < 80) return; // Drop silence frames, completely eliminates 16.6Hz buffer start/stop clicking
+
       const float32 = new Float32Array(int16.length);
       for (let i = 0; i < int16.length; i++) {
         float32[i] = int16[i] / 32768.0;

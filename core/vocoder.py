@@ -274,7 +274,7 @@ class DMRVocoder:
         Decodes all 3 AMBE frames (480 samples = 960 bytes, 60ms of speech).
         """
         if not payload or len(payload) < 27:
-            return b"\x00" * 320
+            return b""
 
         # Method 1: High-fidelity decoding via mbelib
         if self.mbelib and self.cur_mp:
@@ -284,13 +284,15 @@ class DMRVocoder:
                     pcm1 = self._decode_single_frame(fr1)
                     pcm2 = self._decode_single_frame(fr2)
                     pcm3 = self._decode_single_frame(fr3)
-                    # Return all 3 frames (960 bytes PCM = 60ms of speech)
-                    return pcm1 + pcm2 + pcm3
+                    pcm_out = pcm1 + pcm2 + pcm3
+                    # Only return if audio has non-zero amplitude (never emit fake silence clicks)
+                    if any(b != 0 for b in pcm_out):
+                        return pcm_out
                 except Exception as e:
                     logger.debug(f"mbelib decode error: {e}")
 
-        # Fallback comfort audio
-        return b"\x00" * 320
+        # If silence or un-decodable, return empty bytes (NEVER send fake 16Hz clicking silence chunks)
+        return b""
 
     def encode_pcm_to_dmr(self, pcm_data: bytes) -> bytes:
         """
