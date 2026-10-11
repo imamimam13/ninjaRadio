@@ -76,6 +76,8 @@ services:
     depends_on:
       - mumble-server
       - core
+    volumes:
+      - ninjaradio_data:/app/data:ro
     networks:
       - ninjaradio_net
 

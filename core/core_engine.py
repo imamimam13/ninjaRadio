@@ -37,6 +37,11 @@ class CoreEngineManager:
         self.active_clients: Dict[str, HomeBrewClient] = {}
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.usrp_sock: Optional[socket.socket] = None
+        self.usrp_task: Optional[asyncio.Task] = None
+        self.registered_usrp_clients: Dict[tuple, float] = {}
+        self.parrot_buffers: Dict[tuple, list] = {}
+        self.running = True
 
     def load_config(self) -> Dict:
         if os.path.exists(CONFIG_PATH):
@@ -63,6 +68,18 @@ class CoreEngineManager:
     async def init(self):
         self.http_session = aiohttp.ClientSession()
         self.load_config()
+        self.running = True
+
+        # Start USRP DVSwitch UDP Listener
+        try:
+            self.usrp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.usrp_sock.bind(("0.0.0.0", USRP_AUDIO_PORT))
+            self.usrp_sock.setblocking(False)
+            self.usrp_task = asyncio.create_task(self.run_usrp_listener())
+            logger.info(f"📱 DVSwitch USRP Audio Engine active on UDP port {USRP_AUDIO_PORT}")
+        except Exception as e:
+            logger.error(f"Failed to bind USRP socket on port {USRP_AUDIO_PORT}: {e}")
+
         await self.apply_peers()
 
     async def apply_peers(self):
@@ -116,7 +133,6 @@ class CoreEngineManager:
 
     def handle_incoming_dmr_traffic(self, traffic_data: dict):
         """Called when a real DMR frame arrives from the DMR Master."""
-        # 1. Forward to Mumble bridge (UDP 12346)
         try:
             src_id = traffic_data["src_id"]
             dst_tg = traffic_data["dst_tg"]
@@ -124,12 +140,130 @@ class CoreEngineManager:
             # Construct USRP packet for audio bridge
             header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, dst_tg, src_id, slot, 0)
             payload = traffic_data.get("payload", b"")
-            self.bridge_sock.sendto(header + payload, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+            usrp_packet = header + payload
+
+            # 1. Forward to Mumble bridge (UDP 12346)
+            self.bridge_sock.sendto(usrp_packet, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+
+            # 2. Forward to all registered DVSwitch Mobile clients
+            self.broadcast_to_usrp_clients(usrp_packet)
         except Exception:
             pass
 
-        # 2. Dispatch event to backend API for WebSocket broadcast (async in background)
+        # 3. Dispatch event to backend API for WebSocket broadcast (async in background)
         asyncio.create_task(self.dispatch_event_to_backend(traffic_data))
+
+    def broadcast_to_usrp_clients(self, data: bytes, exclude_addr=None):
+        if not self.usrp_sock:
+            return
+        now = time.time()
+        for client_addr, last_seen in list(self.registered_usrp_clients.items()):
+            if now - last_seen > 120:
+                del self.registered_usrp_clients[client_addr]
+                continue
+            if client_addr != exclude_addr:
+                try:
+                    self.usrp_sock.sendto(data, client_addr)
+                except Exception:
+                    pass
+
+    async def run_usrp_listener(self):
+        """Listens for incoming USRP UDP frames from DVSwitch Mobile Android app and Mumble Bridge."""
+        loop = asyncio.get_running_loop()
+        logger.info("📱 DVSwitch & Mumble USRP Ingress loop started.")
+        while self.running:
+            try:
+                data, addr = await loop.sock_recvfrom(self.usrp_sock, 2048)
+                if len(data) >= 32 and data.startswith(b"USRP"):
+                    magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
+                    self.registered_usrp_clients[addr] = time.time()
+
+                    # Echo test service on TG 9990
+                    if tg == 9990:
+                        if key_flag == 1:
+                            if addr not in self.parrot_buffers:
+                                self.parrot_buffers[addr] = []
+                            self.parrot_buffers[addr].append(data)
+                        else:
+                            buffered = self.parrot_buffers.pop(addr, [])
+                            if buffered:
+                                asyncio.create_task(self.play_parrot_back(addr, buffered))
+                    else:
+                        payload = data[32:]
+                        if key_flag == 1:
+                            # 1. Transmit voice burst to active DMR Master connections
+                            for client in self.active_clients.values():
+                                if client.state == "CONNECTED":
+                                    client.transmit_dmrd(
+                                        src_id=dmr_id,
+                                        dst_tg=tg,
+                                        slot=slot or 1,
+                                        dtype_vseq=0,
+                                        payload=payload
+                                    )
+                            # 2. Forward to Mumble bridge (UDP 12346)
+                            try:
+                                self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                pass
+                            # 3. Broadcast to other DVSwitch Mobile clients
+                            self.broadcast_to_usrp_clients(data, exclude_addr=addr)
+                            # 4. Dispatch live TX visualizer event to web UI
+                            asyncio.create_task(self.dispatch_event_to_backend({
+                                "network": "DVSwitch-USRP",
+                                "src_id": dmr_id,
+                                "dst_tg": tg,
+                                "slot": slot or 1,
+                                "call_type": "group",
+                                "dtype_vseq": 0,
+                                "is_tx": True
+                            }))
+                        else:
+                            # PTT Release - send terminator burst
+                            for client in self.active_clients.values():
+                                if client.state == "CONNECTED":
+                                    client.transmit_dmrd(
+                                        src_id=dmr_id,
+                                        dst_tg=tg,
+                                        slot=slot or 1,
+                                        dtype_vseq=2
+                                    )
+                            try:
+                                self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                pass
+                            self.broadcast_to_usrp_clients(data, exclude_addr=addr)
+                            asyncio.create_task(self.dispatch_event_to_backend({
+                                "network": "DVSwitch-USRP",
+                                "src_id": dmr_id,
+                                "dst_tg": tg,
+                                "slot": slot or 1,
+                                "call_type": "group",
+                                "dtype_vseq": 2,
+                                "is_tx": False
+                            }))
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                await asyncio.sleep(0.01)
+
+    async def play_parrot_back(self, addr, packets: list):
+        """Replays recorded voice packets back to DVSwitch caller like a DMR parrot repeater."""
+        logger.info(f"[PARROT] 🦜 Triggering Echo Playback to {addr} ({len(packets)} frames)...")
+        await asyncio.sleep(0.8)
+        for pkt in packets:
+            try:
+                self.usrp_sock.sendto(pkt, addr)
+                await asyncio.sleep(0.02)  # Standard 20ms frame pacing
+            except Exception:
+                pass
+        # Send final release packet
+        try:
+            rel = struct.pack(">4sIIIIIII", b"USRP", 9999, 0, 0, 9990, 9990, 1, 0)
+            self.usrp_sock.sendto(rel, addr)
+        except Exception:
+            pass
+        logger.info(f"[PARROT] ✓ Echo Playback finished for {addr}")
 
     async def dispatch_event_to_backend(self, traffic: dict):
         if not self.http_session:
@@ -161,6 +295,14 @@ class CoreEngineManager:
         return success
 
     async def shutdown(self):
+        self.running = False
+        if self.usrp_task:
+            self.usrp_task.cancel()
+        if self.usrp_sock:
+            try:
+                self.usrp_sock.close()
+            except Exception:
+                pass
         for client in self.active_clients.values():
             await client.stop()
         if self.http_session:
