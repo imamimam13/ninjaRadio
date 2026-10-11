@@ -1,4 +1,4 @@
-const CACHE_NAME = "ninjaradio-v3";
+const CACHE_NAME = "ninjaradio-v4";
 const STATIC_ASSETS = [
   "/manifest.json",
   "/icon-192.png",
@@ -53,14 +53,18 @@ self.addEventListener("fetch", (event) => {
         }
         return networkResponse;
       })
-      .catch(() => {
-        return caches.match(request).then((cached) => {
-          if (cached) return cached;
-          if (request.mode === "navigate") {
-            return caches.match("/radio") || caches.match("/");
-          }
-          return new Response("Offline", { status: 503, statusText: "Offline" });
-        });
+      .catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        if (request.mode === "navigate") {
+          const pageCache = await caches.match("/radio");
+          if (pageCache) return pageCache;
+          return new Response(
+            `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>NinjaRadio</title></head><body style="background:#05070c;color:#00f0ff;font-family:sans-serif;text-align:center;padding:40px;"><h2>NinjaRadio Standby</h2><p>Mencari sinyal server... Silakan periksa koneksi internet Anda.</p></body></html>`,
+            { headers: { "Content-Type": "text/html" }, status: 200 }
+          );
+        }
+        return new Response("Offline", { status: 503, statusText: "Offline" });
       })
   );
 });
