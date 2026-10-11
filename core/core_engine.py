@@ -11,6 +11,7 @@ from fastapi import FastAPI
 import uvicorn
 
 from dmr_client import HomeBrewClient
+from dmr_server import HomeBrewMasterServer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NinjaRadio-Core] %(message)s")
 logger = logging.getLogger("NinjaRadio-Core")
@@ -35,6 +36,7 @@ class CoreEngineManager:
     def __init__(self):
         self.config = {}
         self.active_clients: Dict[str, HomeBrewClient] = {}
+        self.master_server: Optional[HomeBrewMasterServer] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.usrp_sock: Optional[socket.socket] = None
@@ -80,6 +82,24 @@ class CoreEngineManager:
         except Exception as e:
             logger.error(f"Failed to bind USRP socket on port {USRP_AUDIO_PORT}: {e}")
 
+        # Start Inbound DMR Master Server for local hotspots (port 62031)
+        try:
+            hp_port = int(self.config.get("hotspot_port", DMR_MASTER_PORT))
+            hp_pass = self.config.get("hotspot_password", "ninjaradio_pass")
+            srv_call = self.config.get("server_callsign", "N1NJA")
+            srv_id = int(self.config.get("server_dmr_id", 5109999))
+            self.master_server = HomeBrewMasterServer(
+                port=hp_port,
+                password=hp_pass,
+                server_dmr_id=srv_id,
+                server_callsign=srv_call,
+                on_traffic=self.handle_incoming_dmr_traffic
+            )
+            await self.master_server.start()
+            logger.info(f"📻 Local DMR Master Server active on UDP port {hp_port} for Pi-Star/Hotspots")
+        except Exception as e:
+            logger.error(f"Failed to bind DMR Master Server on port {DMR_MASTER_PORT}: {e}")
+
         await self.apply_peers()
 
     async def apply_peers(self):
@@ -103,7 +123,7 @@ class CoreEngineManager:
             # Start client if active and not already running
             if is_active and peer_id not in self.active_clients:
                 host = p.get("host")
-                port = int(p.get("port", 60231))
+                port = int(p.get("port", 62031))
                 password = p.get("password", "")
                 tgs = p.get("subscribedTgs", "")
                 callsign = p.get("callsign") or self.config.get("server_callsign", "N1NJA")
@@ -297,6 +317,8 @@ class CoreEngineManager:
 
     async def shutdown(self):
         self.running = False
+        if self.master_server:
+            await self.master_server.stop()
         if self.usrp_task:
             self.usrp_task.cancel()
         if self.usrp_sock:
@@ -324,9 +346,25 @@ async def on_shutdown():
 @app.get("/api/status")
 async def get_core_status():
     peers_status = [client.get_status_info() for client in engine_mgr.active_clients.values()]
+    hotspots = []
+    if engine_mgr.master_server:
+        for addr, client in engine_mgr.master_server.clients.items():
+            hotspots.append({
+                "address": f"{addr[0]}:{addr[1]}",
+                "dmr_id": client.get("dmr_id"),
+                "callsign": client.get("callsign"),
+                "state": client.get("state"),
+                "last_seen": client.get("last_seen")
+            })
     return {
         "status": "ONLINE",
-        "engine": "OpenDMR / FreeDMR HomeBrew Multi-Client Core",
+        "engine": "NinjaRadio Standalone DMR Master & Multi-Peer Gateway",
+        "master_server": {
+            "status": "ONLINE" if engine_mgr.master_server else "OFFLINE",
+            "port": engine_mgr.master_server.port if engine_mgr.master_server else DMR_MASTER_PORT,
+            "connected_hotspots": len(hotspots),
+            "hotspots": hotspots
+        },
         "active_clients_count": len(engine_mgr.active_clients),
         "peers": peers_status,
         "config": engine_mgr.config

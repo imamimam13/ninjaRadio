@@ -51,9 +51,9 @@ class HomeBrewClient:
         self.ts1_tgs: List[int] = []
         self.ts2_tgs: List[int] = []
 
-        # Parse explicit Timeslot notation (e.g. "TS1;1023,TS2;1025", "TS1=1023;TS2=1025", "TS1: 1023, TS2: 1025")
+        # Parse explicit Timeslot notation (e.g. "TS1;1023,TS2;1025", "TS1=1023;TS2=1025", "TS1_1=1023;TS2_1=1025", "Options=TS1_1=1023;TS2_1=1025;")
         import re
-        ts_matches = re.findall(r'(?i)TS([12])\s*[=:;_]\s*([0-9, ]+)', self.raw_tgs_str)
+        ts_matches = re.findall(r'(?i)TS([12])(?:_\d+)?\s*[=:;_]\s*([0-9, ]+)', self.raw_tgs_str)
         if ts_matches:
             for ts_num, tgs in ts_matches:
                 for tg_part in re.split(r'[,; ]+', tgs):
@@ -144,6 +144,11 @@ class HomeBrewClient:
 
                 # 2. Setup UDP socket
                 self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    self.sock.bind(("0.0.0.0", 0))
+                except Exception as b_err:
+                    logger.debug(f"[{self.name}] Socket bind note: {b_err}")
                 self.sock.setblocking(False)
                 
                 # 3. Send Login RPTL
@@ -267,6 +272,8 @@ class HomeBrewClient:
             elif self.state == "KEY_SENT":
                 logger.info(f"[{self.name}] Key accepted by master! Sending configuration...")
                 await self._send_rptc()
+            elif self.state == "CONNECTED":
+                self.last_ping_rx = time.time()
 
         # 2. Master NAK (Auth rejected or invalid ID)
         elif data.startswith(MSTNAK):
