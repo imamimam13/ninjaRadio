@@ -5,14 +5,12 @@ import struct
 import json
 import os
 import time
-from typing import Dict, List
+import subprocess
+import signal
+from typing import Dict, List, Optional
 import aiohttp
 from fastapi import FastAPI
 import uvicorn
-
-from dmr_client import HomeBrewClient
-from dmr_server import HomeBrewMasterServer
-from vocoder import DMRVocoder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NinjaRadio-Core] %(message)s")
 logger = logging.getLogger("NinjaRadio-Core")
@@ -23,44 +21,79 @@ MUMBLE_BRIDGE_PORT = 12346
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
 
-# Default system configuration if not yet configured from Web UI
+# Internal DVSwitch ports
+AB_USRP_TX_PORT = 32001   # Analog_Bridge sends decoded PCM to supervisor on 32001
+AB_USRP_RX_PORT = 32000   # Supervisor sends PCM to Analog_Bridge on 32000 to encode
+MD380_EMU_PORT = 2470     # md380-emu vocoder daemon port
+AB_AMBE_RX_PORT = 31100   # Analog_Bridge receives AMBE from MMDVM_Bridge on 31100
+AB_AMBE_TX_PORT = 31103   # Analog_Bridge sends AMBE to MMDVM_Bridge on 31103
+
 DEFAULT_CONFIG = {
     "server_callsign": os.getenv("SERVER_CALLSIGN", "N1NJA"),
     "server_dmr_id": int(os.getenv("SERVER_DMR_ID", 5109999)),
     "server_name": "NinjaRadio Master Core",
+    "default_tg": 510,
+    "rx_freq": "438.8000",
+    "tx_freq": "438.8000",
+    "color_code": 1,
+    "tx_pwr": 25,
     "hotspot_port": DMR_MASTER_PORT,
     "hotspot_password": "ninjaradio_pass",
     "peering": []
 }
 
-class CoreEngineManager:
+def format_freq_hz(val) -> int:
+    try:
+        s = str(val).strip().replace(" ", "").replace("MHz", "").replace("mhz", "")
+        if "." in s:
+            return int(float(s) * 1_000_000)
+        hz = int(s)
+        return hz * 1_000_000 if hz < 1_000_000 else hz
+    except Exception:
+        return 438800000
+
+def find_binary(name: str) -> Optional[str]:
+    candidates = [
+        f"/usr/bin/{name}",
+        f"/usr/local/bin/{name}",
+        f"/opt/{name}/{name}",
+        f"/opt/{name.replace('-', '_')}/{name.replace('-', '_')}",
+        name
+    ]
+    for c in candidates:
+        if os.path.exists(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+class DVSwitchCoreManager:
     def __init__(self):
         self.config = {}
-        self.active_clients: Dict[str, HomeBrewClient] = {}
-        self.master_server: Optional[HomeBrewMasterServer] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
-        self.vocoder = DMRVocoder()
         self.bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.usrp_sock: Optional[socket.socket] = None
-        self.usrp_task: Optional[asyncio.Task] = None
+        self.usrp_ingress_sock: Optional[socket.socket] = None
+        self.ab_pcm_sock: Optional[socket.socket] = None
         self.registered_usrp_clients: Dict[tuple, float] = {}
-        self.parrot_buffers: Dict[tuple, list] = {}
         self.running = True
+
+        # Process handles
+        self.md380_proc: Optional[subprocess.Popen] = None
+        self.ab_proc: Optional[subprocess.Popen] = None
+        self.mmdvm_proc: Optional[subprocess.Popen] = None
+
+        self.active_peer_host = "Standalone"
+        self.active_peer_port = 62031
 
     def load_config(self) -> Dict:
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    logger.info(f"Loaded configuration from {CONFIG_PATH}")
-                    self.config = data
-                    return data
+                    self.config = json.load(f)
+                    logger.info(f"✓ Configuration loaded from {CONFIG_PATH}")
+                    return self.config
             except Exception as e:
-                logger.error(f"Error reading {CONFIG_PATH}: {e}")
+                logger.error(f"Error loading {CONFIG_PATH}: {e}")
 
-        # Fall back to default
         self.config = DEFAULT_CONFIG.copy()
-        # Ensure dir exists and save default
         try:
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -69,313 +102,356 @@ class CoreEngineManager:
             pass
         return self.config
 
+    def generate_configs(self):
+        """Generates Analog_Bridge.ini and MMDVM_Bridge.ini from live config."""
+        cfg = self.config
+        peers = cfg.get("peering", [])
+        active_peer = None
+        for p in peers:
+            if p.get("isActive", True):
+                active_peer = p
+                break
+
+        if active_peer:
+            master_host = active_peer.get("host", "127.0.0.1")
+            master_port = int(active_peer.get("port", 62031))
+            master_password = active_peer.get("password", "")
+            callsign = (active_peer.get("callsign") or cfg.get("server_callsign", "N1NJA")).strip().upper()
+            dmr_id = int(active_peer.get("dmr_id") or active_peer.get("dmrId") or cfg.get("server_dmr_id", 5109999))
+            rx_freq_mhz = str(active_peer.get("rx_freq") or active_peer.get("rxFreq") or cfg.get("rx_freq", "438.8000")).strip()
+            tx_freq_mhz = str(active_peer.get("tx_freq") or active_peer.get("txFreq") or cfg.get("tx_freq", "438.8000")).strip()
+            color_code = int(active_peer.get("color_code") or active_peer.get("colorCode") or cfg.get("color_code", 1))
+            tx_pwr = int(active_peer.get("tx_pwr") or active_peer.get("txPwr") or cfg.get("tx_pwr", 25))
+            raw_tgs = str(active_peer.get("subscribedTgs") or active_peer.get("subscribed_tgs", "")).strip()
+        else:
+            master_host = "127.0.0.1"
+            master_port = int(cfg.get("hotspot_port", DMR_MASTER_PORT))
+            master_password = cfg.get("hotspot_password", "ninjaradio_pass")
+            callsign = str(cfg.get("server_callsign", "N1NJA")).strip().upper()
+            dmr_id = int(cfg.get("server_dmr_id", 5109999))
+            rx_freq_mhz = str(cfg.get("rx_freq", "438.8000")).strip()
+            tx_freq_mhz = str(cfg.get("tx_freq", "438.8000")).strip()
+            color_code = int(cfg.get("color_code", 1))
+            tx_pwr = int(cfg.get("tx_pwr", 25))
+            raw_tgs = ""
+
+        self.active_peer_host = master_host
+        self.active_peer_port = master_port
+        rx_hz = format_freq_hz(rx_freq_mhz)
+        tx_hz = format_freq_hz(tx_freq_mhz)
+        default_tg = int(cfg.get("default_tg", 510))
+
+        if raw_tgs:
+            options_line = f"Options = {raw_tgs}" if "TS" in raw_tgs.upper() else f"Options = TS1_1={raw_tgs};"
+        else:
+            options_line = f"Options = TS1_1={default_tg};"
+
+        os.makedirs("/app/data", exist_ok=True)
+        os.makedirs("/var/log", exist_ok=True)
+
+        # 1. Analog_Bridge.ini
+        ab_content = f"""; Auto-generated by NinjaRadio DVSwitch Supervisor
+[GENERAL]
+logLevel = 2
+fileLogLevel = 2
+pcmFormat = 0
+exportAMBE = 0
+useEmulator = true
+emulatorAddress = 127.0.0.1:{MD380_EMU_PORT}
+
+[AMBE_AUDIO]
+address = 127.0.0.1
+txPort = {AB_AMBE_TX_PORT}
+rxPort = {AB_AMBE_RX_PORT}
+ambeMode = DMR
+minGain = 0.8
+maxGain = 2.0
+
+[USRP]
+address = 127.0.0.1
+txPort = {AB_USRP_TX_PORT}
+rxPort = {AB_USRP_RX_PORT}
+usrpAudio = AUDIO_USE_PCM
+aslAudio = AUDIO_USE_PCM
+
+[DMR]
+address = 127.0.0.1
+txPort = {AB_AMBE_RX_PORT}
+rxPort = {AB_AMBE_TX_PORT}
+slot = 1
+tg = {default_tg}
+call = {callsign}
+id = {dmr_id}
+"""
+        with open("/app/data/Analog_Bridge.ini", "w", encoding="utf-8") as f:
+            f.write(ab_content)
+
+        # 2. MMDVM_Bridge.ini
+        mmdvm_content = f"""; Auto-generated by NinjaRadio DVSwitch Supervisor
+[General]
+Callsign = {callsign}
+Id = {dmr_id}
+Timeout = 180
+Duplex = 0
+RxFrequency = {rx_hz}
+TxFrequency = {tx_hz}
+Power = {tx_pwr}
+ColorCode = {color_code}
+Debug = 0
+
+[Info]
+RXFrequency = {rx_hz}
+TXFrequency = {tx_hz}
+Power = {tx_pwr}
+Latitude = 0.0
+Longitude = 0.0
+Height = 0
+Location = NinjaRadio
+Description = NinjaRadio DVSwitch Gateway
+URL = www.ninjaradio.local
+
+[Log]
+DisplayLevel = 1
+FileLevel = 1
+FilePath = /var/log/
+FileRoot = MMDVM_Bridge
+
+[DMR]
+Enable = 1
+Beacons = 0
+Id = {dmr_id}
+ColorCode = {color_code}
+SelfOnly = 0
+CallHang = 3
+TXHang = 3
+
+[DMR Network]
+Enable = 1
+Type = Gateway
+Address = {master_host}
+Port = {master_port}
+Jitter = 500
+Password = {master_password}
+Slot1 = 1
+Slot2 = 1
+ModeHang = 3
+Debug = 0
+{options_line}
+
+[AMBE]
+Enable = 1
+Address = 127.0.0.1
+Port = {AB_AMBE_TX_PORT}
+Send = {AB_AMBE_RX_PORT}
+"""
+        with open("/app/data/MMDVM_Bridge.ini", "w", encoding="utf-8") as f:
+            f.write(mmdvm_content)
+
+        logger.info(f"✓ DVSwitch INI configuration generated for DMR Master {master_host}:{master_port} (Callsign: {callsign}, ID: {dmr_id}, Freq: {tx_hz}/{rx_hz} Hz)")
+
+    def start_daemons(self):
+        """Starts md380-emu, Analog_Bridge, and MMDVM_Bridge official binaries."""
+        # 1. md380-emu (Vocoder Emulator)
+        md380_bin = find_binary("md380-emu")
+        if md380_bin:
+            try:
+                self.md380_proc = subprocess.Popen(
+                    [md380_bin, "-S", str(MD380_EMU_PORT)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                logger.info(f"✓ Started md380-emu vocoder daemon ({md380_bin}) on UDP {MD380_EMU_PORT}")
+            except Exception as e:
+                logger.error(f"Failed to start md380-emu: {e}")
+        else:
+            logger.warning("md380-emu binary not found. Please verify DVSwitch package installation.")
+
+        # Give md380-emu a moment to bind port 2470
+        time.sleep(0.3)
+
+        # 2. Analog_Bridge
+        ab_bin = find_binary("Analog_Bridge")
+        if ab_bin:
+            try:
+                self.ab_proc = subprocess.Popen(
+                    [ab_bin, "/app/data/Analog_Bridge.ini"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                logger.info(f"✓ Started Analog_Bridge daemon ({ab_bin}) with /app/data/Analog_Bridge.ini")
+            except Exception as e:
+                logger.error(f"Failed to start Analog_Bridge: {e}")
+        else:
+            logger.warning("Analog_Bridge binary not found. Please verify DVSwitch package installation.")
+
+        time.sleep(0.3)
+
+        # 3. MMDVM_Bridge
+        mmdvm_bin = find_binary("MMDVM_Bridge")
+        if mmdvm_bin:
+            try:
+                self.mmdvm_proc = subprocess.Popen(
+                    [mmdvm_bin, "/app/data/MMDVM_Bridge.ini"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                logger.info(f"✓ Started MMDVM_Bridge daemon ({mmdvm_bin}) with /app/data/MMDVM_Bridge.ini")
+            except Exception as e:
+                logger.error(f"Failed to start MMDVM_Bridge: {e}")
+        else:
+            logger.warning("MMDVM_Bridge binary not found. Please verify DVSwitch package installation.")
+
+    def stop_bridge_daemons(self):
+        """Stops Analog_Bridge and MMDVM_Bridge processes for reconfiguration."""
+        for name, proc in [("MMDVM_Bridge", self.mmdvm_proc), ("Analog_Bridge", self.ab_proc)]:
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                logger.info(f"Stopped {name} daemon.")
+        self.mmdvm_proc = None
+        self.ab_proc = None
+
     async def init(self):
         self.http_session = aiohttp.ClientSession()
         self.load_config()
+        self.generate_configs()
+        self.start_daemons()
         self.running = True
 
-        # Start USRP DVSwitch UDP Listener
+        # 1. Listen on UDP 32001 (where Analog_Bridge emits decoded 8kHz 16-bit PCM)
         try:
-            self.usrp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.usrp_sock.bind(("0.0.0.0", USRP_AUDIO_PORT))
-            self.usrp_sock.setblocking(False)
-            self.usrp_task = asyncio.create_task(self.run_usrp_listener())
-            logger.info(f"📱 DVSwitch USRP Audio Engine active on UDP port {USRP_AUDIO_PORT}")
+            self.ab_pcm_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.ab_pcm_sock.bind(("0.0.0.0", AB_USRP_TX_PORT))
+            self.ab_pcm_sock.setblocking(False)
+            asyncio.create_task(self.run_ab_pcm_rx_loop())
+            logger.info(f"✓ DVSwitch Decoded Audio Consumer active on UDP port {AB_USRP_TX_PORT}")
         except Exception as e:
-            logger.error(f"Failed to bind USRP socket on port {USRP_AUDIO_PORT}: {e}")
+            logger.error(f"Failed to bind socket on port {AB_USRP_TX_PORT}: {e}")
 
-        # Start Inbound DMR Master Server for local hotspots (port 62031)
+        # 2. Listen on UDP USRP_AUDIO_PORT (32345) for Web App / Mumble Ingress
         try:
-            hp_port = int(self.config.get("hotspot_port", DMR_MASTER_PORT))
-            hp_pass = self.config.get("hotspot_password", "ninjaradio_pass")
-            srv_call = self.config.get("server_callsign", "N1NJA")
-            srv_id = int(self.config.get("server_dmr_id", 5109999))
-            self.master_server = HomeBrewMasterServer(
-                port=hp_port,
-                password=hp_pass,
-                server_dmr_id=srv_id,
-                server_callsign=srv_call,
-                on_traffic=self.handle_incoming_dmr_traffic
-            )
-            await self.master_server.start()
-            logger.info(f"📻 Local DMR Master Server active on UDP port {hp_port} for Pi-Star/Hotspots")
+            self.usrp_ingress_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.usrp_ingress_sock.bind(("0.0.0.0", USRP_AUDIO_PORT))
+            self.usrp_ingress_sock.setblocking(False)
+            asyncio.create_task(self.run_usrp_ingress_loop())
+            logger.info(f"✓ External USRP & Web PTT Ingress active on UDP port {USRP_AUDIO_PORT}")
         except Exception as e:
-            logger.error(f"Failed to bind DMR Master Server on port {DMR_MASTER_PORT}: {e}")
+            logger.error(f"Failed to bind USRP ingress port {USRP_AUDIO_PORT}: {e}")
 
-        await self.apply_peers()
+        # 3. Process Watchdog
+        asyncio.create_task(self.run_process_watchdog())
 
-    async def apply_peers(self):
-        """Applies configured peers dynamically without restarting the container."""
-        peers = self.config.get("peering", [])
-        configured_ids = set()
+    async def run_process_watchdog(self):
+        """Monitors DVSwitch daemons and restarts them if they terminate unexpectedly."""
+        while self.running:
+            await asyncio.sleep(5.0)
+            if self.md380_proc and self.md380_proc.poll() is not None:
+                logger.warning(f"md380-emu exited with code {self.md380_proc.returncode}. Restarting...")
+                md380_bin = find_binary("md380-emu")
+                if md380_bin:
+                    self.md380_proc = subprocess.Popen([md380_bin, "-S", str(MD380_EMU_PORT)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        for p in peers:
-            peer_id = p.get("id") or f"{p.get('host')}:{p.get('port')}"
-            configured_ids.add(peer_id)
-            is_active = p.get("isActive", True)
-            host = p.get("host")
-            port = int(p.get("port", 62031))
-            password = p.get("password", "")
-            tgs = p.get("subscribedTgs") or p.get("subscribed_tgs", "")
-            callsign = (p.get("callsign") or self.config.get("server_callsign", "N1NJA")).strip().upper()
-            dmr_id = int(p.get("dmr_id") or p.get("dmrId") or self.config.get("server_dmr_id", 5109999))
-            rx_freq = str(p.get("rx_freq") or p.get("rxFreq") or self.config.get("rx_freq", "438.8000")).strip()
-            tx_freq = str(p.get("tx_freq") or p.get("txFreq") or self.config.get("tx_freq", "438.8000")).strip()
-            color_code = int(p.get("color_code") or p.get("colorCode") or self.config.get("color_code", 1))
-            tx_pwr = int(p.get("tx_pwr") or p.get("txPwr") or self.config.get("tx_pwr", 25))
+            if self.ab_proc and self.ab_proc.poll() is not None:
+                logger.warning(f"Analog_Bridge exited with code {self.ab_proc.returncode}. Restarting...")
+                ab_bin = find_binary("Analog_Bridge")
+                if ab_bin:
+                    self.ab_proc = subprocess.Popen([ab_bin, "/app/data/Analog_Bridge.ini"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            # If client exists and ANY settings changed or disabled, stop it so it reloads with new credentials
-            if peer_id in self.active_clients:
-                client = self.active_clients[peer_id]
-                if (not is_active or 
-                    client.host != host or 
-                    client.port != port or 
-                    client.dmr_id != dmr_id or 
-                    client.callsign != callsign or 
-                    client.password != password or 
-                    client.subscribed_tgs != tgs or
-                    getattr(client, "rx_freq", "") != rx_freq or
-                    getattr(client, "tx_freq", "") != tx_freq or
-                    getattr(client, "color_code", 1) != color_code or
-                    getattr(client, "tx_pwr", 25) != tx_pwr):
-                    logger.info(f"Configuration changed for peer {peer_id} (DMR ID: {client.dmr_id} -> {dmr_id}, Freq: {getattr(client, 'tx_freq', '')}/{getattr(client, 'rx_freq', '')} -> {tx_freq}/{rx_freq}). Re-connecting...")
-                    await client.stop()
-                    del self.active_clients[peer_id]
+            if self.mmdvm_proc and self.mmdvm_proc.poll() is not None:
+                logger.warning(f"MMDVM_Bridge exited with code {self.mmdvm_proc.returncode}. Restarting...")
+                mmdvm_bin = find_binary("MMDVM_Bridge")
+                if mmdvm_bin:
+                    self.mmdvm_proc = subprocess.Popen([mmdvm_bin, "/app/data/MMDVM_Bridge.ini"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            # Start client if active and not already running
-            if is_active and peer_id not in self.active_clients:
-                logger.info(f"🚀 Initializing active HomeBrew client for {p.get('name', host)} -> {host}:{port} (DMR ID: {dmr_id}, Callsign: {callsign}, Freq: {tx_freq}/{rx_freq} MHz, TGs: {tgs})...")
-                client = HomeBrewClient(
-                    name=p.get("name") or host,
-                    host=host,
-                    port=port,
-                    dmr_id=dmr_id,
-                    callsign=callsign,
-                    password=password,
-                    subscribed_tgs=tgs,
-                    rx_freq=rx_freq,
-                    tx_freq=tx_freq,
-                    color_code=color_code,
-                    tx_pwr=tx_pwr,
-                    on_traffic=self.handle_incoming_dmr_traffic,
-                    on_status_change=self.handle_peer_status_change
-                )
-                self.active_clients[peer_id] = client
-                await client.start()
+    async def run_ab_pcm_rx_loop(self):
+        """
+        Receives pure, authentic 8kHz 16-bit PCM USRP frames decoded by Analog_Bridge + md380-emu.
+        Dispatches directly to Web Audio and Mumble VoIP.
+        """
+        loop = asyncio.get_running_loop()
+        logger.info("📻 Started DVSwitch PCM Audio Rx loop.")
+        while self.running:
+            try:
+                data, _ = await loop.sock_recvfrom(self.ab_pcm_sock, 2048)
+                if len(data) >= 32 and data.startswith(b"USRP"):
+                    magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
+                    pcm_payload = data[32:]
 
-        # Stop any removed peers
-        for current_id in list(self.active_clients.keys()):
-            if current_id not in configured_ids:
-                logger.info(f"Removing deleted peer client {current_id}...")
-                await self.active_clients[current_id].stop()
-                del self.active_clients[current_id]
-
-    def handle_incoming_dmr_traffic(self, traffic_data: dict):
-        """Called when a real DMR frame arrives from an external Master or local hotspot."""
-        try:
-            src_id = traffic_data["src_id"]
-            dst_tg = traffic_data["dst_tg"]
-            slot = traffic_data["slot"]
-            raw_packet = traffic_data.get("raw_packet")
-            network = traffic_data.get("network", "")
-
-            # Anti-echo suppression: Drop if src_id is our own client DMR ID or server DMR ID
-            client_ids = {c.dmr_id for c in self.active_clients.values()}
-            if self.master_server:
-                client_ids.add(self.master_server.server_dmr_id)
-            if src_id in client_ids:
-                return
-
-            # Anti-echo suppression: Drop if src_id was transmitting locally within the last 1.5s
-            if src_id == getattr(self, "last_tx_src_id", None) and (time.time() - getattr(self, "last_tx_time", 0)) < 1.5:
-                return
-
-            # 1. Bi-directional DMR cross-routing between Master Server and External Peers
-            if "Local DMR Master" in network:
-                # Arrived from local hotspot -> Forward out to all connected external DMR peers
-                if raw_packet:
-                    for client in self.active_clients.values():
-                        if client.state == "CONNECTED" and client.sock and client.target_addr:
-                            try:
-                                client.sock.sendto(raw_packet, client.target_addr)
-                            except Exception:
-                                pass
-            else:
-                # Arrived from external DMR peer -> Forward to all local hotspots connected to this master
-                if raw_packet and self.master_server:
-                    self.master_server.broadcast_dmrd(raw_packet)
-
-            # 2. Transcode 33-byte DMR AMBE frame to 8kHz 16-bit PCM human voice
-            payload = traffic_data.get("payload", b"")
-            pcm_payload = self.vocoder.decode_dmr_burst(payload) if len(payload) == 33 else payload
-
-            # Forward decoded PCM to Mumble bridge (UDP 12346) & DVSwitch clients in 320-byte frames
-            if pcm_payload:
-                for offset in range(0, len(pcm_payload), 320):
-                    chunk = pcm_payload[offset:offset + 320]
-                    if len(chunk) < 320:
-                        chunk = chunk.ljust(320, b"\x00")
-                    header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, dst_tg, src_id, slot, 0)
-                    usrp_packet = header + chunk
+                    # Forward to Mumble bridge (UDP 12346)
                     try:
-                        self.bridge_sock.sendto(usrp_packet, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                        self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                     except Exception:
                         pass
-                    self.broadcast_to_usrp_clients(usrp_packet)
-        except Exception as e:
-            logger.debug(f"handle_incoming_dmr_traffic error: {e}")
 
-        # 3. Dispatch event to backend API with decoded PCM audio for Web Audio player
-        dispatch_traffic = traffic_data.copy()
-        if "payload" in dispatch_traffic:
-            dispatch_traffic["payload"] = pcm_payload if 'pcm_payload' in locals() and pcm_payload else dispatch_traffic["payload"]
-        asyncio.create_task(self.dispatch_event_to_backend(dispatch_traffic))
+                    # Forward to any connected external USRP clients
+                    self.broadcast_to_usrp_clients(data)
 
-    def broadcast_to_usrp_clients(self, data: bytes, exclude_addr=None):
-        if not self.usrp_sock:
-            return
+                    # Dispatch event to backend API for Web Audio player
+                    if key_flag == 1 and len(pcm_payload) >= 320:
+                        traffic_event = {
+                            "network": f"DMR Master ({self.active_peer_host})",
+                            "src_id": dmr_id,
+                            "dst_tg": tg,
+                            "slot": slot,
+                            "payload": pcm_payload,
+                            "data_type": 1,
+                            "is_tx": False
+                        }
+                        asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+                    elif key_flag == 0:
+                        # Voice Terminator
+                        traffic_event = {
+                            "network": f"DMR Master ({self.active_peer_host})",
+                            "src_id": dmr_id,
+                            "dst_tg": tg,
+                            "slot": slot,
+                            "data_type": 2,
+                            "is_tx": False
+                        }
+                        asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+            except Exception as e:
+                if self.running:
+                    logger.debug(f"ab_pcm_rx_loop note: {e}")
+                    await asyncio.sleep(0.01)
+
+    async def run_usrp_ingress_loop(self):
+        """
+        Receives USRP frames from Web App PTT, Mumble Bridge, or DVSwitch Mobile,
+        and forwards to Analog_Bridge (UDP 32000) for AMBE encoding and DMR transmission.
+        """
+        loop = asyncio.get_running_loop()
+        logger.info("📱 Started USRP Ingress loop.")
+        while self.running:
+            try:
+                data, addr = await loop.sock_recvfrom(self.usrp_ingress_sock, 2048)
+                if len(data) >= 32 and data.startswith(b"USRP"):
+                    self.registered_usrp_clients[addr] = time.time()
+                    # Forward to Analog_Bridge rxPort (127.0.0.1:32000)
+                    try:
+                        self.bridge_sock.sendto(data, ("127.0.0.1", AB_USRP_RX_PORT))
+                    except Exception as e:
+                        logger.debug(f"Error forwarding USRP to Analog_Bridge: {e}")
+            except Exception as e:
+                if self.running:
+                    logger.debug(f"usrp_ingress_loop note: {e}")
+                    await asyncio.sleep(0.01)
+
+    def broadcast_to_usrp_clients(self, data: bytes):
         now = time.time()
         for client_addr, last_seen in list(self.registered_usrp_clients.items()):
             if now - last_seen > 120:
                 del self.registered_usrp_clients[client_addr]
                 continue
-            if client_addr != exclude_addr:
-                try:
-                    self.usrp_sock.sendto(data, client_addr)
-                except Exception:
-                    pass
-
-    async def run_usrp_listener(self):
-        """Listens for incoming USRP UDP frames from DVSwitch Mobile Android app and Mumble Bridge."""
-        loop = asyncio.get_running_loop()
-        logger.info("📱 DVSwitch & Mumble USRP Ingress loop started.")
-        while self.running:
             try:
-                data, addr = await loop.sock_recvfrom(self.usrp_sock, 2048)
-                if len(data) >= 32 and data.startswith(b"USRP"):
-                    magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
-                    self.registered_usrp_clients[addr] = time.time()
-
-                    # Echo test service on TG 9990
-                    if tg == 9990:
-                        if key_flag == 1:
-                            if addr not in self.parrot_buffers:
-                                self.parrot_buffers[addr] = []
-                            self.parrot_buffers[addr].append(data)
-                        else:
-                            buffered = self.parrot_buffers.pop(addr, [])
-                            if buffered:
-                                asyncio.create_task(self.play_parrot_back(addr, buffered))
-                    else:
-                        payload = data[32:]
-                        if key_flag == 1:
-                            self.last_tx_src_id = dmr_id
-                            self.last_tx_time = time.time()
-                            # Transcode 320-byte PCM to authentic 33-byte DMR AMBE frame
-                            ambe_payload = self.vocoder.encode_pcm_to_dmr(payload)
-
-                            # 1. Transmit voice burst to active DMR Master connections
-                            for client in self.active_clients.values():
-                                if client.state == "CONNECTED":
-                                    client.transmit_dmrd(
-                                        src_id=dmr_id,
-                                        dst_tg=tg,
-                                        slot=slot or 1,
-                                        data_type=1,
-                                        payload=ambe_payload
-                                    )
-                            # 2. Forward to local hotspots on DMR Master Server
-                            if self.master_server:
-                                dmrd_bits = (0x80 if slot == 2 else 0) | 0x10  # TS slot + Voice Burst
-                                dmrd_pkt = (
-                                    b"DMRD" +
-                                    struct.pack("B", 1) +
-                                    struct.pack(">I", dmr_id)[1:] +
-                                    struct.pack(">I", tg)[1:] +
-                                    struct.pack(">I", self.master_server.server_dmr_id) +
-                                    struct.pack("B", dmrd_bits) +
-                                    struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
-                                    ambe_payload
-                                )
-                                self.master_server.broadcast_dmrd(dmrd_pkt)
-
-                            # 3. Forward to Mumble bridge (UDP 12346)
-                            try:
-                                self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                pass
-                            # 4. Broadcast to other DVSwitch Mobile clients
-                            self.broadcast_to_usrp_clients(data, exclude_addr=addr)
-                            # 5. Dispatch live TX visualizer & audio to web UI
-                            asyncio.create_task(self.dispatch_event_to_backend({
-                                "network": "DVSwitch-USRP",
-                                "src_id": dmr_id,
-                                "dst_tg": tg,
-                                "slot": slot or 1,
-                                "call_type": "group",
-                                "data_type": 1,
-                                "payload": payload,
-                                "is_tx": True
-                            }))
-                        else:
-                            # PTT Release - send terminator burst
-                            for client in self.active_clients.values():
-                                if client.state == "CONNECTED":
-                                    client.transmit_dmrd(
-                                        src_id=dmr_id,
-                                        dst_tg=tg,
-                                        slot=slot or 1,
-                                        data_type=2
-                                    )
-                            if self.master_server:
-                                dmrd_bits = (0x80 if slot == 2 else 0) | 0x20  # TS slot + Terminator
-                                dmrd_pkt = (
-                                    b"DMRD" +
-                                    struct.pack("B", 1) +
-                                    struct.pack(">I", dmr_id)[1:] +
-                                    struct.pack(">I", tg)[1:] +
-                                    struct.pack(">I", self.master_server.server_dmr_id) +
-                                    struct.pack("B", dmrd_bits) +
-                                    struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
-                                    b"\x00" * 33
-                                )
-                                self.master_server.broadcast_dmrd(dmrd_pkt)
-                            try:
-                                self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                pass
-                            self.broadcast_to_usrp_clients(data, exclude_addr=addr)
-                            asyncio.create_task(self.dispatch_event_to_backend({
-                                "network": "DVSwitch-USRP",
-                                "src_id": dmr_id,
-                                "dst_tg": tg,
-                                "slot": slot or 1,
-                                "call_type": "group",
-                                "data_type": 2,
-                                "is_tx": False
-                            }))
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                await asyncio.sleep(0.01)
-
-    async def play_parrot_back(self, addr, packets: list):
-        """Replays recorded voice packets back to DVSwitch caller like a DMR parrot repeater."""
-        logger.info(f"[PARROT] 🦜 Triggering Echo Playback to {addr} ({len(packets)} frames)...")
-        await asyncio.sleep(0.8)
-        for pkt in packets:
-            try:
-                self.usrp_sock.sendto(pkt, addr)
-                await asyncio.sleep(0.02)  # Standard 20ms frame pacing
+                self.bridge_sock.sendto(data, client_addr)
             except Exception:
                 pass
-        # Send final release packet
-        try:
-            rel = struct.pack(">4sIIIIIII", b"USRP", 9999, 0, 0, 9990, 9990, 1, 0)
-            self.usrp_sock.sendto(rel, addr)
-        except Exception:
-            pass
-        logger.info(f"[PARROT] ✓ Echo Playback finished for {addr}")
 
     async def dispatch_event_to_backend(self, traffic: dict):
         if not self.http_session:
@@ -386,72 +462,47 @@ class CoreEngineManager:
             if "payload" in data_to_send and isinstance(data_to_send["payload"], bytes):
                 data_to_send["payload_b64"] = base64.b64encode(data_to_send["payload"]).decode("ascii")
                 data_to_send.pop("payload", None)
-            if "raw_packet" in data_to_send:
-                data_to_send.pop("raw_packet", None)
 
             timeout = aiohttp.ClientTimeout(total=2.0)
             async with self.http_session.post(BACKEND_EVENT_URL, json=data_to_send, timeout=timeout) as resp:
                 pass
-        except Exception as e:
-            logger.debug(f"dispatch_event_to_backend note: {e}")
+        except Exception:
+            pass
 
-    def handle_peer_status_change(self, peer_name: str, state: str):
-        logger.info(f"[PEER-STATUS] {peer_name} is now {state}")
-
-    def transmit_ptt(self, callsign: str, dmr_id: int, tg: int, slot: int, is_transmitting: bool):
-        """Transmits PTT frames through all active connected DMR peers and local hotspots."""
-        data_type = 1 if is_transmitting else 2  # 1=Voice Burst, 2=Voice Terminator
-        tx_payload = self.vocoder.encode_pcm_to_dmr(b"") if is_transmitting else (b"\x00" * 33)
-        success = False
-        for peer_id, client in self.active_clients.items():
-            if client.state == "CONNECTED":
-                res = client.transmit_dmrd(
-                    src_id=dmr_id,
-                    dst_tg=tg,
-                    slot=slot,
-                    data_type=data_type,
-                    payload=tx_payload
-                )
-                if res:
-                    success = True
-                    logger.info(f"[PTT-TX] Sent frame to {client.name} (TG: {tg}, Slot: {slot}, TX: {is_transmitting})")
-
-        if self.master_server:
-            dmrd_bits = (0x80 if slot == 2 else 0) | ((data_type & 0x03) << 4)
-            dmrd_pkt = (
-                b"DMRD" +
-                struct.pack("B", 1) +
-                struct.pack(">I", dmr_id)[1:] +
-                struct.pack(">I", tg)[1:] +
-                struct.pack(">I", self.master_server.server_dmr_id) +
-                struct.pack("B", dmrd_bits) +
-                struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
-                tx_payload
-            )
-            self.master_server.broadcast_dmrd(dmrd_pkt)
-            success = True
-
-        return success
+    async def reload_configuration(self):
+        """Re-reads config.json, updates INI files, and restarts Analog_Bridge & MMDVM_Bridge."""
+        logger.info("Reconfiguring DVSwitch stack with new settings...")
+        self.load_config()
+        self.stop_bridge_daemons()
+        self.generate_configs()
+        time.sleep(0.3)
+        self.start_daemons()
+        logger.info("✓ DVSwitch stack restarted with updated configuration.")
 
     async def shutdown(self):
         self.running = False
-        if self.master_server:
-            await self.master_server.stop()
-        if self.usrp_task:
-            self.usrp_task.cancel()
-        if self.usrp_sock:
+        self.stop_bridge_daemons()
+        if self.md380_proc:
             try:
-                self.usrp_sock.close()
+                self.md380_proc.terminate()
             except Exception:
                 pass
-        for client in self.active_clients.values():
-            await client.stop()
+        if self.usrp_ingress_sock:
+            try:
+                self.usrp_ingress_sock.close()
+            except Exception:
+                pass
+        if self.ab_pcm_sock:
+            try:
+                self.ab_pcm_sock.close()
+            except Exception:
+                pass
         if self.http_session:
             await self.http_session.close()
 
 # ----------------- FastAPI Internal Control Server (Port 5000) -----------------
 app = FastAPI(title="NinjaRadio Core Engine Control API")
-engine_mgr = CoreEngineManager()
+engine_mgr = DVSwitchCoreManager()
 
 @app.on_event("startup")
 async def on_startup():
@@ -463,40 +514,29 @@ async def on_shutdown():
 
 @app.get("/api/status")
 async def get_core_status():
-    peers_status = [client.get_status_info() for client in engine_mgr.active_clients.values()]
-    hotspots = []
-    if engine_mgr.master_server:
-        for addr, client in engine_mgr.master_server.clients.items():
-            hotspots.append({
-                "address": f"{addr[0]}:{addr[1]}",
-                "dmr_id": client.get("dmr_id"),
-                "callsign": client.get("callsign"),
-                "state": client.get("state"),
-                "last_seen": client.get("last_seen")
-            })
+    md380_running = engine_mgr.md380_proc is not None and engine_mgr.md380_proc.poll() is None
+    ab_running = engine_mgr.ab_proc is not None and engine_mgr.ab_proc.poll() is None
+    mmdvm_running = engine_mgr.mmdvm_proc is not None and engine_mgr.mmdvm_proc.poll() is None
+
     return {
-        "status": "ONLINE",
-        "engine": "NinjaRadio Standalone DMR Master & Multi-Peer Gateway",
-        "master_server": {
-            "status": "ONLINE" if engine_mgr.master_server else "OFFLINE",
-            "port": engine_mgr.master_server.port if engine_mgr.master_server else DMR_MASTER_PORT,
-            "connected_hotspots": len(hotspots),
-            "hotspots": hotspots
+        "status": "ONLINE" if (ab_running or mmdvm_running) else "INITIALIZING",
+        "engine": "Official DVSwitch Native Stack (MMDVM_Bridge + Analog_Bridge + md380-emu)",
+        "dvswitch_daemons": {
+            "md380_emu": "RUNNING" if md380_running else "STOPPED",
+            "analog_bridge": "RUNNING" if ab_running else "STOPPED",
+            "mmdvm_bridge": "RUNNING" if mmdvm_running else "STOPPED"
         },
-        "active_clients_count": len(engine_mgr.active_clients),
-        "peers": peers_status,
+        "active_master": f"{engine_mgr.active_peer_host}:{engine_mgr.active_peer_port}",
         "config": engine_mgr.config
     }
 
 @app.post("/api/reload")
 async def reload_configuration():
-    """Reloads /app/data/config.json dynamically and updates all active links."""
-    engine_mgr.load_config()
-    await engine_mgr.apply_peers()
+    await engine_mgr.reload_configuration()
     return {
         "status": "SUCCESS",
-        "message": "Configuration reloaded and applied to DMR engine.",
-        "active_clients": list(engine_mgr.active_clients.keys())
+        "message": "DVSwitch configuration reloaded and bridges restarted.",
+        "active_master": f"{engine_mgr.active_peer_host}:{engine_mgr.active_peer_port}"
     }
 
 @app.post("/api/tx")
@@ -507,8 +547,14 @@ async def ptt_transmit(payload: dict):
     slot = int(payload.get("slot", 1))
     is_tx = bool(payload.get("is_transmitting", True))
 
-    res = engine_mgr.transmit_ptt(callsign, dmr_id, tg, slot, is_tx)
-    return {"status": "TX_DISPATCHED", "sent_to_masters": res}
+    key_flag = 1 if is_tx else 0
+    header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, key_flag, tg, dmr_id, slot, 0)
+    packet = header + (b"\x00" * 320)
+    try:
+        engine_mgr.bridge_sock.sendto(packet, ("127.0.0.1", AB_USRP_RX_PORT))
+        return {"status": "TX_DISPATCHED", "sent_to_dvswitch": True}
+    except Exception as e:
+        return {"status": "ERROR", "detail": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info")

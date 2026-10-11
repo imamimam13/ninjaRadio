@@ -236,7 +236,7 @@ _usrp_packet_seq = 0
 
 def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool, pcm_payload: bytes = None):
     """
-    Constructs and dispatches standard 32-byte DVSwitch / USRP UDP packets
+    Constructs and dispatches standard 32-byte header + 320-byte payload DVSwitch / USRP UDP packets
     directly to the NinjaRadio Core engine (core:32345) and Mumble Bridge.
     """
     global _usrp_packet_seq
@@ -245,18 +245,30 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
         import struct
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         key_flag = 1 if is_tx else 0
-        _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
-        header = struct.pack(">4sIIIIIII", b"USRP", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
-        payload = pcm_payload if (pcm_payload and len(pcm_payload) > 0) else (b"\x00" * 320)
-        packet = header + payload
 
-        # Send to Core USRP port (32345)
-        sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
-        # Send to Mumble Bridge port (12346)
-        try:
-            sock.sendto(packet, ("bridge-mumble", 12346))
-        except Exception:
-            pass
+        if pcm_payload and len(pcm_payload) > 0:
+            # Standard DVSwitch USRP packet: 32-byte header + 320 bytes PCM (20ms @ 8kHz 16-bit mono)
+            for offset in range(0, len(pcm_payload), 320):
+                chunk = pcm_payload[offset:offset + 320]
+                if len(chunk) < 320:
+                    chunk = chunk.ljust(320, b"\x00")
+                _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
+                header = struct.pack(">4sIIIIIII", b"USRP", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
+                packet = header + chunk
+                sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
+                try:
+                    sock.sendto(packet, ("bridge-mumble", 12346))
+                except Exception:
+                    pass
+        else:
+            _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
+            header = struct.pack(">4sIIIIIII", b"USRP", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
+            packet = header + (b"\x00" * 320)
+            sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
+            try:
+                sock.sendto(packet, ("bridge-mumble", 12346))
+            except Exception:
+                pass
     except Exception:
         pass
 

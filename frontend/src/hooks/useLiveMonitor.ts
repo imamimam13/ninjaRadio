@@ -83,7 +83,7 @@ export function useLiveMonitor() {
             } else if (message.type === "LAST_HEARD_UPDATE") {
               setLastHeard((prev) => [message.data, ...prev.slice(0, 49)]);
             } else if (message.type === "AUDIO_RX") {
-              setIncomingAudio(message.data);
+              setIncomingAudio(message.data || message);
             }
           } catch {
             // parse error
