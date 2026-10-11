@@ -216,6 +216,12 @@ export default function RadioPocketMode() {
     isTxRef.current = isTransmitting;
   }, [isTransmitting]);
 
+  useEffect(() => {
+    if (activeTx?.callsign === "PARROT" && !isEchoPlaying) {
+      beepPlayer?.playTalkGrant();
+    }
+  }, [activeTx?.callsign, isEchoPlaying]);
+
   // Enumerate Audio Devices (Line-In, External TRRS, USB Soundcard)
   useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
