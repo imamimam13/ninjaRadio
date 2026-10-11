@@ -308,15 +308,34 @@ export default function RadioPocketMode() {
   const rxAudioCtxRef = useRef<AudioContext | null>(null);
   const rxNextTimeRef = useRef<number>(0);
 
+  // Autoplay Policy: Unlock Web AudioContext on first user interaction
   useEffect(() => {
-    if (!incomingAudio || !incomingAudio.pcm) return;
+    const unlockAudio = () => {
+      if (rxAudioCtxRef.current && rxAudioCtxRef.current.state === "suspended") {
+        rxAudioCtxRef.current.resume().catch(() => {});
+      }
+    };
+    window.addEventListener("click", unlockAudio);
+    window.addEventListener("touchstart", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+    return () => {
+      window.removeEventListener("click", unlockAudio);
+      window.removeEventListener("touchstart", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!incomingAudio || !incomingAudio.pcm || isMuted) return;
     try {
       if (!rxAudioCtxRef.current) {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        rxAudioCtxRef.current = new AudioCtx({ sampleRate: 8000 });
+        rxAudioCtxRef.current = new AudioCtx();
       }
       const ctx = rxAudioCtxRef.current;
-      if (ctx.state === "suspended") ctx.resume();
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
 
       const binaryStr = atob(incomingAudio.pcm);
       const len = binaryStr.length;
@@ -340,13 +359,15 @@ export default function RadioPocketMode() {
       source.connect(ctx.destination);
 
       const now = ctx.currentTime;
-      const startTime = Math.max(now, rxNextTimeRef.current);
-      source.start(startTime);
-      rxNextTimeRef.current = startTime + audioBuffer.duration;
+      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
+        rxNextTimeRef.current = now;
+      }
+      source.start(rxNextTimeRef.current);
+      rxNextTimeRef.current += audioBuffer.duration;
     } catch (e) {
-      // Audio playback fallback
+      console.warn("Audio playback note:", e);
     }
-  }, [incomingAudio]);
+  }, [incomingAudio, isMuted]);
 
   // Live TX Microphone Streamer to USRP / DMR Network
   const txProcessorRef = useRef<ScriptProcessorNode | null>(null);
