@@ -246,8 +246,9 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
 @router.post("/auth/verify-pin")
 async def verify_admin_pin(payload: PinVerifyRequest):
     """Verifies operator / admin security PIN for PTT authorization."""
-    admin_pin = getattr(settings, "ADMIN_PIN", "1234")
-    return {"valid": payload.pin.strip() == str(admin_pin).strip()}
+    import os
+    admin_pin = str(os.getenv("ADMIN_PIN") or getattr(settings, "ADMIN_PIN", "1234")).strip()
+    return {"valid": payload.pin.strip() == admin_pin}
 
 @router.post("/ptt/transmit")
 async def web_ptt_transmit(payload: PttTransmitRequest):

@@ -1637,7 +1637,7 @@ export default function RadioPocketMode() {
                       body: JSON.stringify({ pin: authPinInput.trim() }),
                     });
                     const data = await res.json();
-                    if (data.valid || authPinInput.trim() === "1234") {
+                    if (data && data.valid === true) {
                       const testOp: UserProfile = {
                         id: "prof_test_op",
                         category: "Amatir",
@@ -1659,24 +1659,7 @@ export default function RadioPocketMode() {
                       setAuthPinError("PIN Salah! Transmisi ditolak.");
                     }
                   } catch {
-                    if (authPinInput.trim() === "1234") {
-                      const testOp: UserProfile = {
-                        id: "prof_test_op",
-                        category: "Amatir",
-                        callsign: "TEST-OP",
-                        displayName: "Operator Test (PIN Verified)",
-                        dmrId: 5109999,
-                        allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
-                        badgeColor: "bg-amber-400 text-slate-950 font-black",
-                        networkTag: "Verified Test Operator",
-                        isMonitorOnly: false
-                      };
-                      setActiveProfile(testOp);
-                      setShowAuthModal(false);
-                      setAuthPinInput("");
-                    } else {
-                      setAuthPinError("PIN Salah! Transmisi ditolak.");
-                    }
+                    setAuthPinError("Gagal memverifikasi PIN ke server.");
                   } finally {
                     setIsVerifyingAuthPin(false);
                   }
@@ -1685,7 +1668,7 @@ export default function RadioPocketMode() {
               >
                 <div>
                   <label className="block text-slate-300 text-xs mb-1 font-semibold">
-                    Masukkan PIN Operator Server (Default: 1234):
+                    Masukkan PIN Operator Server:
                   </label>
                   <input
                     type="password"

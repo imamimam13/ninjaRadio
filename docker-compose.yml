@@ -91,6 +91,7 @@ services:
       - SERVER_DMR_ID=5109999
       - DEFAULT_TALKGROUP=510
       - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
+      - ADMIN_PIN=${ADMIN_PIN:-1234}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/ninjaradio.db
     volumes:
       - ninjaradio_data:/app/data

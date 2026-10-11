@@ -160,7 +160,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
         body: JSON.stringify({ pin: pinInput.trim() }),
       });
       const data = await res.json();
-      if (data.valid || pinInput.trim() === "1234") {
+      if (data && data.valid === true) {
         const testOp: UserProfile = {
           id: "prof_test_op",
           category: "Amatir",
@@ -182,27 +182,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
         setPinError("PIN Salah! Akses ditolak.");
       }
     } catch {
-      if (pinInput.trim() === "1234") {
-        const testOp: UserProfile = {
-          id: "prof_test_op",
-          category: "Amatir",
-          callsign: "TEST-OP",
-          displayName: "Operator Test (PIN Verified)",
-          dmrId: 5109999,
-          allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
-          badgeColor: "bg-amber-400 text-slate-950 font-black",
-          networkTag: "Verified Test Operator",
-          isMonitorOnly: false,
-        };
-        const updated = [...profiles.filter(p => p.id !== "prof_test_op"), testOp];
-        saveProfilesToStorage(updated);
-        onProfileChange(testOp);
-        setShowPinModal(false);
-        setIsOpen(false);
-        setPinInput("");
-      } else {
-        setPinError("PIN Salah! Akses ditolak.");
-      }
+      setPinError("Gagal menghubungi server untuk verifikasi PIN.");
     } finally {
       setIsVerifyingPin(false);
     }
