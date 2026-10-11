@@ -212,6 +212,33 @@ async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
     except Exception as e:
         pass
 
+CORE_USRP_HOST = "core"
+CORE_USRP_PORT = 32345
+
+def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool):
+    """
+    Constructs and dispatches standard 32-byte DVSwitch / USRP UDP packets
+    directly to the NinjaRadio Core engine (core:32345) and Mumble Bridge.
+    """
+    try:
+        import socket
+        import struct
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        key_flag = 1 if is_tx else 0
+        header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, key_flag, tg, dmr_id, slot, 0)
+        payload = b"\x00" * 320
+        packet = header + payload
+
+        # Send to Core USRP port (32345)
+        sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
+        # Send to Mumble Bridge port (12346)
+        try:
+            sock.sendto(packet, ("bridge-mumble", 12346))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
 @router.post("/ptt/transmit")
 async def web_ptt_transmit(payload: PttTransmitRequest):
     callsign = payload.callsign or "WEB-OP"
@@ -222,6 +249,9 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
     is_transmitting = payload.is_transmitting if payload.is_transmitting is not None else True
 
     tg_name = TG_NAMES.get(tg, f"Talkgroup {tg}")
+
+    # Dispatch actual network UDP packet to core and audio bridge
+    send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_transmitting)
 
     if is_transmitting:
         tx_data = {

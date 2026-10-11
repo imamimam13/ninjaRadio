@@ -15,6 +15,7 @@ class NinjaRadioCoreServer:
     def __init__(self):
         self.connected_hotspots = {}
         self.active_bridges = {}
+        self.parrot_buffers = {}
 
     def start_hotspot_listener(self):
         """Listens for incoming MMDVM / Pi-Star HomeBrew protocol UDP packets."""
@@ -31,11 +32,49 @@ class NinjaRadioCoreServer:
         return sock
 
     def start_usrp_listener(self):
-        """Listens for USRP Audio UDP packets from DVSwitch Mobile Android app."""
+        """Listens for USRP Audio UDP packets from DVSwitch Mobile Android app & Web Transceiver."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("0.0.0.0", USRP_AUDIO_PORT))
-        logging.info(f"📱 DVSwitch & USRP Engine listening on UDP port {USRP_AUDIO_PORT} (DVSwitch Mobile Android & ASL)")
+        logging.info(f"📱 DVSwitch & USRP Engine listening on UDP port {USRP_AUDIO_PORT} (DVSwitch Mobile & Web PTT)")
         return sock
+
+    async def handle_usrp_traffic(self, sock):
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                data, addr = await loop.sock_recvfrom(sock, 2048)
+                if len(data) >= 32 and data.startswith(b"USRP"):
+                    # Decode standard 32-byte DVSwitch / USRP header
+                    magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
+                    if key_flag == 1:
+                        logging.info(f"[USRP/DVSwitch] 🔴 PTT TRANSMIT from {addr} | TG: {tg} | DMR ID: {dmr_id} | Slot: {slot}")
+                        if tg == 9990:
+                            if addr not in self.parrot_buffers:
+                                self.parrot_buffers[addr] = []
+                            self.parrot_buffers[addr].append(data)
+                    else:
+                        logging.info(f"[USRP/DVSwitch] ⏹️ PTT RELEASE from {addr} | TG: {tg} | DMR ID: {dmr_id}")
+                        if tg == 9990 and addr in self.parrot_buffers:
+                            # Trigger background Parrot Echo playback
+                            buffered = self.parrot_buffers.pop(addr, [])
+                            if buffered:
+                                asyncio.create_task(self.play_parrot_back(sock, addr, buffered))
+                elif len(data) > 0:
+                    logging.info(f"[USRP-Raw] Packet received from {addr} ({len(data)} bytes)")
+            except Exception as e:
+                await asyncio.sleep(0.05)
+
+    async def play_parrot_back(self, sock, addr, packets):
+        """Replays recorded voice packets back to caller like a real DMR repeater parrot."""
+        logging.info(f"[PARROT] 🦜 Triggering Echo Playback to {addr} ({len(packets)} frames)...")
+        await asyncio.sleep(1.2)
+        for pkt in packets:
+            try:
+                sock.sendto(pkt, addr)
+                await asyncio.sleep(0.02) # Standard 20ms frame interval
+            except Exception:
+                pass
+        logging.info(f"[PARROT] ✓ Echo Playback finished for {addr}")
 
     async def handle_udp_traffic(self, name, sock):
         loop = asyncio.get_running_loop()
@@ -60,7 +99,7 @@ class NinjaRadioCoreServer:
         await asyncio.gather(
             self.handle_udp_traffic("DMR-Hotspot", sock_dmr),
             self.handle_udp_traffic("OpenBridge", sock_ob),
-            self.handle_udp_traffic("DVSwitch-USRP", sock_usrp)
+            self.handle_usrp_traffic(sock_usrp)
         )
 
 if __name__ == "__main__":
