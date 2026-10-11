@@ -70,6 +70,8 @@ export default function SettingsPage() {
     mode?: "homebrew" | "openbridge";
     dmrId?: number;
     callsign?: string;
+    colorCode?: number;
+    slots?: "both" | "1" | "2";
   }>>([]);
   const [showAddPeerModal, setShowAddPeerModal] = useState(false);
   const [editingPeerId, setEditingPeerId] = useState<string | null>(null);
@@ -77,13 +79,33 @@ export default function SettingsPage() {
   const [newPeerHost, setNewPeerHost] = useState("");
   const [newPeerPort, setNewPeerPort] = useState(62031);
   const [newPeerPassword, setNewPeerPassword] = useState("");
-  const [newPeerTgs, setNewPeerTgs] = useState("");
   const [newPeerMode, setNewPeerMode] = useState<"homebrew" | "openbridge">("homebrew");
   const [newPeerDmrId, setNewPeerDmrId] = useState("");
   const [newPeerCallsign, setNewPeerCallsign] = useState("");
+  const [newPeerTs1, setNewPeerTs1] = useState("");
+  const [newPeerTs2, setNewPeerTs2] = useState("");
+  const [newPeerOptions, setNewPeerOptions] = useState("");
+  const [newPeerColorCode, setNewPeerColorCode] = useState(1);
+  const [newPeerSlots, setNewPeerSlots] = useState<"both" | "1" | "2">("both");
+  const [showCfgPreview, setShowCfgPreview] = useState(false);
+  const [cfgCopied, setCfgCopied] = useState(false);
 
   const [coreStatus, setCoreStatus] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Helper to build standard MMDVM / FreeDMR options string
+  const buildOptionsString = (ts1: string, ts2: string) => {
+    const parts: string[] = [];
+    const p1 = ts1.split(/[,; ]+/).filter(Boolean);
+    p1.forEach((tg, idx) => {
+      parts.push(`TS1_${idx + 1}=${tg}`);
+    });
+    const p2 = ts2.split(/[,; ]+/).filter(Boolean);
+    p2.forEach((tg, idx) => {
+      parts.push(`TS2_${idx + 1}=${tg}`);
+    });
+    return parts.length > 0 ? `${parts.join(";")};` : "";
+  };
 
   // Load server configuration and live peer status from Backend API
   const loadSystemConfig = async () => {
@@ -148,10 +170,15 @@ export default function SettingsPage() {
     setNewPeerHost("");
     setNewPeerPort(62031);
     setNewPeerPassword("");
-    setNewPeerTgs("");
     setNewPeerMode("homebrew");
     setNewPeerDmrId("");
     setNewPeerCallsign("");
+    setNewPeerTs1("");
+    setNewPeerTs2("");
+    setNewPeerOptions("");
+    setNewPeerColorCode(1);
+    setNewPeerSlots("both");
+    setShowCfgPreview(false);
     setShowAddPeerModal(true);
   };
 
@@ -159,12 +186,37 @@ export default function SettingsPage() {
     setEditingPeerId(peer.id);
     setNewPeerName(peer.name);
     setNewPeerHost(peer.host);
-    setNewPeerPort(peer.port || 62031);
+    setNewPeerPort(peer.port || (peer.mode === "openbridge" ? 62030 : 62031));
     setNewPeerPassword(peer.password || "");
-    setNewPeerTgs(peer.subscribedTgs || "");
     setNewPeerMode(peer.mode || "homebrew");
     setNewPeerDmrId(peer.dmrId ? String(peer.dmrId) : "");
     setNewPeerCallsign(peer.callsign || "");
+    setNewPeerColorCode(peer.colorCode || 1);
+    setNewPeerSlots(peer.slots || "both");
+
+    const raw = (peer.subscribedTgs || "").trim();
+    setNewPeerOptions(raw);
+
+    // Extract TS1 and TS2 static talkgroups
+    let parsedTs1 = "";
+    let parsedTs2 = "";
+    const m1 = raw.match(/TS1(?:_\d+)?\s*[=:;_]\s*([0-9, ]+)/i);
+    if (m1) parsedTs1 = m1[1].trim();
+
+    const m2 = raw.match(/TS2(?:_\d+)?\s*[=:;_]\s*([0-9, ]+)/i);
+    if (m2) parsedTs2 = m2[1].trim();
+
+    if (!parsedTs1 && !parsedTs2 && raw) {
+      const parts = raw.split(/[,; ]+/).filter(Boolean);
+      if (parts.length === 1) parsedTs1 = parts[0];
+      else if (parts.length >= 2) {
+        parsedTs1 = parts[0];
+        parsedTs2 = parts.slice(1).join(", ");
+      }
+    }
+    setNewPeerTs1(parsedTs1);
+    setNewPeerTs2(parsedTs2);
+    setShowCfgPreview(false);
     setShowAddPeerModal(true);
   };
 
@@ -172,19 +224,36 @@ export default function SettingsPage() {
     e.preventDefault();
     if (!newPeerName.trim() || !newPeerHost.trim()) return;
 
+    let finalTgs = "";
+    if (newPeerMode === "openbridge") {
+      finalTgs = newPeerTs1.trim() || newPeerOptions.trim();
+    } else {
+      if (newPeerOptions.trim()) {
+        finalTgs = newPeerOptions.trim();
+      } else if (newPeerTs1.trim() || newPeerTs2.trim()) {
+        finalTgs = buildOptionsString(newPeerTs1, newPeerTs2);
+      }
+    }
+
+    const peerData = {
+      name: newPeerName.trim(),
+      host: newPeerHost.trim(),
+      port: Number(newPeerPort) || (newPeerMode === "openbridge" ? 62030 : 62031),
+      password: newPeerPassword.trim(),
+      subscribedTgs: finalTgs,
+      mode: newPeerMode,
+      dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
+      callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
+      colorCode: Number(newPeerColorCode) || 1,
+      slots: newPeerSlots,
+    };
+
     if (editingPeerId) {
       const updated = peerList.map((p) =>
         p.id === editingPeerId
           ? {
               ...p,
-              name: newPeerName.trim(),
-              host: newPeerHost.trim(),
-              port: Number(newPeerPort) || 62031,
-              password: newPeerPassword.trim(),
-              subscribedTgs: newPeerTgs.trim(),
-              mode: newPeerMode,
-              dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
-              callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
+              ...peerData
             }
           : p
       );
@@ -192,26 +261,14 @@ export default function SettingsPage() {
     } else {
       const newPeer = {
         id: `peer_${Date.now()}`,
-        name: newPeerName.trim(),
-        host: newPeerHost.trim(),
-        port: Number(newPeerPort) || 62031,
-        password: newPeerPassword.trim(),
-        subscribedTgs: newPeerTgs.trim(),
+        ...peerData,
         isActive: true,
-        mode: newPeerMode,
-        dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
-        callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
       };
       savePeers([...peerList, newPeer]);
     }
 
     setShowAddPeerModal(false);
     setEditingPeerId(null);
-    setNewPeerName("");
-    setNewPeerHost("");
-    setNewPeerPassword("");
-    setNewPeerDmrId("");
-    setNewPeerCallsign("");
     beepPlayer?.playTalkGrant();
   };
 
@@ -816,7 +873,7 @@ export default function SettingsPage() {
                             const raw = (peer.subscribedTgs || "").trim();
                             if (!raw) return <span className="text-[10px] text-slate-500 italic">Semua TG (Dynamic / Pass-through)</span>;
 
-                            const tsRegex = /TS([12])\s*[=:;_]\s*([0-9, ]+)/gi;
+                            const tsRegex = /TS([12])(?:_\d+)?\s*[=:;_]\s*([0-9, ]+)/gi;
                             const matches = [...raw.matchAll(tsRegex)];
                             if (matches.length > 0) {
                               return matches.map((m, mIdx) => {
@@ -1248,21 +1305,22 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ADD PEER OPENBRIDGE MODAL */}
+      {/* ADD / EDIT PEER MODAL ALIGNED WITH STANDARD DMR CFG */}
       {showAddPeerModal && (
-        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#121721] border-2 border-purple-500/70 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#101622] border-2 border-purple-500/70 rounded-3xl max-w-xl w-full p-5 sm:p-6 space-y-4 shadow-2xl max-h-[92vh] flex flex-col">
+            {/* Header */}
             <div className="flex items-center justify-between border-b border-purple-900/40 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-500/20 border border-purple-500 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500 flex items-center justify-center">
                   <Globe className="w-5 h-5 text-purple-400" />
                 </div>
                 <div>
-                  <h3 className="font-heading font-black text-sm text-white">
-                    {editingPeerId ? "Edit Konfigurasi Server Peer" : "Tambah Server Peer OpenBridge"}
+                  <h3 className="font-heading font-black text-sm sm:text-base text-white">
+                    {editingPeerId ? "Edit Konfigurasi DMR Network / Peer" : "Tambah Koneksi DMR Network / Peer"}
                   </h3>
                   <p className="text-[11px] font-mono text-slate-400">
-                    {editingPeerId ? "Ubah parameter host, port, password, atau Talkgroup terdaftar" : "Hubungkan ke FreeDMR, BM, atau HBLink"}
+                    Format generik sesuai standar <code className="text-cyan-300">MMDVM.ini</code>, <code className="text-purple-300">hblink.cfg</code>, dan <code className="text-emerald-300">FreeDMR</code>
                   </p>
                 </div>
               </div>
@@ -1275,135 +1333,377 @@ export default function SettingsPage() {
               </button>
             </div>
 
-            <form onSubmit={handleAddPeer} className="space-y-3 text-xs font-mono">
+            {/* Scrollable Form Body */}
+            <form onSubmit={handleAddPeer} className="space-y-3.5 text-xs font-mono overflow-y-auto pr-1 flex-1">
+              
+              {/* 1. PROTOCOL MODE SELECTOR */}
               <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Nama Koneksi / Jaringan</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Contoh: BrandMeister Master Indonesia"
-                  value={newPeerName}
-                  onChange={(e) => setNewPeerName(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <div className="col-span-2">
-                  <label className="block text-slate-400 mb-1 font-semibold">Host / IP Target</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Contoh: bm.amateurradio.id"
-                    value={newPeerHost}
-                    onChange={(e) => setNewPeerHost(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">Port UDP</label>
-                  <input
-                    type="number"
-                    required
-                    value={newPeerPort}
-                    onChange={(e) => setNewPeerPort(Number(e.target.value))}
-                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-emerald-400 font-bold outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Tipe Protokol DMR</label>
+                <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                  <span>Tipe Mode Protokol DMR</span>
+                  <span className="text-[10px] text-purple-400 font-normal">Pilih jenis koneksi yang sesuai dengan server tujuan</span>
+                </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setNewPeerMode("homebrew")}
-                    className={`p-2 rounded-xl border text-center transition-all ${
+                    onClick={() => {
+                      setNewPeerMode("homebrew");
+                      if (newPeerPort === 62030) setNewPeerPort(62031);
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
                       newPeerMode === "homebrew"
-                        ? "bg-purple-600 text-white font-bold border-purple-400 shadow"
-                        : "bg-[#05080f] text-slate-400 border-slate-800"
+                        ? "bg-purple-600/30 border-purple-400 text-white shadow"
+                        : "bg-[#05080f] border-slate-800 text-slate-400 hover:border-slate-700"
                     }`}
                   >
-                    <div>📡 HomeBrew Protocol</div>
-                    <div className="text-[9px] opacity-80">(MMDVM / HomeBrew Master)</div>
+                    <div className="font-bold flex items-center gap-1.5 text-xs text-white">
+                      <span>📡 HomeBrew / MMDVM</span>
+                      {newPeerMode === "homebrew" && <span className="text-[9px] bg-purple-500 text-white px-1.5 py-0.2 rounded font-black">AKTIF</span>}
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      Mode Client / Outbound Peer (Port standar: <strong className="text-cyan-300">62031</strong>). Untuk BrandMeister, FreeDMR, HBlink Master.
+                    </div>
                   </button>
+
                   <button
                     type="button"
-                    onClick={() => setNewPeerMode("openbridge")}
-                    className={`p-2 rounded-xl border text-center transition-all ${
+                    onClick={() => {
+                      setNewPeerMode("openbridge");
+                      if (newPeerPort === 62031) setNewPeerPort(62030);
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
                       newPeerMode === "openbridge"
-                        ? "bg-purple-600 text-white font-bold border-purple-400 shadow"
-                        : "bg-[#05080f] text-slate-400 border-slate-800"
+                        ? "bg-purple-600/30 border-purple-400 text-white shadow"
+                        : "bg-[#05080f] border-slate-800 text-slate-400 hover:border-slate-700"
                     }`}
                   >
-                    <div>🌐 OpenBridge Peering</div>
-                    <div className="text-[9px] opacity-80">(BrandMeister / FreeDMR Peer)</div>
+                    <div className="font-bold flex items-center gap-1.5 text-xs text-white">
+                      <span>🌐 OpenBridge Peering</span>
+                      {newPeerMode === "openbridge" && <span className="text-[9px] bg-purple-500 text-white px-1.5 py-0.2 rounded font-black">AKTIF</span>}
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      Trunk antar-server DMR Master (Port standar: <strong className="text-cyan-300">62030</strong>). Interkoneksi server-to-server.
+                    </div>
                   </button>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Secret Key / Passphrase (Jika Ada)</label>
-                <input
-                  type="password"
-                  placeholder="Password hotspot / key peering (kosongkan jika tanpa password)"
-                  value={newPeerPassword}
-                  onChange={(e) => setNewPeerPassword(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">DMR ID (Opsional)</label>
-                  <input
-                    type="number"
-                    placeholder={`Default: ${serverDmrId}`}
-                    value={newPeerDmrId}
-                    onChange={(e) => setNewPeerDmrId(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none font-mono"
-                  />
+              {/* 2. SERVER CONNECTION DETAILS */}
+              <div className="p-3 rounded-2xl bg-[#090d16] border border-slate-800/80 space-y-2.5">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Server className="w-3 h-3 text-cyan-400" />
+                  Informasi Server & Jaringan
                 </div>
+
                 <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">Callsign (Opsional)</label>
+                  <label className="block text-slate-400 mb-1 font-semibold">Nama / Label Koneksi</label>
                   <input
                     type="text"
-                    placeholder={`Default: ${serverCallsign}`}
-                    value={newPeerCallsign}
-                    onChange={(e) => setNewPeerCallsign(e.target.value.toUpperCase())}
-                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none font-mono uppercase"
+                    required
+                    placeholder="Contoh: FreeDMR Indonesia, BrandMeister BM-5101, dll."
+                    value={newPeerName}
+                    onChange={(e) => setNewPeerName(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
                   />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <label className="block text-slate-400 mb-1 font-semibold">Host / IP Master Server</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Contoh: master.freedmr.uk atau IP address"
+                      value={newPeerHost}
+                      onChange={(e) => setNewPeerHost(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                      <span>Port UDP</span>
+                      <span className="text-[9px] text-slate-500">{newPeerMode === "homebrew" ? "62031" : "62030"}</span>
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      value={newPeerPort}
+                      onChange={(e) => setNewPeerPort(Number(e.target.value))}
+                      className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-emerald-400 font-bold outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
-                  <span>Subscribed Talkgroups</span>
-                  <span className="text-[10px] text-purple-400">Dukungan: TS1;xxxx, TS2;xxxx</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="Contoh: TS1;1023, TS2;1025 atau TS1=1023; TS2=1025"
-                  value={newPeerTgs}
-                  onChange={(e) => setNewPeerTgs(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none font-mono"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">
-                  Ketik <strong className="text-cyan-300 font-mono">TS1;xxxx</strong> dan <strong className="text-purple-300 font-mono">TS2;xxxx</strong> untuk menetapkan nomor TG ke masing-masing Timeslot secara presisi agar tidak tertukar di server DMR.
-                </p>
+              {/* 3. RADIO IDENTITY & AUTHENTICATION */}
+              <div className="p-3 rounded-2xl bg-[#090d16] border border-slate-800/80 space-y-2.5">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Radio className="w-3 h-3 text-purple-400" />
+                  Identitas Repeater & Autentikasi
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Radio / Repeater DMR ID</label>
+                    <input
+                      type="number"
+                      placeholder={`Default: ${serverDmrId}`}
+                      value={newPeerDmrId}
+                      onChange={(e) => setNewPeerDmrId(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none font-mono"
+                    />
+                    <span className="text-[9px] text-slate-500 mt-0.5 block">7 digit Radio ID atau 9 digit dengan SSID</span>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Callsign Repeater</label>
+                    <input
+                      type="text"
+                      placeholder={`Default: ${serverCallsign}`}
+                      value={newPeerCallsign}
+                      onChange={(e) => setNewPeerCallsign(e.target.value.toUpperCase())}
+                      className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none font-mono uppercase"
+                    />
+                    <span className="text-[9px] text-slate-500 mt-0.5 block">Callsign yang terdaftar di database DMR</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Password / Secret Passphrase</label>
+                  <input
+                    type="password"
+                    placeholder="Password hotspot / key autentikasi master (kosongkan jika server tanpa password)"
+                    value={newPeerPassword}
+                    onChange={(e) => setNewPeerPassword(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                  />
+                  <span className="text-[9px] text-slate-500 mt-0.5 block">Sesuai dengan hotspot password di SelfCare atau konfigurasi Master</span>
+                </div>
               </div>
 
-              <div className="flex gap-2 pt-2">
+              {/* 4. TALKGROUPS & TIMESLOT CONFIGURATION (STANDAR MMDVM & FREEDMR) */}
+              <div className="p-3 rounded-2xl bg-[#090d16] border border-slate-800/80 space-y-2.5">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Sliders className="w-3 h-3 text-emerald-400" />
+                    Routing Talkgroup & Timeslot (Options CFG)
+                  </div>
+                  <span className="text-[10px] text-emerald-400 font-mono font-normal">Sesuai MMDVM / FreeDMR</span>
+                </div>
+
+                {newPeerMode === "homebrew" ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-slate-400 mb-1 font-semibold flex items-center gap-1.5">
+                          <span className="px-1.5 py-0.2 bg-cyan-950 border border-cyan-700 text-cyan-300 rounded text-[9px] font-black">TS1</span>
+                          <span>Talkgroups Timeslot 1</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Contoh: 1023 (atau 1023, 91)"
+                          value={newPeerTs1}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setNewPeerTs1(val);
+                            setNewPeerOptions(buildOptionsString(val, newPeerTs2));
+                          }}
+                          className="w-full px-3 py-2 bg-[#05080f] border border-cyan-800/80 focus:border-cyan-400 rounded-xl text-cyan-300 font-bold outline-none font-mono"
+                        />
+                        <span className="text-[9px] text-slate-500 mt-0.5 block">Static TG untuk Timeslot 1</span>
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-400 mb-1 font-semibold flex items-center gap-1.5">
+                          <span className="px-1.5 py-0.2 bg-purple-950 border border-purple-700 text-purple-300 rounded text-[9px] font-black">TS2</span>
+                          <span>Talkgroups Timeslot 2</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Contoh: 1025 (atau 1025, 510)"
+                          value={newPeerTs2}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setNewPeerTs2(val);
+                            setNewPeerOptions(buildOptionsString(newPeerTs1, val));
+                          }}
+                          className="w-full px-3 py-2 bg-[#05080f] border border-purple-800/80 focus:border-purple-400 rounded-xl text-purple-300 font-bold outline-none font-mono"
+                        />
+                        <span className="text-[9px] text-slate-500 mt-0.5 block">Static TG untuk Timeslot 2</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-slate-400 font-semibold flex items-center gap-1.5">
+                          <span>Options String Generik (MMDVM / FreeDMR)</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setNewPeerOptions(buildOptionsString(newPeerTs1, newPeerTs2))}
+                          className="text-[10px] text-purple-400 hover:text-purple-300 underline"
+                        >
+                          ⚡ Sinkronisasi Ulang
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Contoh: TS1_1=1023;TS2_1=1025; atau TS1;1023,TS2;1025"
+                        value={newPeerOptions}
+                        onChange={(e) => setNewPeerOptions(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-emerald-300 font-mono text-[11px] outline-none"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        String <code className="text-emerald-300 font-bold">Options=</code> dikirim dalam paket handshake <code className="text-cyan-300 font-mono">RPTC</code> ke DMR Master untuk mengunci static talkgroup agar tidak tertukar antara TS1 dan TS2.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Subscribed Talkgroups (OpenBridge Streams)</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: 1023, 1025, 510, 91"
+                      value={newPeerTs1}
+                      onChange={(e) => {
+                        setNewPeerTs1(e.target.value);
+                        setNewPeerOptions(e.target.value);
+                      }}
+                      className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none font-mono"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Daftar Talkgroup yang dilewatkan melalui OpenBridge trunk (pisahkan dengan koma).
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* 5. OPTIONAL REPEATER PARAMETERS */}
+              <div className="p-3 rounded-2xl bg-[#090d16] border border-slate-800/80 space-y-2">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Layers className="w-3 h-3 text-amber-400" />
+                  Parameter Repeater Tambahan (Opsional)
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Color Code</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={15}
+                      value={newPeerColorCode}
+                      onChange={(e) => setNewPeerColorCode(Number(e.target.value))}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 rounded-xl text-white outline-none font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Mode Timeslot</label>
+                    <select
+                      value={newPeerSlots}
+                      onChange={(e) => setNewPeerSlots(e.target.value as any)}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 rounded-xl text-white outline-none font-mono"
+                    >
+                      <option value="both">Duplex (TS1 & TS2 Aktif)</option>
+                      <option value="1">Simplex (TS1 Saja)</option>
+                      <option value="2">Simplex (TS2 Saja)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* 6. LIVE CFG STANZA PREVIEW (ACCORDION) */}
+              <div className="p-3 rounded-2xl bg-[#090d16] border border-slate-800/80">
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setShowCfgPreview(!showCfgPreview)}
+                    className="flex items-center gap-1.5 text-[11px] font-bold text-cyan-400 hover:text-cyan-300"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>{showCfgPreview ? "Sembunyikan Preview Format File CFG" : "📄 Lihat Preview Stanza File .CFG / .INI Generik"}</span>
+                  </button>
+
+                  {showCfgPreview && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const effId = newPeerDmrId || serverDmrId;
+                        const effCall = newPeerCallsign || serverCallsign;
+                        const effHost = newPeerHost || "example-server.dmr.net";
+                        const effPort = newPeerPort || (newPeerMode === "openbridge" ? 62030 : 62031);
+                        const effPass = newPeerPassword || "password";
+                        const effOpts = newPeerOptions || (newPeerTs1 || newPeerTs2 ? buildOptionsString(newPeerTs1, newPeerTs2) : "TS1_1=1023;TS2_1=1025;");
+                        
+                        let text = "";
+                        if (newPeerMode === "openbridge") {
+                          text = `[OPENBRIDGE-${newPeerName ? newPeerName.replace(/\\s+/g, '_').toUpperCase() : 'TRUNK'}]\nMODE: OPENBRIDGE\nENABLED: True\nTARGET_IP: ${effHost}\nTARGET_PORT: ${effPort}\nNETWORK_ID: ${effId}\nPASSPHRASE: ${effPass}\nSTREAMS: ${newPeerTs1 || '1023, 1025'}`;
+                        } else {
+                          text = `[DMR Network]\nEnabled = 1\nAddress = ${effHost}\nPort = ${effPort}\nID = ${effId}\nPassword = ${effPass}\nOptions = ${effOpts}\nLocal = 62032\nDebug = 0\n\n[OUTBOUND-${newPeerName ? newPeerName.replace(/\\s+/g, '_').toUpperCase() : 'PEER'}]\nMODE: OUTBOUND\nMASTER_IP: ${effHost}\nMASTER_PORT: ${effPort}\nRADIO_ID: ${effId}\nCALLSIGN: ${effCall}\nPASSPHRASE: ${effPass}`;
+                        }
+                        navigator.clipboard?.writeText(text);
+                        setCfgCopied(true);
+                        setTimeout(() => setCfgCopied(false), 2000);
+                      }}
+                      className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800 text-cyan-300 text-[10px] flex items-center gap-1 hover:bg-cyan-900"
+                    >
+                      {cfgCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{cfgCopied ? "Tersalin!" : "Salin CFG"}</span>
+                    </button>
+                  )}
+                </div>
+
+                {showCfgPreview && (
+                  <div className="mt-2.5 p-2.5 rounded-xl bg-[#05080f] border border-slate-800 font-mono text-[10px] text-slate-300 overflow-x-auto">
+                    {newPeerMode === "openbridge" ? (
+                      <pre className="text-purple-300 leading-relaxed">
+{`# Format Stanza hblink.cfg / freedmr.cfg (OpenBridge Trunk)
+[OPENBRIDGE-${newPeerName ? newPeerName.replace(/\s+/g, '_').toUpperCase() : 'TRUNK'}]
+MODE: OPENBRIDGE
+ENABLED: True
+TARGET_IP: ${newPeerHost || "example-server.dmr.net"}
+TARGET_PORT: ${newPeerPort || 62030}
+NETWORK_ID: ${newPeerDmrId || serverDmrId}
+PASSPHRASE: ${newPeerPassword || "password"}
+STREAMS: ${newPeerTs1 || "1023, 1025"}`}
+                      </pre>
+                    ) : (
+                      <pre className="text-cyan-300 leading-relaxed">
+{`# 1. Format MMDVM.ini [DMR Network]
+[DMR Network]
+Enabled = 1
+Address = ${newPeerHost || "example-server.dmr.net"}
+Port = ${newPeerPort || 62031}
+ID = ${newPeerDmrId || serverDmrId}
+Password = ${newPeerPassword || "password"}
+Options = ${newPeerOptions || (newPeerTs1 || newPeerTs2 ? buildOptionsString(newPeerTs1, newPeerTs2) : "TS1_1=1023;TS2_1=1025;")}
+Local = 62032
+Debug = 0
+
+# 2. Format hblink.cfg [OUTBOUND]
+[OUTBOUND-${newPeerName ? newPeerName.replace(/\s+/g, '_').toUpperCase() : 'PEER'}]
+MODE: OUTBOUND
+MASTER_IP: ${newPeerHost || "example-server.dmr.net"}
+MASTER_PORT: ${newPeerPort || 62031}
+RADIO_ID: ${newPeerDmrId || serverDmrId}
+CALLSIGN: ${newPeerCallsign || serverCallsign}
+PASSPHRASE: ${newPeerPassword || "password"}`}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Form Buttons */}
+              <div className="flex gap-2 pt-2 border-t border-purple-900/30">
                 <button
                   type="button"
                   onClick={() => { setShowAddPeerModal(false); setEditingPeerId(null); }}
-                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs hover:bg-slate-700"
+                  className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs hover:bg-slate-700 transition-all"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white rounded-xl font-black text-xs shadow-lg shadow-purple-500/20"
+                  className="flex-1 py-2.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white rounded-xl font-black text-xs shadow-lg shadow-purple-500/20 transition-all"
                 >
                   {editingPeerId ? "Simpan Perubahan Peer" : "Simpan & Tambah Peer"}
                 </button>
