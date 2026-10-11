@@ -169,7 +169,8 @@ class HomeBrewMasterServer:
             bits = data[15]
             slot = 2 if (bits & 0x80) else 1
             call_type = "unit" if (bits & 0x40) else "group"
-            dtype_vseq = bits & 0x0F
+            data_type = (bits & 0x30) >> 4  # 0=Header, 1=Voice Burst, 2=Voice Terminator, 3=CSBK
+            sequence = bits & 0x0F  # 0..5 (Burst A..F)
             stream_id = int.from_bytes(data[16:20], "big")
             payload = data[20:]
 
@@ -185,9 +186,11 @@ class HomeBrewMasterServer:
                     "dst_tg": dst_tg,
                     "slot": slot,
                     "call_type": call_type,
-                    "dtype_vseq": dtype_vseq,
+                    "data_type": data_type,
+                    "sequence": sequence,
                     "stream_id": stream_id,
                     "payload": payload,
+                    "raw_packet": data,
                     "timestamp": time.time()
                 })
 

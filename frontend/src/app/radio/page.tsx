@@ -320,11 +320,13 @@ export default function RadioPocketMode() {
 
       const binaryStr = atob(incomingAudio.pcm);
       const len = binaryStr.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
+      const safeLen = len - (len % 2);
+      if (safeLen < 2) return;
+      const bytes = new Uint8Array(safeLen);
+      for (let i = 0; i < safeLen; i++) {
         bytes[i] = binaryStr.charCodeAt(i);
       }
-      const int16 = new Int16Array(bytes.buffer);
+      const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
       const float32 = new Float32Array(int16.length);
       for (let i = 0; i < int16.length; i++) {
         float32[i] = int16[i] / 32768.0;

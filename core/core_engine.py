@@ -152,23 +152,42 @@ class CoreEngineManager:
                 del self.active_clients[current_id]
 
     def handle_incoming_dmr_traffic(self, traffic_data: dict):
-        """Called when a real DMR frame arrives from the DMR Master."""
+        """Called when a real DMR frame arrives from an external Master or local hotspot."""
         try:
             src_id = traffic_data["src_id"]
             dst_tg = traffic_data["dst_tg"]
             slot = traffic_data["slot"]
-            # Construct USRP packet for audio bridge
-            header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, dst_tg, src_id, slot, 0)
+            raw_packet = traffic_data.get("raw_packet")
+            network = traffic_data.get("network", "")
+
+            # 1. Bi-directional DMR cross-routing between Master Server and External Peers
+            if "Local DMR Master" in network:
+                # Arrived from local hotspot -> Forward out to all connected external DMR peers
+                if raw_packet:
+                    for client in self.active_clients.values():
+                        if client.state == "CONNECTED" and client.sock and client.target_addr:
+                            try:
+                                client.sock.sendto(raw_packet, client.target_addr)
+                            except Exception:
+                                pass
+            else:
+                # Arrived from external DMR peer -> Forward to all local hotspots connected to this master
+                if raw_packet and self.master_server:
+                    self.master_server.broadcast_dmrd(raw_packet)
+
+            # 2. Forward to Mumble bridge (UDP 12346) & DVSwitch clients
             payload = traffic_data.get("payload", b"")
+            header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, dst_tg, src_id, slot, 0)
             usrp_packet = header + payload
 
-            # 1. Forward to Mumble bridge (UDP 12346)
-            self.bridge_sock.sendto(usrp_packet, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+            try:
+                self.bridge_sock.sendto(usrp_packet, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+            except Exception:
+                pass
 
-            # 2. Forward to all registered DVSwitch Mobile clients
             self.broadcast_to_usrp_clients(usrp_packet)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"handle_incoming_dmr_traffic error: {e}")
 
         # 3. Dispatch event to backend API for WebSocket broadcast (async in background)
         asyncio.create_task(self.dispatch_event_to_backend(traffic_data))
@@ -218,24 +237,40 @@ class CoreEngineManager:
                                         src_id=dmr_id,
                                         dst_tg=tg,
                                         slot=slot or 1,
-                                        dtype_vseq=0,
+                                        data_type=1,
                                         payload=payload
                                     )
-                            # 2. Forward to Mumble bridge (UDP 12346)
+                            # 2. Forward to local hotspots on DMR Master Server
+                            if self.master_server:
+                                dmrd_bits = (0x80 if slot == 2 else 0) | 0x10  # TS slot + Voice Burst
+                                dmrd_pkt = (
+                                    b"DMRD" +
+                                    struct.pack("B", 1) +
+                                    struct.pack(">I", dmr_id)[1:] +
+                                    struct.pack(">I", tg)[1:] +
+                                    struct.pack(">I", self.master_server.server_dmr_id) +
+                                    struct.pack("B", dmrd_bits) +
+                                    struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
+                                    (payload[:33] if payload else b"").ljust(33, b"\x00")
+                                )
+                                self.master_server.broadcast_dmrd(dmrd_pkt)
+
+                            # 3. Forward to Mumble bridge (UDP 12346)
                             try:
                                 self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                             except Exception:
                                 pass
-                            # 3. Broadcast to other DVSwitch Mobile clients
+                            # 4. Broadcast to other DVSwitch Mobile clients
                             self.broadcast_to_usrp_clients(data, exclude_addr=addr)
-                            # 4. Dispatch live TX visualizer event to web UI
+                            # 5. Dispatch live TX visualizer & audio to web UI
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch-USRP",
                                 "src_id": dmr_id,
                                 "dst_tg": tg,
                                 "slot": slot or 1,
                                 "call_type": "group",
-                                "dtype_vseq": 0,
+                                "data_type": 1,
+                                "payload": payload,
                                 "is_tx": True
                             }))
                         else:
@@ -246,8 +281,21 @@ class CoreEngineManager:
                                         src_id=dmr_id,
                                         dst_tg=tg,
                                         slot=slot or 1,
-                                        dtype_vseq=2
+                                        data_type=2
                                     )
+                            if self.master_server:
+                                dmrd_bits = (0x80 if slot == 2 else 0) | 0x20  # TS slot + Terminator
+                                dmrd_pkt = (
+                                    b"DMRD" +
+                                    struct.pack("B", 1) +
+                                    struct.pack(">I", dmr_id)[1:] +
+                                    struct.pack(">I", tg)[1:] +
+                                    struct.pack(">I", self.master_server.server_dmr_id) +
+                                    struct.pack("B", dmrd_bits) +
+                                    struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
+                                    b"\x00" * 33
+                                )
+                                self.master_server.broadcast_dmrd(dmrd_pkt)
                             try:
                                 self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                             except Exception:
@@ -259,7 +307,7 @@ class CoreEngineManager:
                                 "dst_tg": tg,
                                 "slot": slot or 1,
                                 "call_type": "group",
-                                "dtype_vseq": 2,
+                                "data_type": 2,
                                 "is_tx": False
                             }))
             except asyncio.CancelledError:
@@ -307,8 +355,8 @@ class CoreEngineManager:
         logger.info(f"[PEER-STATUS] {peer_name} is now {state}")
 
     def transmit_ptt(self, callsign: str, dmr_id: int, tg: int, slot: int, is_transmitting: bool):
-        """Transmits PTT frames through all active connected DMR peers."""
-        dtype = 1 if is_transmitting else 2  # 1=Voice Header, 2=Voice Terminator
+        """Transmits PTT frames through all active connected DMR peers and local hotspots."""
+        data_type = 1 if is_transmitting else 2  # 1=Voice Burst, 2=Voice Terminator
         success = False
         for peer_id, client in self.active_clients.items():
             if client.state == "CONNECTED":
@@ -316,11 +364,27 @@ class CoreEngineManager:
                     src_id=dmr_id,
                     dst_tg=tg,
                     slot=slot,
-                    dtype_vseq=dtype
+                    data_type=data_type
                 )
                 if res:
                     success = True
                     logger.info(f"[PTT-TX] Sent frame to {client.name} (TG: {tg}, Slot: {slot}, TX: {is_transmitting})")
+
+        if self.master_server:
+            dmrd_bits = (0x80 if slot == 2 else 0) | ((data_type & 0x03) << 4)
+            dmrd_pkt = (
+                b"DMRD" +
+                struct.pack("B", 1) +
+                struct.pack(">I", dmr_id)[1:] +
+                struct.pack(">I", tg)[1:] +
+                struct.pack(">I", self.master_server.server_dmr_id) +
+                struct.pack("B", dmrd_bits) +
+                struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
+                b"\x00" * 33
+            )
+            self.master_server.broadcast_dmrd(dmrd_pkt)
+            success = True
+
         return success
 
     async def shutdown(self):

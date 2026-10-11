@@ -28,9 +28,14 @@ async def lifespan(app: FastAPI):
     if os.getenv("ENABLE_DEMO_SIMULATOR", "false").lower() == "true":
         simulator_task = asyncio.create_task(run_dv_simulator())
     
+    # Inactivity watchdog for live DMR streams
+    from backend.app.api.endpoints import run_stream_watchdog
+    watchdog_task = asyncio.create_task(run_stream_watchdog())
+
     yield
-    
+
     # Shutdown
+    watchdog_task.cancel()
     if simulator_task:
         simulator_task.cancel()
 

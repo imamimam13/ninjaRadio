@@ -295,7 +295,8 @@ class HomeBrewClient:
             bits = data[15]
             slot = 2 if (bits & 0x80) else 1
             call_type = "unit" if (bits & 0x40) else "group"
-            dtype_vseq = bits & 0x0F  # 1=Voice Header, 2=Voice Terminator, 0-5=Burst A-F
+            data_type = (bits & 0x30) >> 4  # 0=Header, 1=Voice, 2=Terminator, 3=Data
+            sequence = bits & 0x0F  # Burst sequence 0..5 (A..F)
             stream_id = int.from_bytes(data[16:20], "big")
             payload = data[20:]
 
@@ -307,16 +308,25 @@ class HomeBrewClient:
                     "dst_tg": dst_id,
                     "slot": slot,
                     "call_type": call_type,
-                    "dtype_vseq": dtype_vseq,
+                    "data_type": data_type,
+                    "sequence": sequence,
                     "stream_id": stream_id,
                     "payload": payload,
+                    "raw_packet": data,
                     "timestamp": time.time()
                 })
 
-    def transmit_dmrd(self, src_id: int, dst_tg: int, slot: int, dtype_vseq: int, payload: bytes = None):
+    def transmit_dmrd(self, src_id: int, dst_tg: int, slot: int, data_type: int = 1, sequence: int = 0, payload: bytes = None, call_type: str = "group", dtype_vseq: int = None):
         """Constructs and transmits an authentic DMRD voice/signaling frame to Master."""
         if not self.sock or not self.target_addr or self.state != "CONNECTED":
             return False
+
+        # Support backward compatibility if caller passes dtype_vseq
+        if dtype_vseq is not None:
+            if dtype_vseq == 2:
+                data_type = 2
+            elif dtype_vseq in [0, 1]:
+                data_type = dtype_vseq
 
         self.stream_seq = (self.stream_seq + 1) % 256
         seq_byte = struct.pack("B", self.stream_seq)
@@ -327,12 +337,15 @@ class HomeBrewClient:
         bits = 0
         if slot == 2:
             bits |= 0x80
-        bits |= (dtype_vseq & 0x0F)
+        if call_type == "unit":
+            bits |= 0x40
+        bits |= ((data_type & 0x03) << 4)
+        bits |= (sequence & 0x0F)
         bits_byte = struct.pack("B", bits)
 
         stream_id_bytes = struct.pack(">I", int(time.time()) & 0xFFFFFFFF)
-        if not payload:
-            payload = b"\x00" * 33  # Standard 33-byte DMR AMBE / signaling burst
+        if not payload or len(payload) != 33:
+            payload = (payload[:33] if payload else b"").ljust(33, b"\x00")
 
         frame = DMRD + seq_byte + src_bytes + dst_bytes + repeater_bytes + bits_byte + stream_id_bytes + payload
         try:
