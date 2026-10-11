@@ -12,6 +12,7 @@ import uvicorn
 
 from dmr_client import HomeBrewClient
 from dmr_server import HomeBrewMasterServer
+from vocoder import DMRVocoder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NinjaRadio-Core] %(message)s")
 logger = logging.getLogger("NinjaRadio-Core")
@@ -38,6 +39,7 @@ class CoreEngineManager:
         self.active_clients: Dict[str, HomeBrewClient] = {}
         self.master_server: Optional[HomeBrewMasterServer] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
+        self.vocoder = DMRVocoder()
         self.bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.usrp_sock: Optional[socket.socket] = None
         self.usrp_task: Optional[asyncio.Task] = None
@@ -191,10 +193,13 @@ class CoreEngineManager:
                 if raw_packet and self.master_server:
                     self.master_server.broadcast_dmrd(raw_packet)
 
-            # 2. Forward to Mumble bridge (UDP 12346) & DVSwitch clients
+            # 2. Transcode 33-byte DMR AMBE frame to 320-byte 8kHz 16-bit PCM human voice
             payload = traffic_data.get("payload", b"")
+            pcm_payload = self.vocoder.decode_dmr_burst(payload) if len(payload) == 33 else payload
+
+            # Forward decoded PCM to Mumble bridge (UDP 12346) & DVSwitch clients
             header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, dst_tg, src_id, slot, 0)
-            usrp_packet = header + payload
+            usrp_packet = header + (pcm_payload if pcm_payload else b"\x00" * 320)
 
             try:
                 self.bridge_sock.sendto(usrp_packet, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
@@ -205,8 +210,11 @@ class CoreEngineManager:
         except Exception as e:
             logger.debug(f"handle_incoming_dmr_traffic error: {e}")
 
-        # 3. Dispatch event to backend API for WebSocket broadcast (async in background)
-        asyncio.create_task(self.dispatch_event_to_backend(traffic_data))
+        # 3. Dispatch event to backend API with decoded PCM audio for Web Audio player
+        dispatch_traffic = traffic_data.copy()
+        if "payload" in dispatch_traffic:
+            dispatch_traffic["payload"] = pcm_payload if 'pcm_payload' in locals() and pcm_payload else dispatch_traffic["payload"]
+        asyncio.create_task(self.dispatch_event_to_backend(dispatch_traffic))
 
     def broadcast_to_usrp_clients(self, data: bytes, exclude_addr=None):
         if not self.usrp_sock:
@@ -248,6 +256,9 @@ class CoreEngineManager:
                         if key_flag == 1:
                             self.last_tx_src_id = dmr_id
                             self.last_tx_time = time.time()
+                            # Transcode 320-byte PCM to authentic 33-byte DMR AMBE frame
+                            ambe_payload = self.vocoder.encode_pcm_to_dmr(payload)
+
                             # 1. Transmit voice burst to active DMR Master connections
                             for client in self.active_clients.values():
                                 if client.state == "CONNECTED":
@@ -256,7 +267,7 @@ class CoreEngineManager:
                                         dst_tg=tg,
                                         slot=slot or 1,
                                         data_type=1,
-                                        payload=payload
+                                        payload=ambe_payload
                                     )
                             # 2. Forward to local hotspots on DMR Master Server
                             if self.master_server:
@@ -269,7 +280,7 @@ class CoreEngineManager:
                                     struct.pack(">I", self.master_server.server_dmr_id) +
                                     struct.pack("B", dmrd_bits) +
                                     struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
-                                    (payload[:33] if payload else b"").ljust(33, b"\x00")
+                                    ambe_payload
                                 )
                                 self.master_server.broadcast_dmrd(dmrd_pkt)
 
@@ -375,6 +386,7 @@ class CoreEngineManager:
     def transmit_ptt(self, callsign: str, dmr_id: int, tg: int, slot: int, is_transmitting: bool):
         """Transmits PTT frames through all active connected DMR peers and local hotspots."""
         data_type = 1 if is_transmitting else 2  # 1=Voice Burst, 2=Voice Terminator
+        tx_payload = self.vocoder.encode_pcm_to_dmr(b"") if is_transmitting else (b"\x00" * 33)
         success = False
         for peer_id, client in self.active_clients.items():
             if client.state == "CONNECTED":
@@ -382,7 +394,8 @@ class CoreEngineManager:
                     src_id=dmr_id,
                     dst_tg=tg,
                     slot=slot,
-                    data_type=data_type
+                    data_type=data_type,
+                    payload=tx_payload
                 )
                 if res:
                     success = True
@@ -398,7 +411,7 @@ class CoreEngineManager:
                 struct.pack(">I", self.master_server.server_dmr_id) +
                 struct.pack("B", dmrd_bits) +
                 struct.pack(">I", int(time.time()) & 0xFFFFFFFF) +
-                b"\x00" * 33
+                tx_payload
             )
             self.master_server.broadcast_dmrd(dmrd_pkt)
             success = True
