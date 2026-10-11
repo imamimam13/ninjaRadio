@@ -143,7 +143,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
       {isOpen && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 top-full mt-2 z-50 w-72 sm:w-84 bg-ninja-card border-2 border-slate-700 rounded-2xl p-3 shadow-2xl space-y-3">
+          <div className="absolute left-0 top-full mt-2 z-50 w-80 max-w-[calc(100vw-1.5rem)] bg-ninja-card border-2 border-slate-700 rounded-2xl p-3 shadow-2xl space-y-3">
             
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <div className="flex items-center gap-1.5">
