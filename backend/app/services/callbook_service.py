@@ -7,16 +7,7 @@ import io
 from backend.app.core.database import CallbookEntry
 from backend.app.models.schemas import CallbookCreate
 
-INITIAL_CALLBOOK_DATA = [
-    {"dmr_id": 5100001, "callsign": "YB0AZ", "name": "Budi Santoso", "city": "Jakarta Pusat", "province_state": "DKI Jakarta", "country": "Indonesia", "organization": "ORARI", "organization_id": "YB0AZ", "remarks": "National Master Control"},
-    {"dmr_id": 5101001, "callsign": "YB1AR", "name": "Arief Rahman", "city": "Bandung", "province_state": "Jawa Barat", "country": "Indonesia", "organization": "ORARI", "organization_id": "YB1AR", "remarks": "West Java Repeater Host"},
-    {"dmr_id": 5102002, "callsign": "YC2BBS", "name": "Bambang Sudarmo", "city": "Semarang", "province_state": "Jawa Tengah", "country": "Indonesia", "organization": "ORARI", "organization_id": "YC2BBS", "remarks": "Central Java Net Control"},
-    {"dmr_id": 5103003, "callsign": "YD3NJA", "name": "Ninja Operator", "city": "Surabaya", "province_state": "Jawa Timur", "country": "Indonesia", "organization": "ORARI", "organization_id": "YD3NJA", "remarks": "NinjaDMR Core Dev"},
-    {"dmr_id": 5109101, "callsign": "JZ10XYZ", "name": "Rapi Ranger 01", "city": "Jakarta Timur", "province_state": "DKI Jakarta", "country": "Indonesia", "organization": "RAPI", "organization_id": "10-28 JKT-01", "remarks": "RAPI Wilayah 10"},
-    {"dmr_id": 5109102, "callsign": "JZ11BND", "name": "Rapi Priangan", "city": "Bandung", "province_state": "Jawa Barat", "country": "Indonesia", "organization": "RAPI", "organization_id": "10-28 BDG-02", "remarks": "RAPI Wilayah 11"},
-    {"dmr_id": 5109201, "callsign": "91-DX-001", "name": "Garuda DXer", "city": "Yogyakarta", "province_state": "DIY", "country": "Indonesia", "organization": "CB-11M", "organization_id": "91-DIV-001", "remarks": "11 Meter Citizens Band DXer"},
-    {"dmr_id": 5109301, "callsign": "RESCUE-01", "name": "Relawan SAR Nusantara", "city": "Nusantara", "province_state": "IKN", "country": "Indonesia", "organization": "KOMUNITAS", "organization_id": "SAR-COMM-01", "remarks": "Emergency & Disaster Response"},
-]
+INITIAL_CALLBOOK_DATA = []
 
 class CallbookService:
     @staticmethod

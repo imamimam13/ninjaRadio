@@ -65,14 +65,14 @@ export default function RadioPocketMode() {
   const [deviceSkin, setDeviceSkin] = useState<"standard" | "poc18">("standard");
 
   const [activeProfile, setActiveProfile] = useState<UserProfile>({
-    id: "prof_amatir",
+    id: "prof_default",
     category: "Amatir",
-    callsign: "YB1AR",
-    displayName: "Arief Rahman (ORARI)",
-    dmrId: 5101001,
-    allowedTalkgroups: [510, 5101, 5102, 5103],
-    badgeColor: "bg-emerald-500 text-slate-950",
-    networkTag: "ORARI / BrandMeister / FreeDMR"
+    callsign: "N1NJA",
+    displayName: "Radio Operator",
+    dmrId: 5109999,
+    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100],
+    badgeColor: "bg-cyan-500 text-slate-950",
+    networkTag: "NinjaRadio Master"
   });
 
   const [selectedTgIndex, setSelectedTgIndex] = useState(0);

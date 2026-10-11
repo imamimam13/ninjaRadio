@@ -32,20 +32,25 @@ export default function DashboardPage() {
   const [stats, setStats] = useState({
     server_callsign: "N1NJA",
     server_id: 5109999,
-    uptime: "24h 12m 05s",
+    uptime: "0s",
     active_transmissions: 0,
-    connected_hotspots: 18,
-    connected_peers: 5,
-    active_bridges: 6,
-    cpu_usage: 14.2,
-    ram_usage: 32.8
+    connected_hotspots: 0,
+    connected_peers: 0,
+    active_bridges: 0,
+    cpu_usage: 0,
+    ram_usage: 0
   });
 
   useEffect(() => {
-    fetch("/api/status")
-      .then((res) => res.json())
-      .then((data) => setStats(data))
-      .catch(() => {});
+    const fetchStatus = () => {
+      fetch("/api/status")
+        .then((res) => res.json())
+        .then((data) => setStats(data))
+        .catch(() => {});
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 4000);
+    return () => clearInterval(interval);
   }, []);
 
   const filteredLastHeard = lastHeard.filter((item) => {

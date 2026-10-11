@@ -21,27 +21,6 @@ class ConnectionManager:
         self.active_connections: Set[WebSocket] = set()
         self.last_heard_history: List[Dict] = []
         self.current_tx: Dict = None
-        self._init_history()
-
-    def _init_history(self):
-        for i, user in enumerate(SAMPLE_ACTIVE_USERS[:5]):
-            self.last_heard_history.append({
-                "id": f"lh_{i}",
-                "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
-                "callsign": user["callsign"],
-                "name": user["name"],
-                "dmr_id": user["dmr_id"],
-                "talkgroup": user["tg"],
-                "tg_name": user["tg_name"],
-                "slot": user["slot"],
-                "mode": user["mode"],
-                "category": user["category"],
-                "duration": f"{random.randint(3, 18)}s",
-                "loss": "0.0%",
-                "ber": "0.0%",
-                "rssi": f"-{random.randint(65, 88)} dBm",
-                "is_tx": False
-            })
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
