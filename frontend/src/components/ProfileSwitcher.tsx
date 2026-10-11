@@ -13,6 +13,7 @@ export interface UserProfile {
   badgeColor: string;
   networkTag: string;
   isMonitorOnly?: boolean;
+  defaultTg?: number;
 }
 
 export const DEFAULT_MONITOR_PROFILE: UserProfile = {
@@ -25,6 +26,7 @@ export const DEFAULT_MONITOR_PROFILE: UserProfile = {
   badgeColor: "bg-slate-700 text-cyan-300",
   networkTag: "Hanya Monitor (TX Terkunci)",
   isMonitorOnly: true,
+  defaultTg: 510,
 };
 
 const DEFAULT_PROFILES: UserProfile[] = [DEFAULT_MONITOR_PROFILE];
@@ -53,6 +55,9 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   const [newCallsign, setNewCallsign] = useState("");
   const [newName, setNewName] = useState("");
   const [newDmrId, setNewDmrId] = useState<number>(5104001);
+  const [newTargetTg, setNewTargetTg] = useState<number>(510);
+  const [isCustomTg, setIsCustomTg] = useState(false);
+  const [customTgInput, setCustomTgInput] = useState("");
 
   // Load from local storage, purging any old hardcoded N1NJA
   useEffect(() => {
@@ -102,7 +107,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
 
     let badgeColor = "bg-emerald-500 text-slate-950";
     let networkTag = "ORARI / BrandMeister";
-    let allowedTalkgroups = [510, 5101, 5102, 5103, 9990];
+    let allowedTalkgroups = [510, 5101, 5102, 5103, 9990, 91];
 
     if (newCategory === "RAPI") {
       badgeColor = "bg-blue-500 text-white";
@@ -118,33 +123,44 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
       allowedTalkgroups = [5100, 9990];
     }
 
+    const chosenTg = isCustomTg ? (Number(customTgInput) || 510) : Number(newTargetTg);
+    const finalAllowedTgs = Array.from(new Set([...allowedTalkgroups, chosenTg, 9990]));
+
     const created: UserProfile = {
       id: `prof_${Date.now()}`,
       category: newCategory,
       callsign: newCallsign.toUpperCase().trim(),
       displayName: newName.trim(),
       dmrId: Number(newDmrId) || (5100000 + Math.floor(Math.random() * 9000)),
-      allowedTalkgroups,
+      allowedTalkgroups: finalAllowedTgs,
       badgeColor,
       networkTag,
+      defaultTg: chosenTg,
     };
 
-    const updated = [...profiles, created];
+    const updated = [...profiles.filter(p => p.id !== created.id), created];
     saveProfilesToStorage(updated);
     onProfileChange(created);
     setShowAddModal(false);
     setIsOpen(false);
     setNewCallsign("");
     setNewName("");
+    setIsCustomTg(false);
+    setCustomTgInput("");
   };
 
   const handleDeleteProfile = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (profiles.length <= 1) return;
+    if (id === "prof_monitor") return;
     const updated = profiles.filter((p) => p.id !== id);
-    saveProfilesToStorage(updated);
+    const finalProfiles = updated.length > 0 ? updated : [DEFAULT_MONITOR_PROFILE];
+    saveProfilesToStorage(finalProfiles);
     if (activeProfile.id === id) {
-      onProfileChange(updated[0]);
+      const fallback = finalProfiles[0] || DEFAULT_MONITOR_PROFILE;
+      if (typeof window !== "undefined") {
+        localStorage.setItem("ninjaradio_active_profile", JSON.stringify(fallback));
+      }
+      onProfileChange(fallback);
     }
   };
 
@@ -257,19 +273,27 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      {isCurrent ? (
-                        <Check className="w-4 h-4 text-ninja-cyan flex-shrink-0" />
-                      ) : (
-                        p.id !== "prof_monitor" && (
-                          <button
-                            onClick={(e) => handleDeleteProfile(e, p.id)}
-                            className="p-1 text-gray-500 hover:text-red-400 transition-colors"
-                            title="Hapus Profil"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {isCurrent && (
+                        <span className="flex items-center gap-1 text-[10px] font-bold text-ninja-cyan bg-ninja-cyan/10 px-2 py-0.5 rounded-lg border border-ninja-cyan/30">
+                          <Check className="w-3 h-3" />
+                          <span>Aktif</span>
+                        </span>
+                      )}
+                      {p.id !== "prof_monitor" && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (typeof window !== "undefined" && window.confirm(`Hapus profil ${p.callsign} (${p.displayName})?`)) {
+                              handleDeleteProfile(e, p.id);
+                            }
+                          }}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                          title={`Hapus profil ${p.callsign}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       )}
                     </div>
                   </div>
@@ -400,10 +424,20 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                   onChange={(e) => {
                     const cat = e.target.value as any;
                     setNewCategory(cat);
-                    if (cat === "Amatir") setNewCallsign("YB");
-                    else if (cat === "RAPI") setNewCallsign("JZ");
-                    else if (cat === "CB") setNewCallsign("91-DX-");
-                    else setNewCallsign("RESCUE-");
+                    setIsCustomTg(false);
+                    if (cat === "Amatir") {
+                      setNewCallsign("YB");
+                      setNewTargetTg(510);
+                    } else if (cat === "RAPI") {
+                      setNewCallsign("JZ");
+                      setNewTargetTg(5109);
+                    } else if (cat === "CB") {
+                      setNewCallsign("91-DX-");
+                      setNewTargetTg(5108);
+                    } else {
+                      setNewCallsign("RESCUE-");
+                      setNewTargetTg(5100);
+                    }
                   }}
                   className="w-full px-3 py-2.5 bg-ninja-dark border border-slate-700 rounded-xl text-white font-bold focus:border-ninja-cyan"
                 >
@@ -461,6 +495,46 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                   onChange={(e) => setNewDmrId(Number(e.target.value))}
                   className="w-full px-3 py-2 bg-ninja-dark border border-slate-700 rounded-xl text-white font-mono focus:border-ninja-cyan"
                 />
+              </div>
+
+              {/* Step 5: Target TalkGroup Terkunci */}
+              <div>
+                <label className="block text-gray-400 mb-1 font-semibold">
+                  5. Target TalkGroup (TG Pilihan / Terkunci)
+                </label>
+                <select
+                  value={isCustomTg ? "custom" : String(newTargetTg)}
+                  onChange={(e) => {
+                    if (e.target.value === "custom") {
+                      setIsCustomTg(true);
+                    } else {
+                      setIsCustomTg(false);
+                      setNewTargetTg(Number(e.target.value));
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-ninja-dark border border-slate-700 rounded-xl text-white font-bold focus:border-ninja-cyan"
+                >
+                  <option value="510">TG 510 - DMR Indonesia Nasional</option>
+                  <option value="5101">TG 5101 - Jabar Regional (YSF)</option>
+                  <option value="5102">TG 5102 - Jateng Regional</option>
+                  <option value="5103">TG 5103 - Jatim Regional</option>
+                  <option value="5109">TG 5109 - RAPI Nusantara Gateway</option>
+                  <option value="5108">TG 5108 - 11M CB Digital Gateway</option>
+                  <option value="5100">TG 5100 - Emergency SAR 911</option>
+                  <option value="9990">TG 9990 - Audio Echo Parrot Test</option>
+                  <option value="91">TG 91 - BrandMeister WorldWide</option>
+                  <option value="custom">✏️ Masukkan TG Manual / Lainnya...</option>
+                </select>
+                {isCustomTg && (
+                  <input
+                    type="number"
+                    required
+                    placeholder="Masukkan Nomor TG Tujuan (misal: 5104)"
+                    value={customTgInput}
+                    onChange={(e) => setCustomTgInput(e.target.value)}
+                    className="mt-1.5 w-full px-3 py-2 bg-ninja-dark border border-slate-700 rounded-xl text-white font-mono focus:border-ninja-cyan"
+                  />
+                )}
               </div>
 
               <div className="pt-2 flex gap-2">

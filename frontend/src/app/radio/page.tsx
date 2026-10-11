@@ -39,7 +39,15 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-const ALL_TALKGROUPS = [
+export interface RadioTalkgroup {
+  id: number;
+  name: string;
+  slot: number;
+  mode: string;
+  category: string;
+}
+
+export const ALL_TALKGROUPS: RadioTalkgroup[] = [
   { id: 510, name: "Indo National DMR", slot: 1, mode: "DMR", category: "Amatir" },
   { id: 5101, name: "Jawa Barat Regional", slot: 2, mode: "YSF", category: "Amatir" },
   { id: 5102, name: "Jawa Tengah Regional", slot: 1, mode: "DMR", category: "Amatir" },
@@ -48,7 +56,20 @@ const ALL_TALKGROUPS = [
   { id: 5108, name: "11M CB Digital Gateway", slot: 1, mode: "CB", category: "CB" },
   { id: 5100, name: "Emergency SAR 911", slot: 1, mode: "P25", category: "Komunitas" },
   { id: 9990, name: "Audio Test Echo / Parrot", slot: 2, mode: "DMR", category: "Amatir" },
+  { id: 91, name: "BrandMeister WorldWide", slot: 1, mode: "DMR", category: "Amatir" },
 ];
+
+export function resolveTalkgroup(tgId: number, category: string = "Amatir"): RadioTalkgroup {
+  const found = ALL_TALKGROUPS.find((t) => t.id === tgId);
+  if (found) return found;
+  return {
+    id: tgId,
+    name: `Talkgroup ${tgId}`,
+    slot: 1,
+    mode: "DMR",
+    category,
+  };
+}
 
 interface SmsItem {
   id: string;
@@ -78,23 +99,52 @@ export default function RadioPocketMode() {
   const [authCallsign, setAuthCallsign] = useState("");
   const [authName, setAuthName] = useState("");
   const [authDmrId, setAuthDmrId] = useState<number>(5104001);
+  const [authTargetTg, setAuthTargetTg] = useState<number>(510);
+  const [isAuthCustomTg, setIsAuthCustomTg] = useState(false);
+  const [authCustomTgInput, setAuthCustomTgInput] = useState("");
 
-  // Load saved profile on mount, purging legacy N1NJA
+  // TalkGroup Active Object State (Locks TG and avoids reverting to 510)
+  const [currentTg, setCurrentTg] = useState<RadioTalkgroup>(ALL_TALKGROUPS[0]);
+
+  const tuneToTalkgroup = (tg: RadioTalkgroup) => {
+    setCurrentTg(tg);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ninjaradio_locked_tg", String(tg.id));
+    }
+  };
+
+  // Load saved profile and locked TG on mount, purging legacy N1NJA
   useEffect(() => {
     if (typeof window !== "undefined") {
+      let initialProf = DEFAULT_MONITOR_PROFILE;
       const saved = localStorage.getItem("ninjaradio_active_profile");
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           if (parsed && parsed.callsign !== "N1NJA" && parsed.id !== "prof_default") {
+            initialProf = parsed;
             setActiveProfile(parsed);
           }
         } catch {}
       }
+
+      // Check saved locked TG first
+      const savedTg = localStorage.getItem("ninjaradio_locked_tg");
+      if (savedTg) {
+        const tgNum = Number(savedTg);
+        if (!isNaN(tgNum) && tgNum > 0) {
+          setCurrentTg(resolveTalkgroup(tgNum, initialProf.category));
+          return;
+        }
+      }
+
+      // Otherwise fall back to profile default TG if exists
+      if (initialProf.defaultTg) {
+        setCurrentTg(resolveTalkgroup(initialProf.defaultTg, initialProf.category));
+      }
     }
   }, []);
 
-  const [selectedTgIndex, setSelectedTgIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
 
   // VOX (Voice-Operated Exchange / Hands-Free) State
@@ -139,12 +189,18 @@ export default function RadioPocketMode() {
     { id: "2", sender: "JZ10XYZ", target: "TG 5109", type: "group", text: "Posko 1 Jakarta Timur 10-28 aman terkendali.", time: "09:15" },
   ]);
 
-  // Filter talkgroups strictly allowed for the active profile (TG 9990 Echo is always permitted for audio testing)
-  const availableTgs = ALL_TALKGROUPS.filter((tg) =>
-    activeProfile.allowedTalkgroups.includes(tg.id) || tg.id === 9990
-  );
+  // Filter talkgroups strictly allowed for the active profile (TG 9990 Echo is always permitted, and current tuned TG is guaranteed)
+  const availableTgs = React.useMemo(() => {
+    const list = ALL_TALKGROUPS.filter((tg) =>
+      activeProfile.allowedTalkgroups.includes(tg.id) || tg.id === 9990 || tg.id === currentTg.id
+    );
+    if (!list.some((t) => t.id === currentTg.id)) {
+      list.unshift(currentTg);
+    }
+    return list;
+  }, [activeProfile.allowedTalkgroups, currentTg]);
 
-  const currentTg = availableTgs[selectedTgIndex % (availableTgs.length || 1)] || ALL_TALKGROUPS[0];
+  const selectedTgIndex = Math.max(0, availableTgs.findIndex((t) => t.id === currentTg.id));
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedAudioChunksRef = useRef<Blob[]>([]);
@@ -444,24 +500,28 @@ export default function RadioPocketMode() {
   // Physical T9 Keyboard Shortcut Listener for 1.8" Radio Mode (keys 1-9 switch channels directly)
   useEffect(() => {
     const handleT9 = (e: KeyboardEvent) => {
-      if (showSmsModal || showDialer || showVoxModal || showCableModal) return;
+      if (showSmsModal || showDialer || showVoxModal || showCableModal || showAuthModal) return;
       const keyNum = parseInt(e.key);
       if (!isNaN(keyNum) && keyNum >= 1 && keyNum <= availableTgs.length) {
-        setSelectedTgIndex(keyNum - 1);
+        tuneToTalkgroup(availableTgs[keyNum - 1]);
         beepPlayer?.playTalkGrant();
       }
     };
     window.addEventListener("keydown", handleT9);
     return () => window.removeEventListener("keydown", handleT9);
-  }, [availableTgs.length, showSmsModal, showDialer, showVoxModal, showCableModal]);
+  }, [availableTgs, showSmsModal, showDialer, showVoxModal, showCableModal, showAuthModal]);
 
   const nextChannel = () => {
-    setSelectedTgIndex((prev) => (prev + 1) % availableTgs.length);
+    if (availableTgs.length === 0) return;
+    const nextIdx = (selectedTgIndex + 1) % availableTgs.length;
+    tuneToTalkgroup(availableTgs[nextIdx]);
     beepPlayer?.playRogerBeep();
   };
 
   const prevChannel = () => {
-    setSelectedTgIndex((prev) => (prev - 1 + availableTgs.length) % availableTgs.length);
+    if (availableTgs.length === 0) return;
+    const prevIdx = (selectedTgIndex - 1 + availableTgs.length) % availableTgs.length;
+    tuneToTalkgroup(availableTgs[prevIdx]);
     beepPlayer?.playRogerBeep();
   };
 
@@ -487,14 +547,23 @@ export default function RadioPocketMode() {
     e.preventDefault();
     if (!dialInput.trim()) return;
     if (callType === "private") {
-      setPrivateId(dialInput);
+      setPrivateId(dialInput.trim());
     } else {
-      const customId = Number(dialInput);
-      const idx = availableTgs.findIndex(t => t.id === customId);
-      if (idx >= 0) setSelectedTgIndex(idx);
+      const customId = Number(dialInput.trim());
+      if (!isNaN(customId) && customId > 0) {
+        const resolved = resolveTalkgroup(customId, activeProfile.category);
+        tuneToTalkgroup(resolved);
+      }
     }
     setShowDialer(false);
     setDialInput("");
+    beepPlayer?.playTalkGrant();
+  };
+
+  const handleQuickDial = (tgId: number) => {
+    const resolved = resolveTalkgroup(tgId, activeProfile.category);
+    tuneToTalkgroup(resolved);
+    setShowDialer(false);
     beepPlayer?.playTalkGrant();
   };
 
@@ -590,7 +659,15 @@ export default function RadioPocketMode() {
             activeProfile={activeProfile}
             onProfileChange={(newProf) => {
               setActiveProfile(newProf);
-              setSelectedTgIndex(0);
+              if (typeof window !== "undefined") {
+                localStorage.setItem("ninjaradio_active_profile", JSON.stringify(newProf));
+              }
+              if (newProf.defaultTg) {
+                tuneToTalkgroup(resolveTalkgroup(newProf.defaultTg, newProf.category));
+              } else if (!newProf.allowedTalkgroups.includes(currentTg.id)) {
+                const fallbackId = newProf.allowedTalkgroups[0] || 510;
+                tuneToTalkgroup(resolveTalkgroup(fallbackId, newProf.category));
+              }
             }}
           />
           
@@ -761,11 +838,16 @@ export default function RadioPocketMode() {
                   </div>
                 </div>
               ) : (
-                <div>
-                  <div className="text-[9px] text-emerald-600 uppercase font-bold tracking-wider">
-                    CH {selectedTgIndex + 1} • {callType === "private" ? "PRIVATE" : "GROUP"}
+                <div
+                  onClick={() => setShowDialer(true)}
+                  className="cursor-pointer group hover:bg-emerald-950/50 p-1 rounded-lg transition-all"
+                  title="Klik untuk ganti atau dial TalkGroup tujuan"
+                >
+                  <div className="text-[9px] text-emerald-600 group-hover:text-cyan-400 uppercase font-bold tracking-wider flex items-center justify-center gap-1">
+                    <span>CH {selectedTgIndex + 1} • {callType === "private" ? "PRIVATE" : "GROUP"}</span>
+                    <span className="text-[8px] bg-emerald-900/60 group-hover:bg-cyan-900/80 px-1 rounded text-emerald-300 group-hover:text-cyan-300">✎ DIAL</span>
                   </div>
-                  <div className="text-2xl font-black text-emerald-400 tracking-wider">
+                  <div className="text-2xl font-black text-emerald-400 group-hover:text-cyan-300 tracking-wider">
                     {callType === "private" ? `ID ${privateId}` : `TG ${currentTg.id}`}
                   </div>
                   <div className="text-[10px] text-emerald-500 font-bold truncate">
@@ -796,7 +878,7 @@ export default function RadioPocketMode() {
                   key={num}
                   onClick={() => {
                     if (num <= availableTgs.length) {
-                      setSelectedTgIndex(num - 1);
+                      tuneToTalkgroup(availableTgs[num - 1]);
                       beepPlayer?.playTalkGrant();
                     }
                   }}
@@ -927,14 +1009,21 @@ export default function RadioPocketMode() {
                   </div>
                 </div>
               ) : (
-                <div>
-                  <div className="text-[10px] text-emerald-600 uppercase font-bold tracking-widest mb-0.5">
-                    {callType === "private" ? "DIRECT PRIVATE TARGET" : `CURRENT CHANNEL [${activeProfile.category.toUpperCase()}]`}
+                <div
+                  onClick={() => setShowDialer(true)}
+                  className="cursor-pointer group hover:bg-emerald-950/40 p-1.5 rounded-xl transition-all"
+                  title="Klik untuk ganti atau dial TalkGroup tujuan"
+                >
+                  <div className="text-[10px] text-emerald-600 group-hover:text-cyan-400 uppercase font-bold tracking-widest mb-0.5 flex items-center justify-center gap-1.5">
+                    <span>{callType === "private" ? "DIRECT PRIVATE TARGET" : `CURRENT CHANNEL [${activeProfile.category.toUpperCase()}]`}</span>
+                    <span className="text-[9px] bg-emerald-900/60 group-hover:bg-cyan-900/80 px-1.5 py-0.2 rounded text-emerald-300 group-hover:text-cyan-300 font-mono">
+                      Ganti TG ✎
+                    </span>
                   </div>
-                  <div className="text-3xl font-black text-emerald-400 tracking-wider">
+                  <div className="text-3xl font-black text-emerald-400 group-hover:text-cyan-300 tracking-wider">
                     {callType === "private" ? `ID ${privateId}` : `TG ${currentTg.id}`}
                   </div>
-                  <div className="text-xs text-emerald-500 font-bold mt-0.5">
+                  <div className="text-xs text-emerald-500 group-hover:text-cyan-400 font-bold mt-0.5">
                     {callType === "private" ? "Direct Peer-to-Peer DMR Call" : currentTg.name}
                   </div>
                 </div>
@@ -1009,23 +1098,75 @@ export default function RadioPocketMode() {
 
           {/* Direct Number Dialer Form */}
           {showDialer && (
-            <form onSubmit={handleApplyDial} className="bg-[#0b121e] border border-cyan-900/60 rounded-xl p-3 space-y-2">
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  placeholder={callType === "private" ? "Masukkan DMR ID (misal: 5101002)" : "Masukkan TG (misal: 510)"}
-                  value={dialInput}
-                  onChange={(e) => setDialInput(e.target.value)}
-                  className="flex-1 px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-xs text-cyan-300 font-mono font-bold focus:border-cyan-400 outline-none"
-                />
+            <div className="bg-[#0b121e] border-2 border-cyan-700/60 rounded-2xl p-3 space-y-2.5 shadow-xl">
+              <div className="flex items-center justify-between text-xs border-b border-cyan-900/50 pb-1.5">
+                <span className="font-bold text-cyan-300 flex items-center gap-1">
+                  <PhoneCall className="w-3.5 h-3.5 text-cyan-400" />
+                  {callType === "private" ? "Dial Private DMR ID" : "Pilih atau Masukkan TalkGroup Tujuan"}
+                </span>
                 <button
-                  type="submit"
-                  className="px-4 py-2 bg-cyan-400 text-slate-950 font-black text-xs rounded-xl shadow-md"
+                  type="button"
+                  onClick={() => setShowDialer(false)}
+                  className="text-slate-400 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded"
                 >
-                  Set Target
+                  ✕ Tutup
                 </button>
               </div>
-            </form>
+
+              {callType === "group" && (
+                <div>
+                  <div className="text-[10px] text-slate-400 font-semibold mb-1">Preset TalkGroup Populer (Klik untuk Lock):</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { id: 510, label: "510 (Nasional)" },
+                      { id: 5101, label: "5101 (Jabar)" },
+                      { id: 5102, label: "5102 (Jateng)" },
+                      { id: 5103, label: "5103 (Jatim)" },
+                      { id: 5109, label: "5109 (RAPI)" },
+                      { id: 5108, label: "5108 (CB 11M)" },
+                      { id: 5100, label: "5100 (SAR)" },
+                      { id: 9990, label: "9990 (Echo Test)" },
+                      { id: 91, label: "91 (WorldWide)" },
+                    ].map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => handleQuickDial(preset.id)}
+                        className={`text-[10px] font-mono font-bold px-2 py-1 rounded-lg border transition-all ${
+                          currentTg.id === preset.id
+                            ? "bg-cyan-400 text-slate-950 border-cyan-300 shadow-sm"
+                            : "bg-slate-900 border-slate-700 text-slate-300 hover:border-cyan-400 hover:text-cyan-300"
+                        }`}
+                      >
+                        TG {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={handleApplyDial} className="space-y-2">
+                <div className="text-[10px] text-slate-400 font-semibold">
+                  {callType === "private" ? "Ketik DMR ID Tujuan:" : "Atau Masukkan Nomor TG Manual:"}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    autoFocus
+                    placeholder={callType === "private" ? "Contoh: 5101002" : "Contoh: 5105, 510, 91, 5104"}
+                    value={dialInput}
+                    onChange={(e) => setDialInput(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-xs text-cyan-300 font-mono font-bold focus:border-cyan-400 outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black text-xs rounded-xl shadow-md transition-colors"
+                  >
+                    Set & Kunci TG
+                  </button>
+                </div>
+              </form>
+            </div>
           )}
 
           {/* Massive Thumb PTT Button */}
@@ -1525,16 +1666,20 @@ export default function RadioPocketMode() {
                     allowedTalkgroups = [5100, 9990];
                   }
 
+                  const chosenTg = isAuthCustomTg ? (Number(authCustomTgInput) || 510) : Number(authTargetTg);
+                  const finalAllowedTgs = Array.from(new Set([...allowedTalkgroups, chosenTg, 9990]));
+
                   const newProf: UserProfile = {
                     id: `prof_${Date.now()}`,
                     category: authCategory,
                     callsign: authCallsign.toUpperCase().trim(),
                     displayName: authName.trim(),
                     dmrId: Number(authDmrId) || (5100000 + Math.floor(Math.random() * 9000)),
-                    allowedTalkgroups,
+                    allowedTalkgroups: finalAllowedTgs,
                     badgeColor,
                     networkTag,
-                    isMonitorOnly: false
+                    isMonitorOnly: false,
+                    defaultTg: chosenTg,
                   };
 
                   if (typeof window !== "undefined") {
@@ -1543,8 +1688,10 @@ export default function RadioPocketMode() {
                     const updated = [...parsed.filter((p: any) => p.callsign !== "N1NJA" && p.id !== "prof_default"), newProf];
                     localStorage.setItem("ninjaradio_user_profiles", JSON.stringify(updated));
                     localStorage.setItem("ninjaradio_active_profile", JSON.stringify(newProf));
+                    localStorage.setItem("ninjaradio_locked_tg", String(chosenTg));
                   }
                   setActiveProfile(newProf);
+                  tuneToTalkgroup(resolveTalkgroup(chosenTg, newProf.category));
                   setShowAuthModal(false);
                 }}
                 className="space-y-3 text-xs"
@@ -1556,10 +1703,20 @@ export default function RadioPocketMode() {
                     onChange={(e) => {
                       const cat = e.target.value as any;
                       setAuthCategory(cat);
-                      if (cat === "Amatir") setAuthCallsign("YB");
-                      else if (cat === "RAPI") setAuthCallsign("JZ");
-                      else if (cat === "CB") setAuthCallsign("91-DX-");
-                      else setAuthCallsign("RESCUE-");
+                      setIsAuthCustomTg(false);
+                      if (cat === "Amatir") {
+                        setAuthCallsign("YB");
+                        setAuthTargetTg(510);
+                      } else if (cat === "RAPI") {
+                        setAuthCallsign("JZ");
+                        setAuthTargetTg(5109);
+                      } else if (cat === "CB") {
+                        setAuthCallsign("91-DX-");
+                        setAuthTargetTg(5108);
+                      } else {
+                        setAuthCallsign("RESCUE-");
+                        setAuthTargetTg(5100);
+                      }
                     }}
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold focus:border-cyan-400 outline-none"
                   >
@@ -1602,6 +1759,43 @@ export default function RadioPocketMode() {
                     onChange={(e) => setAuthDmrId(Number(e.target.value))}
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono focus:border-cyan-400 outline-none"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">Target TalkGroup (TG Pilihan / Terkunci):</label>
+                  <select
+                    value={isAuthCustomTg ? "custom" : String(authTargetTg)}
+                    onChange={(e) => {
+                      if (e.target.value === "custom") {
+                        setIsAuthCustomTg(true);
+                      } else {
+                        setIsAuthCustomTg(false);
+                        setAuthTargetTg(Number(e.target.value));
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold focus:border-cyan-400 outline-none"
+                  >
+                    <option value="510">TG 510 - DMR Indonesia Nasional</option>
+                    <option value="5101">TG 5101 - Jabar Regional (YSF)</option>
+                    <option value="5102">TG 5102 - Jateng Regional</option>
+                    <option value="5103">TG 5103 - Jatim Regional</option>
+                    <option value="5109">TG 5109 - RAPI Nusantara Gateway</option>
+                    <option value="5108">TG 5108 - 11M CB Digital Gateway</option>
+                    <option value="5100">TG 5100 - Emergency SAR 911</option>
+                    <option value="9990">TG 9990 - Audio Echo Parrot Test</option>
+                    <option value="91">TG 91 - BrandMeister WorldWide</option>
+                    <option value="custom">✏️ Masukkan TG Manual / Lainnya...</option>
+                  </select>
+                  {isAuthCustomTg && (
+                    <input
+                      type="number"
+                      required
+                      placeholder="Masukkan Nomor TG Tujuan (misal: 5104)"
+                      value={authCustomTgInput}
+                      onChange={(e) => setAuthCustomTgInput(e.target.value)}
+                      className="mt-1.5 w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono focus:border-cyan-400 outline-none"
+                    />
+                  )}
                 </div>
 
                 <div className="pt-2 flex gap-2">
