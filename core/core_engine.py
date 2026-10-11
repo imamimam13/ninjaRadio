@@ -111,25 +111,30 @@ class CoreEngineManager:
             peer_id = p.get("id") or f"{p.get('host')}:{p.get('port')}"
             configured_ids.add(peer_id)
             is_active = p.get("isActive", True)
+            host = p.get("host")
+            port = int(p.get("port", 62031))
+            password = p.get("password", "")
+            tgs = p.get("subscribedTgs") or p.get("subscribed_tgs", "")
+            callsign = (p.get("callsign") or self.config.get("server_callsign", "N1NJA")).strip().upper()
+            dmr_id = int(p.get("dmr_id") or p.get("dmrId") or self.config.get("server_dmr_id", 5109999))
 
-            # If client exists and settings changed or disabled, stop it
+            # If client exists and ANY settings changed or disabled, stop it so it reloads with new credentials
             if peer_id in self.active_clients:
                 client = self.active_clients[peer_id]
-                if not is_active or client.host != p.get("host") or client.port != int(p.get("port")):
-                    logger.info(f"Stopping client {peer_id}...")
+                if (not is_active or 
+                    client.host != host or 
+                    client.port != port or 
+                    client.dmr_id != dmr_id or 
+                    client.callsign != callsign or 
+                    client.password != password or 
+                    client.subscribed_tgs != tgs):
+                    logger.info(f"Configuration changed for peer {peer_id} (DMR ID: {client.dmr_id} -> {dmr_id}, Callsign: {client.callsign} -> {callsign}). Re-connecting...")
                     await client.stop()
                     del self.active_clients[peer_id]
 
             # Start client if active and not already running
             if is_active and peer_id not in self.active_clients:
-                host = p.get("host")
-                port = int(p.get("port", 62031))
-                password = p.get("password", "")
-                tgs = p.get("subscribedTgs", "")
-                callsign = p.get("callsign") or self.config.get("server_callsign", "N1NJA")
-                dmr_id = int(p.get("dmr_id") or self.config.get("server_dmr_id", 5109999))
-
-                logger.info(f"🚀 Initializing active HomeBrew client for {p.get('name', host)} -> {host}:{port} (TGs: {tgs})...")
+                logger.info(f"🚀 Initializing active HomeBrew client for {p.get('name', host)} -> {host}:{port} (DMR ID: {dmr_id}, Callsign: {callsign}, TGs: {tgs})...")
                 client = HomeBrewClient(
                     name=p.get("name") or host,
                     host=host,
