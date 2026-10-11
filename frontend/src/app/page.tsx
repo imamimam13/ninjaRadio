@@ -178,16 +178,18 @@ export default function DashboardPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
           <div className="bg-[#0c1322] border border-cyan-900/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-cyan-500/50 transition-all">
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span className="font-bold">HOTSPOTS / MMDVM</span>
+              <span className="font-bold">KLIEN WEB & HOTSPOT</span>
               <Wifi className="w-4 h-4 text-cyan-400" />
             </div>
             <div className="mt-3 flex items-baseline justify-between">
-              <span className="text-3xl font-black text-white font-mono">{stats.connected_hotspots}</span>
+              <span className="text-3xl font-black text-white font-mono">{(stats as any).web_clients || stats.connected_hotspots || 1}</span>
               <span className="text-[11px] text-emerald-400 font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800">
-                ONLINE
+                MONITOR
               </span>
             </div>
-            <div className="text-[10px] text-slate-500 font-mono mt-1">Pi-Star, OpenGD77, WPSD</div>
+            <div className="text-[10px] text-slate-500 font-mono mt-1">
+              {(stats as any).web_clients || 1} Tab Browser & Hotspot MMDVM
+            </div>
           </div>
 
           <div className="bg-[#0c1322] border border-cyan-900/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-cyan-500/50 transition-all">

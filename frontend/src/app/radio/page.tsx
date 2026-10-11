@@ -128,39 +128,87 @@ export default function RadioPocketMode() {
 
   const currentTg = availableTgs[selectedTgIndex % (availableTgs.length || 1)] || ALL_TALKGROUPS[0];
 
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedAudioChunksRef = useRef<Blob[]>([]);
+  const [isEchoPlaying, setIsEchoPlaying] = useState(false);
+
   // Hardware Physical PTT Listener (handles side PTT key, F-keys, space, PoC keycode 138/226)
   const { isTransmitting, startTx, stopTx, pttKey } = usePhysicalPTT({
-    onTransmitStart: () => {
+    onTransmitStart: async () => {
       beepPlayer?.playTalkGrant();
+      const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
       fetch("/api/ptt/transmit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           callsign: activeProfile.callsign,
           dmr_id: activeProfile.dmrId,
-          tg: callType === "private" ? Number(privateId) : currentTg.id,
+          tg: targetTgNum,
           slot: currentTg.slot,
           call_type: callType,
           category: activeProfile.category,
           is_transmitting: true,
         }),
       }).catch(() => {});
+
+      // Record microphone for TG 9990 Echo / Parrot test
+      if (targetTgNum === 9990) {
+        try {
+          recordedAudioChunksRef.current = [];
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const recorder = new MediaRecorder(stream);
+            recorder.ondataavailable = (e) => {
+              if (e.data && e.data.size > 0) recordedAudioChunksRef.current.push(e.data);
+            };
+            recorder.start(100);
+            mediaRecorderRef.current = recorder;
+          }
+        } catch (err) {
+          console.warn("Mic permission for Echo test:", err);
+        }
+      }
     },
     onTransmitEnd: () => {
       beepPlayer?.playRogerBeep();
+      const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
       fetch("/api/ptt/transmit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           callsign: activeProfile.callsign,
           dmr_id: activeProfile.dmrId,
-          tg: callType === "private" ? Number(privateId) : currentTg.id,
+          tg: targetTgNum,
           slot: currentTg.slot,
           call_type: callType,
           category: activeProfile.category,
           is_transmitting: false,
         }),
       }).catch(() => {});
+
+      // Replay recorded voice on TG 9990 Echo test after 1.2s
+      if (targetTgNum === 9990 && mediaRecorderRef.current) {
+        const recorder = mediaRecorderRef.current;
+        if (recorder.state !== "inactive") {
+          recorder.onstop = () => {
+            const blob = new Blob(recordedAudioChunksRef.current, { type: "audio/webm" });
+            if (blob.size > 300) {
+              const url = URL.createObjectURL(blob);
+              setTimeout(() => {
+                setIsEchoPlaying(true);
+                const audio = new Audio(url);
+                audio.play().catch(() => {});
+                audio.onended = () => {
+                  setIsEchoPlaying(false);
+                  beepPlayer?.playRogerBeep();
+                };
+              }, 1200);
+            }
+          };
+          recorder.stop();
+          recorder.stream.getTracks().forEach((t) => t.stop());
+        }
+      }
     },
   });
 
@@ -657,6 +705,18 @@ export default function RadioPocketMode() {
                     Line-In: {currentMicDb} dB
                   </div>
                 </div>
+              ) : isEchoPlaying ? (
+                <div className="animate-pulse">
+                  <div className="bg-emerald-500 text-slate-950 text-[9px] font-black uppercase rounded py-0.5 mb-1">
+                    🟢 RX ECHO TEST
+                  </div>
+                  <div className="text-xl font-black text-emerald-300 tracking-wider">
+                    {activeProfile.callsign}
+                  </div>
+                  <div className="text-[10px] text-emerald-400 truncate">
+                    Echo Parrot Audio Playback
+                  </div>
+                </div>
               ) : activeTx ? (
                 <div>
                   <div className="bg-emerald-500 text-slate-950 text-[9px] font-black uppercase rounded py-0.5 mb-1">
@@ -688,7 +748,7 @@ export default function RadioPocketMode() {
             <div className="border-t border-emerald-900/60 pt-1 flex items-center justify-between text-[9px] text-emerald-400 font-bold">
               <span>{isCableRxActive ? "CABLE RX" : "S9+20dB"}</span>
               <AudioVisualizer 
-                isActive={isTransmitting || !!activeTx || isCableRxActive} 
+                isActive={isTransmitting || !!activeTx || isCableRxActive || isEchoPlaying} 
                 mode="bars" 
                 color={isTransmitting ? "bg-rose-500" : isCableRxActive ? "bg-amber-400" : "bg-emerald-400"} 
                 barsCount={8} 
@@ -803,6 +863,18 @@ export default function RadioPocketMode() {
                     Meneruskan audio kabel ke TG {currentTg.id} ({currentMicDb} dB)
                   </div>
                 </div>
+              ) : isEchoPlaying ? (
+                <div className="animate-pulse">
+                  <div className="inline-block px-2.5 py-0.5 bg-emerald-500 text-slate-950 font-black text-xs rounded tracking-widest uppercase mb-1">
+                    🟢 RX ECHO PARROT PLAYBACK
+                  </div>
+                  <div className="text-3xl font-black text-emerald-300 tracking-wider">
+                    {activeProfile.callsign}
+                  </div>
+                  <div className="text-xs text-emerald-400 font-mono mt-0.5">
+                    TG 9990 • Memutar Ulang Rekaman Suara Anda
+                  </div>
+                </div>
               ) : activeTx ? (
                 <div>
                   <div className="inline-block px-2.5 py-0.5 bg-emerald-500 text-slate-950 font-black text-xs rounded tracking-widest uppercase mb-1">
@@ -836,7 +908,7 @@ export default function RadioPocketMode() {
                 S-METER: <span className="font-bold text-emerald-300">{isCableRxActive ? "RF CABLE" : "S9+20dB"}</span>
               </div>
               <AudioVisualizer 
-                isActive={isTransmitting || !!activeTx || isCableRxActive} 
+                isActive={isTransmitting || !!activeTx || isCableRxActive || isEchoPlaying} 
                 mode="oscilloscope" 
                 color={isTransmitting ? "bg-rose-500" : isCableRxActive ? "bg-amber-400" : "bg-emerald-400"} 
                 barsCount={10} 
