@@ -81,7 +81,7 @@ interface SmsItem {
 }
 
 export default function RadioPocketMode() {
-  const { activeTx, isConnected } = useLiveMonitor();
+  const { activeTx, isConnected, incomingAudio, sendJson } = useLiveMonitor();
 
   // UI Display Mode: Standard 2.4" Cyberdeck Touchscreen vs 1.8" Rugged PoC Radio
   const [deviceSkin, setDeviceSkin] = useState<"standard" | "poc18">("standard");
@@ -304,6 +304,126 @@ export default function RadioPocketMode() {
   const recordedAudioChunksRef = useRef<Blob[]>([]);
   const [isEchoPlaying, setIsEchoPlaying] = useState(false);
 
+  // Live RX Audio Player from DMR Network WebSocket stream
+  const rxAudioCtxRef = useRef<AudioContext | null>(null);
+  const rxNextTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!incomingAudio || !incomingAudio.pcm) return;
+    try {
+      if (!rxAudioCtxRef.current) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        rxAudioCtxRef.current = new AudioCtx({ sampleRate: 8000 });
+      }
+      const ctx = rxAudioCtxRef.current;
+      if (ctx.state === "suspended") ctx.resume();
+
+      const binaryStr = atob(incomingAudio.pcm);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const int16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768.0;
+      }
+
+      const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
+      audioBuffer.copyToChannel(float32, 0);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+
+      const now = ctx.currentTime;
+      const startTime = Math.max(now, rxNextTimeRef.current);
+      source.start(startTime);
+      rxNextTimeRef.current = startTime + audioBuffer.duration;
+    } catch (e) {
+      // Audio playback fallback
+    }
+  }, [incomingAudio]);
+
+  // Live TX Microphone Streamer to USRP / DMR Network
+  const txProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const txMicStreamRef = useRef<MediaStream | null>(null);
+  const txAudioCtxRef = useRef<AudioContext | null>(null);
+
+  const startLiveMicrophoneStream = async (tgNum: number) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
+      txMicStreamRef.current = stream;
+
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx();
+      txAudioCtxRef.current = ctx;
+
+      const source = ctx.createMediaStreamSource(stream);
+      const bufferSize = 2048;
+      const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
+      txProcessorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        if (!isTxRef.current) return;
+        const inputData = e.inputBuffer.getChannelData(0);
+        const sampleRateRatio = ctx.sampleRate / 8000;
+        const targetLen = Math.floor(inputData.length / sampleRateRatio);
+        const pcm16 = new Int16Array(targetLen);
+
+        for (let i = 0; i < targetLen; i++) {
+          const origIdx = Math.floor(i * sampleRateRatio);
+          const s = Math.max(-1, Math.min(1, inputData[origIdx]));
+          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+
+        const uint8 = new Uint8Array(pcm16.buffer);
+        let binary = "";
+        for (let i = 0; i < uint8.byteLength; i++) {
+          binary += String.fromCharCode(uint8[i]);
+        }
+        const b64 = btoa(binary);
+
+        sendJson({
+          type: "AUDIO_TX",
+          pcm: b64,
+          tg: tgNum,
+          slot: currentTimeSlot,
+          callsign: activeProfile.callsign,
+          dmr_id: activeProfile.dmrId,
+        });
+      };
+
+      source.connect(processor);
+      processor.connect(ctx.destination);
+    } catch (err) {
+      console.warn("Could not start Web TX microphone stream:", err);
+    }
+  };
+
+  const stopLiveMicrophoneStream = () => {
+    if (txProcessorRef.current) {
+      try { txProcessorRef.current.disconnect(); } catch {}
+      txProcessorRef.current = null;
+    }
+    if (txAudioCtxRef.current) {
+      try { txAudioCtxRef.current.close(); } catch {}
+      txAudioCtxRef.current = null;
+    }
+    if (txMicStreamRef.current) {
+      try { txMicStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+      txMicStreamRef.current = null;
+    }
+  };
+
   // Hardware Physical PTT Listener (handles phone volume buttons, bluetooth, spacebar, PoC keycodes)
   const {
     isTransmitting,
@@ -326,6 +446,10 @@ export default function RadioPocketMode() {
 
       beepPlayer?.playTalkGrant();
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
+
+      // Start real microphone audio streaming through USRP & DMR network
+      startLiveMicrophoneStream(targetTgNum);
+
       fetch("/api/ptt/transmit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -361,6 +485,10 @@ export default function RadioPocketMode() {
     onTransmitEnd: () => {
       beepPlayer?.playRogerBeep();
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
+
+      // Stop real microphone audio streaming
+      stopLiveMicrophoneStream();
+
       fetch("/api/ptt/transmit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

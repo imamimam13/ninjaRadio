@@ -289,11 +289,19 @@ class CoreEngineManager:
         if not self.http_session:
             return
         try:
+            import base64
+            data_to_send = traffic.copy()
+            if "payload" in data_to_send and isinstance(data_to_send["payload"], bytes):
+                data_to_send["payload_b64"] = base64.b64encode(data_to_send["payload"]).decode("ascii")
+                data_to_send.pop("payload", None)
+            if "raw_packet" in data_to_send:
+                data_to_send.pop("raw_packet", None)
+
             timeout = aiohttp.ClientTimeout(total=2.0)
-            async with self.http_session.post(BACKEND_EVENT_URL, json=traffic, timeout=timeout) as resp:
+            async with self.http_session.post(BACKEND_EVENT_URL, json=data_to_send, timeout=timeout) as resp:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"dispatch_event_to_backend note: {e}")
 
     def handle_peer_status_change(self, peer_name: str, state: str):
         logger.info(f"[PEER-STATUS] {peer_name} is now {state}")

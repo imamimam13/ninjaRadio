@@ -53,14 +53,33 @@ app.add_middleware(
 # API routes
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
-# Realtime WebSocket for Last Heard & Transceiver Telemetry
+# Realtime WebSocket for Last Heard, Transceiver Telemetry & Bi-directional Web Audio
 @app.websocket("/ws/live")
 async def websocket_live_endpoint(websocket: WebSocket):
+    import json
+    import base64
+    from backend.app.api.endpoints import send_real_usrp_packet_to_core
+
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection open & handle incoming client messages (e.g. client PTT or ping)
+            # Handle incoming client messages (audio stream from Web PTT, PTT events, ping)
             data = await websocket.receive_text()
+            if data:
+                try:
+                    msg = json.loads(data)
+                    msg_type = msg.get("type")
+                    if msg_type == "AUDIO_TX":
+                        pcm_b64 = msg.get("pcm")
+                        if pcm_b64:
+                            pcm_data = base64.b64decode(pcm_b64)
+                            tg = int(msg.get("tg", 510))
+                            dmr_id = int(msg.get("dmr_id", 5109999))
+                            slot = int(msg.get("slot", 1))
+                            callsign = str(msg.get("callsign", "WEB-OP"))
+                            send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception:
