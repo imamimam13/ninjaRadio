@@ -51,6 +51,10 @@ export default function SettingsPage() {
   const [serverName, setServerName] = useState("NinjaRadio Indonesia Master Core");
   const [serverLocation, setServerLocation] = useState("Jakarta, Indonesia");
   const [defaultTg, setDefaultTg] = useState(510);
+  const [serverTxFreq, setServerTxFreq] = useState("438.8000");
+  const [serverRxFreq, setServerRxFreq] = useState("438.8000");
+  const [serverColorCode, setServerColorCode] = useState(1);
+  const [serverTxPwr, setServerTxPwr] = useState(25);
 
   // 2. Hotspot MMDVM Master Config
   const [hotspotPort, setHotspotPort] = useState(62031);
@@ -118,6 +122,10 @@ export default function SettingsPage() {
         if (data.server_name) setServerName(data.server_name);
         if (data.server_location) setServerLocation(data.server_location);
         if (data.default_tg) setDefaultTg(data.default_tg);
+        if (data.tx_freq) setServerTxFreq(data.tx_freq);
+        if (data.rx_freq) setServerRxFreq(data.rx_freq);
+        if (data.color_code !== undefined) setServerColorCode(data.color_code);
+        if (data.tx_pwr !== undefined) setServerTxPwr(data.tx_pwr);
         if (data.hotspot_port) setHotspotPort(data.hotspot_port);
         if (data.hotspot_password) setHotspotPassword(data.hotspot_password);
         if (Array.isArray(data.peering) && data.peering.length > 0) {
@@ -154,6 +162,10 @@ export default function SettingsPage() {
           server_name: serverName,
           server_location: serverLocation,
           default_tg: Number(defaultTg),
+          tx_freq: serverTxFreq,
+          rx_freq: serverRxFreq,
+          color_code: Number(serverColorCode) || 1,
+          tx_pwr: Number(serverTxPwr) || 25,
           hotspot_port: Number(hotspotPort),
           hotspot_password: hotspotPassword,
           max_hotspots: Number(maxHotspots),
@@ -476,6 +488,10 @@ export default function SettingsPage() {
         server_name: serverName,
         server_location: serverLocation,
         default_tg: Number(defaultTg),
+        tx_freq: serverTxFreq,
+        rx_freq: serverRxFreq,
+        color_code: Number(serverColorCode) || 1,
+        tx_pwr: Number(serverTxPwr) || 25,
         hotspot_port: Number(hotspotPort),
         hotspot_password: hotspotPassword,
         max_hotspots: Number(maxHotspots),
@@ -675,6 +691,75 @@ export default function SettingsPage() {
                     readOnly={!isAdminUnlocked}
                     value={defaultTg}
                     onChange={(e) => setDefaultTg(Number(e.target.value))}
+                    className={`w-full px-3 py-2.5 rounded-xl font-mono text-sm ${
+                      isAdminUnlocked
+                        ? "bg-[#05080f] border border-cyan-400 text-cyan-300"
+                        : "bg-[#080d17] border border-slate-800 text-slate-300 cursor-default"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Frekuensi TX Master / Hotspot (MHz)</label>
+                  <input
+                    type="text"
+                    readOnly={!isAdminUnlocked}
+                    value={serverTxFreq}
+                    onChange={(e) => setServerTxFreq(e.target.value)}
+                    placeholder="Contoh: 438.8000"
+                    className={`w-full px-3 py-2.5 rounded-xl font-mono text-sm ${
+                      isAdminUnlocked
+                        ? "bg-[#05080f] border border-cyan-400 text-cyan-300"
+                        : "bg-[#080d17] border border-slate-800 text-slate-300 cursor-default"
+                    }`}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">Frekuensi transmit DMR (disiarkan ke Master & Dashboard DMR).</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Frekuensi RX Master / Hotspot (MHz)</label>
+                  <input
+                    type="text"
+                    readOnly={!isAdminUnlocked}
+                    value={serverRxFreq}
+                    onChange={(e) => setServerRxFreq(e.target.value)}
+                    placeholder="Contoh: 438.8000"
+                    className={`w-full px-3 py-2.5 rounded-xl font-mono text-sm ${
+                      isAdminUnlocked
+                        ? "bg-[#05080f] border border-cyan-400 text-cyan-300"
+                        : "bg-[#080d17] border border-slate-800 text-slate-300 cursor-default"
+                    }`}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">Frekuensi receive DMR (sama dengan TX untuk mode Simplex).</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">DMR Color Code (CC 1 - 15)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={15}
+                    readOnly={!isAdminUnlocked}
+                    value={serverColorCode}
+                    onChange={(e) => setServerColorCode(Number(e.target.value))}
+                    className={`w-full px-3 py-2.5 rounded-xl font-mono text-sm ${
+                      isAdminUnlocked
+                        ? "bg-[#05080f] border border-cyan-400 text-cyan-300"
+                        : "bg-[#080d17] border border-slate-800 text-slate-300 cursor-default"
+                    }`}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">Standar Color Code DMR (default: 1).</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Transmit Power (Watt)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    readOnly={!isAdminUnlocked}
+                    value={serverTxPwr}
+                    onChange={(e) => setServerTxPwr(Number(e.target.value))}
                     className={`w-full px-3 py-2.5 rounded-xl font-mono text-sm ${
                       isAdminUnlocked
                         ? "bg-[#05080f] border border-cyan-400 text-cyan-300"

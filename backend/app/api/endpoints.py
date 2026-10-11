@@ -534,6 +534,10 @@ def read_config_file() -> dict:
         "server_name": "NinjaRadio Master Core",
         "server_location": "Jakarta, Indonesia",
         "default_tg": settings.DEFAULT_TALKGROUP,
+        "rx_freq": "438.8000",
+        "tx_freq": "438.8000",
+        "color_code": 1,
+        "tx_pwr": 25,
         "hotspot_port": settings.DMR_MASTER_PORT,
         "hotspot_password": "ninjaradio_pass",
         "max_hotspots": 128,
@@ -584,5 +588,57 @@ async def save_system_config(config: dict):
         "message": "Konfigurasi server berhasil disimpan dan diterapkan ke Core DMR Engine",
         "core_reloaded": core_reloaded,
         "data": config
+    }
+
+@router.post("/config/frequency")
+async def update_frequency(data: dict):
+    """Allows instant frequency and RF parameter tuning directly from the web app radio dial."""
+    import json
+    import os
+    cfg = read_config_file()
+    if "tx_freq" in data:
+        cfg["tx_freq"] = str(data["tx_freq"]).strip()
+    if "rx_freq" in data:
+        cfg["rx_freq"] = str(data["rx_freq"]).strip()
+    if "color_code" in data:
+        cfg["color_code"] = int(data["color_code"])
+    if "tx_pwr" in data:
+        cfg["tx_pwr"] = int(data["tx_pwr"])
+
+    # Also propagate to peering entries if applicable
+    for p in cfg.get("peering", []):
+        if "tx_freq" in data:
+            p["tx_freq"] = cfg["tx_freq"]
+            p["txFreq"] = cfg["tx_freq"]
+        if "rx_freq" in data:
+            p["rx_freq"] = cfg["rx_freq"]
+            p["rxFreq"] = cfg["rx_freq"]
+        if "color_code" in data:
+            p["color_code"] = cfg["color_code"]
+            p["colorCode"] = cfg["color_code"]
+
+    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+    # Reload Core Engine
+    core_reloaded = False
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.post("http://core:5000/api/reload")
+            if r.status_code == 200:
+                core_reloaded = True
+    except Exception:
+        pass
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Frekuensi berhasil diatur ke TX {cfg.get('tx_freq')} MHz / RX {cfg.get('rx_freq')} MHz",
+        "core_reloaded": core_reloaded,
+        "tx_freq": cfg.get("tx_freq"),
+        "rx_freq": cfg.get("rx_freq"),
+        "color_code": cfg.get("color_code"),
+        "tx_pwr": cfg.get("tx_pwr")
     }
 

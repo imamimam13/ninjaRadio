@@ -125,6 +125,70 @@ export default function RadioPocketMode() {
   // PTT Physical Key & Trigger Settings Modal State
   const [showPttSettingsModal, setShowPttSettingsModal] = useState(false);
 
+  // Frequency & Tuner State
+  const [radioTxFreq, setRadioTxFreq] = useState<string>("438.8000");
+  const [radioRxFreq, setRadioRxFreq] = useState<string>("438.8000");
+  const [radioColorCode, setRadioColorCode] = useState<number>(1);
+  const [radioTxPwr, setRadioTxPwr] = useState<number>(25);
+  const [showFreqModal, setShowFreqModal] = useState<boolean>(false);
+  const [isTuningSaving, setIsTuningSaving] = useState<boolean>(false);
+  const [tempTxFreq, setTempTxFreq] = useState<string>("438.8000");
+  const [tempRxFreq, setTempRxFreq] = useState<string>("438.8000");
+  const [isSimplexLocked, setIsSimplexLocked] = useState<boolean>(true);
+
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.tx_freq) {
+          setRadioTxFreq(d.tx_freq);
+          setTempTxFreq(d.tx_freq);
+        }
+        if (d.rx_freq) {
+          setRadioRxFreq(d.rx_freq);
+          setTempRxFreq(d.rx_freq);
+        }
+        if (d.color_code !== undefined) setRadioColorCode(Number(d.color_code));
+        if (d.tx_pwr !== undefined) setRadioTxPwr(Number(d.tx_pwr));
+      })
+      .catch(() => {});
+  }, []);
+
+  const adjustFreqStep = (deltaMhz: number) => {
+    const curTx = parseFloat(tempTxFreq) || 438.8000;
+    const nextTx = (curTx + deltaMhz).toFixed(4);
+    setTempTxFreq(nextTx);
+    if (isSimplexLocked) {
+      setTempRxFreq(nextTx);
+    }
+  };
+
+  const handleSaveFrequency = async () => {
+    setIsTuningSaving(true);
+    try {
+      const res = await fetch("/api/config/frequency", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tx_freq: tempTxFreq,
+          rx_freq: tempRxFreq,
+          color_code: radioColorCode,
+          tx_pwr: radioTxPwr,
+        }),
+      });
+      if (res.ok) {
+        setRadioTxFreq(tempTxFreq);
+        setRadioRxFreq(tempRxFreq);
+        beepPlayer?.playTalkGrant();
+        setShowFreqModal(false);
+      }
+    } catch (e) {
+      console.warn("Failed to tune frequency:", e);
+    } finally {
+      setIsTuningSaving(false);
+    }
+  };
+
   // PWA Install Prompt State
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
   const [isPwaInstalled, setIsPwaInstalled] = useState(false);
@@ -857,6 +921,20 @@ export default function RadioPocketMode() {
             </button>
           )}
 
+          {/* Quick Frequency & Tuner Button */}
+          <button
+            onClick={() => {
+              setTempTxFreq(radioTxFreq);
+              setTempRxFreq(radioRxFreq);
+              setShowFreqModal(true);
+            }}
+            className="px-2 py-1 rounded-lg text-[10px] font-mono font-black border border-cyan-900/50 bg-[#0b121e] text-cyan-300 hover:border-cyan-400 flex items-center gap-1 transition-all"
+            title="Pengaturan Frekuensi TX/RX & Tuner VFO"
+          >
+            <Radio className="w-3 h-3 text-cyan-400" />
+            <span>{radioTxFreq} MHz</span>
+          </button>
+
           {/* Quick PTT Mode & Key Setting Button */}
           <button
             onClick={() => setShowPttSettingsModal(true)}
@@ -1243,7 +1321,19 @@ export default function RadioPocketMode() {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2 font-mono text-[11px]">
+              <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTempTxFreq(radioTxFreq);
+                    setTempRxFreq(radioRxFreq);
+                    setShowFreqModal(true);
+                  }}
+                  className="px-2 py-0.5 rounded font-mono font-black text-[11px] bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-700/60 transition-all cursor-pointer shadow-sm"
+                  title="Klik untuk membuka Tuner Frekuensi VFO"
+                >
+                  📡 {radioTxFreq} MHz ✎
+                </button>
                 <button
                   type="button"
                   onClick={toggleTimeSlot}
@@ -2346,6 +2436,187 @@ export default function RadioPocketMode() {
                   Simpan Pengaturan
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* FREQUENCY TUNER (VFO) & BER CALIBRATION MODAL            */}
+      {/* ======================================================== */}
+      {showFreqModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 z-50 animate-in fade-in duration-150">
+          <div className="bg-[#0b121e] border-2 border-cyan-500/80 rounded-2xl p-4 max-w-sm w-full space-y-4 shadow-2xl relative font-mono">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-cyan-900/60 pb-2">
+              <div className="flex items-center gap-2">
+                <Radio className="w-5 h-5 text-cyan-400" />
+                <h3 className="font-heading font-black text-sm text-white">VFO / FREQUENCY TUNER</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFreqModal(false)}
+                className="w-7 h-7 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-white flex items-center justify-center font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* LCD Frequency Readout */}
+            <div className="bg-[#05070c] border border-cyan-900/80 rounded-xl p-3 text-center shadow-inner">
+              <div className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider mb-1">
+                {isSimplexLocked ? "SIMPLEX TRANSCEIVER FREQUENCY" : "SPLIT REPEATER FREQUENCY"}
+              </div>
+              <div className="text-3xl font-black font-mono text-cyan-300 tracking-wider">
+                {tempTxFreq} <span className="text-sm text-cyan-500">MHz</span>
+              </div>
+              {!isSimplexLocked && (
+                <div className="text-xs text-amber-400 font-bold mt-1">
+                  RX: {tempRxFreq} MHz (Shift: {(parseFloat(tempTxFreq) - parseFloat(tempRxFreq)).toFixed(4)} MHz)
+                </div>
+              )}
+            </div>
+
+            {/* Quick Step Buttons */}
+            <div>
+              <div className="text-[11px] text-slate-400 font-semibold mb-1">Step Tuning (kHz):</div>
+              <div className="grid grid-cols-4 gap-1.5 text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={() => adjustFreqStep(-0.0250)}
+                  className="py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-rose-400 active:scale-95 transition-transform"
+                >
+                  -25k
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustFreqStep(-0.0125)}
+                  className="py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-rose-300 active:scale-95 transition-transform"
+                >
+                  -12.5k
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustFreqStep(+0.0125)}
+                  className="py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 active:scale-95 transition-transform"
+                >
+                  +12.5k
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustFreqStep(+0.0250)}
+                  className="py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-400 active:scale-95 transition-transform"
+                >
+                  +25k
+                </button>
+              </div>
+            </div>
+
+            {/* Direct Input */}
+            <div className="space-y-2 text-xs">
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">TX Frequency (MHz):</label>
+                <input
+                  type="text"
+                  value={tempTxFreq}
+                  onChange={(e) => {
+                    setTempTxFreq(e.target.value);
+                    if (isSimplexLocked) setTempRxFreq(e.target.value);
+                  }}
+                  className="w-full px-3 py-2 bg-[#05070c] border border-cyan-900 rounded-lg text-cyan-300 font-mono font-bold focus:border-cyan-400 outline-none"
+                />
+              </div>
+
+              {!isSimplexLocked && (
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">RX Frequency (MHz):</label>
+                  <input
+                    type="text"
+                    value={tempRxFreq}
+                    onChange={(e) => setTempRxFreq(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05070c] border border-cyan-900 rounded-lg text-amber-300 font-mono font-bold focus:border-cyan-400 outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1">
+                <label className="text-[11px] text-slate-300 font-semibold">Mode Simplex (TX = RX):</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isSimplexLocked;
+                    setIsSimplexLocked(next);
+                    if (next) setTempRxFreq(tempTxFreq);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                    isSimplexLocked
+                      ? "bg-emerald-500 text-slate-950"
+                      : "bg-slate-800 text-slate-400 border border-slate-700"
+                  }`}
+                >
+                  {isSimplexLocked ? "SIMPLEX ON" : "SPLIT / DUPLEX"}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Color Code (CC):</label>
+                  <select
+                    value={radioColorCode}
+                    onChange={(e) => setRadioColorCode(Number(e.target.value))}
+                    className="w-full px-2 py-1.5 bg-[#05070c] border border-cyan-900 rounded-lg text-cyan-300 font-mono font-bold outline-none"
+                  >
+                    {Array.from({ length: 15 }, (_, i) => i + 1).map((cc) => (
+                      <option key={cc} value={cc}>
+                        Color Code {cc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Power (Watt):</label>
+                  <select
+                    value={radioTxPwr}
+                    onChange={(e) => setRadioTxPwr(Number(e.target.value))}
+                    className="w-full px-2 py-1.5 bg-[#05070c] border border-cyan-900 rounded-lg text-cyan-300 font-mono font-bold outline-none"
+                  >
+                    <option value={1}>1 Watt (QRP/Hotspot)</option>
+                    <option value={5}>5 Watt (HT)</option>
+                    <option value={10}>10 Watt</option>
+                    <option value={25}>25 Watt (Mobile)</option>
+                    <option value={50}>50 Watt (Base)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* BER & Offset Education Banner */}
+            <div className="bg-[#05070c] border border-amber-900/60 rounded-xl p-2.5 text-[10px] text-slate-300 space-y-1">
+              <div className="text-amber-400 font-bold flex items-center gap-1">
+                <span>ℹ️ INFO BER (Bit Error Rate):</span>
+              </div>
+              <p className="text-slate-400 leading-relaxed">
+                BER adalah indikator kualitas sinyal (ideal: <strong>0.0% – 0.3%</strong>). Jika Anda menggunakan Hotspot MMDVM/Pi-Star dan suara masih kresek, atur <strong>RXOffset / TXOffset</strong> di menu Modem Pi-Star agar BER turun ke 0%.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="pt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFreqModal(false)}
+                className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isTuningSaving}
+                onClick={handleSaveFrequency}
+                className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black rounded-xl shadow transition-colors disabled:opacity-50"
+              >
+                {isTuningSaving ? "Menyimpan..." : "Terapkan Frekuensi"}
+              </button>
             </div>
           </div>
         </div>
