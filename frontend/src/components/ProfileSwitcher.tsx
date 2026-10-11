@@ -79,20 +79,20 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
 
     let badgeColor = "bg-emerald-500 text-slate-950";
     let networkTag = "ORARI / BrandMeister";
-    let allowedTalkgroups = [510, 5101, 5102, 5103];
+    let allowedTalkgroups = [510, 5101, 5102, 5103, 9990];
 
     if (newCategory === "RAPI") {
       badgeColor = "bg-blue-500 text-white";
       networkTag = "RAPI KRAP Gateway";
-      allowedTalkgroups = [5109];
+      allowedTalkgroups = [5109, 9990];
     } else if (newCategory === "CB") {
       badgeColor = "bg-amber-500 text-slate-950";
       networkTag = "11 Meter Citizens Band";
-      allowedTalkgroups = [5108];
+      allowedTalkgroups = [5108, 9990];
     } else if (newCategory === "Komunitas") {
       badgeColor = "bg-purple-500 text-white";
       networkTag = "Posko Relawan & SAR";
-      allowedTalkgroups = [5100];
+      allowedTalkgroups = [5100, 9990];
     }
 
     const created: UserProfile = {
