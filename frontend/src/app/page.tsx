@@ -21,7 +21,8 @@ import {
   Terminal,
   RefreshCw,
   Globe,
-  Gauge
+  Gauge,
+  X
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -40,6 +41,26 @@ export default function DashboardPage() {
     cpu_usage: 0,
     ram_usage: 0
   });
+
+  const [showClientsModal, setShowClientsModal] = useState(false);
+  const [clientList, setClientList] = useState<any[]>([]);
+  const [isLoadingClients, setIsLoadingClients] = useState(false);
+
+  const fetchClients = () => {
+    setIsLoadingClients(true);
+    fetch("/api/clients")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setClientList(data);
+        setIsLoadingClients(false);
+      })
+      .catch(() => setIsLoadingClients(false));
+  };
+
+  const handleOpenClientsModal = () => {
+    setShowClientsModal(true);
+    fetchClients();
+  };
 
   useEffect(() => {
     const fetchStatus = () => {
@@ -176,19 +197,22 @@ export default function DashboardPage() {
 
         {/* Cockpit Avionics Telemetry Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-          <div className="bg-[#0c1322] border border-cyan-900/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-cyan-500/50 transition-all">
+          <div 
+            onClick={handleOpenClientsModal}
+            className="bg-[#0c1322] border border-cyan-900/40 hover:border-cyan-400 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all cursor-pointer group"
+          >
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span className="font-bold">KLIEN WEB & HOTSPOT</span>
-              <Wifi className="w-4 h-4 text-cyan-400" />
+              <span className="font-bold group-hover:text-cyan-300 transition-colors">KLIEN WEB & HOTSPOT</span>
+              <Wifi className="w-4 h-4 text-cyan-400 group-hover:animate-pulse" />
             </div>
             <div className="mt-3 flex items-baseline justify-between">
               <span className="text-3xl font-black text-white font-mono">{(stats as any).web_clients || stats.connected_hotspots || 1}</span>
-              <span className="text-[11px] text-emerald-400 font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800">
-                MONITOR
+              <span className="text-[10px] text-cyan-300 font-mono font-bold px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-800 flex items-center gap-1 group-hover:bg-cyan-900 transition-colors">
+                🔍 Cek Detail
               </span>
             </div>
             <div className="text-[10px] text-slate-500 font-mono mt-1">
-              {(stats as any).web_clients || 1} Tab Browser & Hotspot MMDVM
+              {(stats as any).web_clients || 1} Sesi Terhubung (Klik untuk Lihat)
             </div>
           </div>
 
@@ -359,6 +383,104 @@ export default function DashboardPage() {
         </div>
 
       </main>
+
+      {/* CONNECTED CLIENTS & HOTSPOTS MODAL */}
+      {showClientsModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e1626] border-2 border-cyan-500/60 rounded-3xl max-w-2xl w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-cyan-900/40 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-cyan-500/20 border border-cyan-500 flex items-center justify-center">
+                  <Wifi className="w-5 h-5 text-cyan-400" />
+                </div>
+                <div>
+                  <h3 className="font-heading font-black text-sm text-white">Daftar Klien & Perangkat Terhubung</h3>
+                  <p className="text-[11px] font-mono text-slate-400">
+                    {clientList.length} sesi browser & client aktif memantau server
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchClients}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-400 transition-colors"
+                  title="Refresh Daftar"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isLoadingClients ? "animate-spin" : ""}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowClientsModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Client List Table */}
+            <div className="overflow-x-auto max-h-72 overflow-y-auto">
+              <table className="w-full text-left text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 text-[11px]">
+                    <th className="py-2 px-2">Aplikasi / Halaman</th>
+                    <th className="py-2 px-2">Perangkat / OS</th>
+                    <th className="py-2 px-2">IP Address</th>
+                    <th className="py-2 px-2">Waktu Konek</th>
+                    <th className="py-2 px-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                  {clientList.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-slate-500">
+                        Tidak ada sesi aktif saat ini.
+                      </td>
+                    </tr>
+                  ) : (
+                    clientList.map((client, idx) => (
+                      <tr key={idx} className="hover:bg-slate-800/30">
+                        <td className="py-2.5 px-2 font-bold text-cyan-300">
+                          {client.app}
+                        </td>
+                        <td className="py-2.5 px-2 text-slate-300">
+                          {client.device}
+                        </td>
+                        <td className="py-2.5 px-2 font-mono text-slate-400">
+                          <code>{client.ip}</code>
+                        </td>
+                        <td className="py-2.5 px-2 text-slate-400">
+                          {client.connected_at} UTC
+                        </td>
+                        <td className="py-2.5 px-2">
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                            🟢 Online
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-[10px] font-mono text-slate-500">
+                Data diperbarui secara real-time via WebSocket
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowClientsModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
