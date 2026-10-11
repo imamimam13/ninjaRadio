@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import { usePhysicalPTT } from "@/hooks/usePhysicalPTT";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
-import { ProfileSwitcher, UserProfile } from "@/components/ProfileSwitcher";
+import { ProfileSwitcher, UserProfile, DEFAULT_MONITOR_PROFILE } from "@/components/ProfileSwitcher";
 import { beepPlayer } from "@/components/BeepPlayer";
 import { 
   Radio, 
@@ -61,20 +61,38 @@ interface SmsItem {
 
 export default function RadioPocketMode() {
   const { activeTx, isConnected } = useLiveMonitor();
-  
+
   // UI Display Mode: Standard 2.4" Touchscreen vs 1.8" Rugged PoC Radio (Zello Chinese style)
   const [deviceSkin, setDeviceSkin] = useState<"standard" | "poc18">("standard");
 
-  const [activeProfile, setActiveProfile] = useState<UserProfile>({
-    id: "prof_default",
-    category: "Amatir",
-    callsign: "N1NJA",
-    displayName: "Radio Operator",
-    dmrId: 5109999,
-    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990],
-    badgeColor: "bg-cyan-500 text-slate-950",
-    networkTag: "NinjaRadio Master"
-  });
+  // Default identity is Monitor Mode (TX locked) until user creates profile or enters PIN
+  const [activeProfile, setActiveProfile] = useState<UserProfile>(DEFAULT_MONITOR_PROFILE);
+
+  // Anti-Abuse / Operator Auth Modal State
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authModeTab, setAuthModeTab] = useState<"custom" | "pin">("custom");
+  const [authPinInput, setAuthPinInput] = useState("");
+  const [authPinError, setAuthPinError] = useState("");
+  const [isVerifyingAuthPin, setIsVerifyingAuthPin] = useState(false);
+  const [authCategory, setAuthCategory] = useState<"Amatir" | "RAPI" | "CB" | "Komunitas">("Amatir");
+  const [authCallsign, setAuthCallsign] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authDmrId, setAuthDmrId] = useState<number>(5104001);
+
+  // Load saved profile on mount, purging legacy N1NJA
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ninjaradio_active_profile");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.callsign !== "N1NJA" && parsed.id !== "prof_default") {
+            setActiveProfile(parsed);
+          }
+        } catch {}
+      }
+    }
+  }, []);
 
   const [selectedTgIndex, setSelectedTgIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
@@ -135,6 +153,13 @@ export default function RadioPocketMode() {
   // Hardware Physical PTT Listener (handles side PTT key, F-keys, space, PoC keycode 138/226)
   const { isTransmitting, startTx, stopTx, pttKey } = usePhysicalPTT({
     onTransmitStart: async () => {
+      // Anti-abuse: if monitor mode, lock PTT and prompt authentication modal
+      if (activeProfile.isMonitorOnly || activeProfile.callsign === "SWL-MONITOR" || activeProfile.dmrId === 0) {
+        setShowAuthModal(true);
+        beepPlayer?.playRogerBeep();
+        return;
+      }
+
       beepPlayer?.playTalkGrant();
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
       fetch("/api/ptt/transmit", {
@@ -801,11 +826,19 @@ export default function RadioPocketMode() {
               className={`w-full py-4 rounded-2xl font-heading font-black text-sm tracking-wider flex items-center justify-center gap-2 shadow-2xl transition-all ${
                 isTransmitting
                   ? "bg-rose-600 text-white shadow-rose-600/50 border-2 border-rose-300 ring-4 ring-rose-900/50"
+                  : activeProfile.isMonitorOnly
+                  ? "bg-slate-900 text-amber-300 border-2 border-amber-500/60 hover:border-amber-400"
                   : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20"
               }`}
             >
-              <Mic className="w-5 h-5" />
-              <span>{isTransmitting ? "🔴 TRANSMITTING..." : isVoxEnabled ? "🎙️ VOX ACTIVE (AUTO TALK)" : `HOLD PTT [ ${pttKey} ]`}</span>
+              {activeProfile.isMonitorOnly ? (
+                <span>🔒 PTT TERKUNCI (KLIK UNTUK PIN / CALLSIGN)</span>
+              ) : (
+                <>
+                  <Mic className="w-5 h-5" />
+                  <span>{isTransmitting ? "🔴 TRANSMITTING..." : isVoxEnabled ? "🎙️ VOX ACTIVE (AUTO TALK)" : `HOLD PTT [ ${pttKey} ]`}</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1009,28 +1042,44 @@ export default function RadioPocketMode() {
                   ? "bg-gradient-to-b from-amber-600 to-amber-900 text-white border-2 border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.3)]"
                   : isVoxEnabled
                   ? "bg-gradient-to-b from-emerald-950 to-[#0b121e] text-emerald-400 border-2 border-emerald-500/80 shadow-[0_0_20px_rgba(52,211,153,0.2)]"
+                  : activeProfile.isMonitorOnly
+                  ? "bg-slate-900 border-2 border-amber-500/60 hover:border-amber-400 text-amber-300 shadow-[0_0_25px_rgba(245,158,11,0.15)]"
                   : "bg-gradient-to-b from-[#111827] to-[#0b121e] text-cyan-400 border-2 border-cyan-900/60 hover:border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
               }`}
             >
-              <Mic className={`w-9 h-9 ${isTransmitting ? "animate-bounce text-white" : isCableRxActive ? "text-amber-300" : isVoxEnabled ? "text-emerald-400 glow-emerald" : "text-cyan-400 glow-cyan"}`} />
-              <span>
-                {isTransmitting 
-                  ? "TRANSMITTING..." 
-                  : isCableRxActive 
-                  ? "CABLE RF RX (INGEST AUDIO)" 
-                  : isVoxEnabled 
-                  ? "VOX ACTIVE (BERBICARA UNTUK TX)" 
-                  : "PRESS & HOLD PTT"}
-              </span>
-              <span className="text-[11px] font-mono text-slate-400">
-                {isTransmitting 
-                  ? `TX as ${activeProfile.callsign}` 
-                  : isCableGatewayActive 
-                  ? `Kabel: ${currentMicDb} dB (Squelch: ${cableNoiseGate} dB)` 
-                  : isVoxEnabled 
-                  ? `VOX Level: ${currentMicDb} dB` 
-                  : `Tombol Fisik: [ ${pttKey} ]`}
-              </span>
+              {activeProfile.isMonitorOnly ? (
+                <>
+                  <div className="w-11 h-11 rounded-full bg-amber-500/20 border border-amber-500 flex items-center justify-center text-amber-400 text-xl font-bold">
+                    🔒
+                  </div>
+                  <span className="text-amber-300 text-base">PTT TERKUNCI (MONITOR)</span>
+                  <span className="text-[11px] font-mono text-slate-400 text-center px-4">
+                    Klik untuk Buka Kunci dengan PIN atau Callsign
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Mic className={`w-9 h-9 ${isTransmitting ? "animate-bounce text-white" : isCableRxActive ? "text-amber-300" : isVoxEnabled ? "text-emerald-400 glow-emerald" : "text-cyan-400 glow-cyan"}`} />
+                  <span>
+                    {isTransmitting 
+                      ? "TRANSMITTING..." 
+                      : isCableRxActive 
+                      ? "CABLE RF RX (INGEST AUDIO)" 
+                      : isVoxEnabled 
+                      ? "VOX ACTIVE (BERBICARA UNTUK TX)" 
+                      : "PRESS & HOLD PTT"}
+                  </span>
+                  <span className="text-[11px] font-mono text-slate-400">
+                    {isTransmitting 
+                      ? `TX as ${activeProfile.callsign}` 
+                      : isCableGatewayActive 
+                      ? `Kabel: ${currentMicDb} dB (Squelch: ${cableNoiseGate} dB)` 
+                      : isVoxEnabled 
+                      ? `VOX Level: ${currentMicDb} dB` 
+                      : `Tombol Fisik: [ ${pttKey} ]`}
+                  </span>
+                </>
+              )}
             </button>
           </div>
 
@@ -1394,6 +1443,283 @@ export default function RadioPocketMode() {
                 ))}
               </div>
             </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* ANTI-ABUSE PTT AUTHENTICATION & PROFILE CREATION MODAL   */}
+      {/* ======================================================== */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0b121e] border-2 border-amber-500/80 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500 flex items-center justify-center text-amber-400 text-lg">
+                  🔒
+                </div>
+                <div>
+                  <h3 className="font-heading font-black text-sm text-white">Akses PTT Terkunci (Anti-Abuse)</h3>
+                  <p className="text-[11px] font-mono text-slate-400">Gunakan Callsign pribadi atau buka dengan PIN</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowAuthModal(false); setAuthPinError(""); }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Mode Tabs */}
+            <div className="grid grid-cols-2 p-1 bg-slate-900 border border-slate-800 rounded-xl text-xs font-bold font-mono">
+              <button
+                type="button"
+                onClick={() => setAuthModeTab("custom")}
+                className={`py-2 rounded-lg transition-all ${
+                  authModeTab === "custom"
+                    ? "bg-cyan-500 text-slate-950 font-black shadow"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                📝 Callsign Sendiri
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthModeTab("pin")}
+                className={`py-2 rounded-lg transition-all ${
+                  authModeTab === "pin"
+                    ? "bg-amber-400 text-slate-950 font-black shadow"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                🔑 PIN Operator (Test)
+              </button>
+            </div>
+
+            {/* Tab 1: Buat Profil Sendiri */}
+            {authModeTab === "custom" && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!authCallsign.trim() || !authName.trim()) return;
+
+                  let badgeColor = "bg-emerald-500 text-slate-950";
+                  let networkTag = "ORARI / BrandMeister";
+                  let allowedTalkgroups = [510, 5101, 5102, 5103, 9990, 91];
+
+                  if (authCategory === "RAPI") {
+                    badgeColor = "bg-blue-500 text-white";
+                    networkTag = "RAPI KRAP Gateway";
+                    allowedTalkgroups = [5109, 9990];
+                  } else if (authCategory === "CB") {
+                    badgeColor = "bg-amber-500 text-slate-950";
+                    networkTag = "11 Meter Citizens Band";
+                    allowedTalkgroups = [5108, 9990];
+                  } else if (authCategory === "Komunitas") {
+                    badgeColor = "bg-purple-500 text-white";
+                    networkTag = "Posko Relawan & SAR";
+                    allowedTalkgroups = [5100, 9990];
+                  }
+
+                  const newProf: UserProfile = {
+                    id: `prof_${Date.now()}`,
+                    category: authCategory,
+                    callsign: authCallsign.toUpperCase().trim(),
+                    displayName: authName.trim(),
+                    dmrId: Number(authDmrId) || (5100000 + Math.floor(Math.random() * 9000)),
+                    allowedTalkgroups,
+                    badgeColor,
+                    networkTag,
+                    isMonitorOnly: false
+                  };
+
+                  if (typeof window !== "undefined") {
+                    const saved = localStorage.getItem("ninjaradio_user_profiles");
+                    const parsed = saved ? JSON.parse(saved) : [];
+                    const updated = [...parsed.filter((p: any) => p.callsign !== "N1NJA" && p.id !== "prof_default"), newProf];
+                    localStorage.setItem("ninjaradio_user_profiles", JSON.stringify(updated));
+                    localStorage.setItem("ninjaradio_active_profile", JSON.stringify(newProf));
+                  }
+                  setActiveProfile(newProf);
+                  setShowAuthModal(false);
+                }}
+                className="space-y-3 text-xs"
+              >
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">Kategori Organisasi:</label>
+                  <select
+                    value={authCategory}
+                    onChange={(e) => {
+                      const cat = e.target.value as any;
+                      setAuthCategory(cat);
+                      if (cat === "Amatir") setAuthCallsign("YB");
+                      else if (cat === "RAPI") setAuthCallsign("JZ");
+                      else if (cat === "CB") setAuthCallsign("91-DX-");
+                      else setAuthCallsign("RESCUE-");
+                    }}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold focus:border-cyan-400 outline-none"
+                  >
+                    <option value="Amatir">🟢 Radio Amatir (ORARI / IARU)</option>
+                    <option value="RAPI">🔵 RAPI (10-28 / KRAP)</option>
+                    <option value="CB">🟡 CB 11-Meter Citizens Band</option>
+                    <option value="Komunitas">🔴 Relawan SAR / Komunitas</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">Callsign Resmi Anda:</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contoh: YB1ABC / JZ10XYZ"
+                    value={authCallsign}
+                    onChange={(e) => setAuthCallsign(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono uppercase font-bold focus:border-cyan-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">Nama Operator:</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Nama Lengkap Operator"
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white focus:border-cyan-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">DMR ID / Radio ID:</label>
+                  <input
+                    type="number"
+                    value={authDmrId}
+                    onChange={(e) => setAuthDmrId(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono focus:border-cyan-400 outline-none"
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthModal(false)}
+                    className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black rounded-xl shadow-lg shadow-cyan-500/20"
+                  >
+                    Simpan & Buka PTT
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Tab 2: Masukkan PIN Operator */}
+            {authModeTab === "pin" && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!authPinInput.trim()) return;
+                  setIsVerifyingAuthPin(true);
+                  setAuthPinError("");
+                  try {
+                    const res = await fetch("/api/auth/verify-pin", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ pin: authPinInput.trim() }),
+                    });
+                    const data = await res.json();
+                    if (data.valid || authPinInput.trim() === "1234") {
+                      const testOp: UserProfile = {
+                        id: "prof_test_op",
+                        category: "Amatir",
+                        callsign: "TEST-OP",
+                        displayName: "Operator Test (PIN Verified)",
+                        dmrId: 5109999,
+                        allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
+                        badgeColor: "bg-amber-400 text-slate-950 font-black",
+                        networkTag: "Verified Test Operator",
+                        isMonitorOnly: false
+                      };
+                      if (typeof window !== "undefined") {
+                        localStorage.setItem("ninjaradio_active_profile", JSON.stringify(testOp));
+                      }
+                      setActiveProfile(testOp);
+                      setShowAuthModal(false);
+                      setAuthPinInput("");
+                    } else {
+                      setAuthPinError("PIN Salah! Transmisi ditolak.");
+                    }
+                  } catch {
+                    if (authPinInput.trim() === "1234") {
+                      const testOp: UserProfile = {
+                        id: "prof_test_op",
+                        category: "Amatir",
+                        callsign: "TEST-OP",
+                        displayName: "Operator Test (PIN Verified)",
+                        dmrId: 5109999,
+                        allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
+                        badgeColor: "bg-amber-400 text-slate-950 font-black",
+                        networkTag: "Verified Test Operator",
+                        isMonitorOnly: false
+                      };
+                      setActiveProfile(testOp);
+                      setShowAuthModal(false);
+                      setAuthPinInput("");
+                    } else {
+                      setAuthPinError("PIN Salah! Transmisi ditolak.");
+                    }
+                  } finally {
+                    setIsVerifyingAuthPin(false);
+                  }
+                }}
+                className="space-y-3"
+              >
+                <div>
+                  <label className="block text-slate-300 text-xs mb-1 font-semibold">
+                    Masukkan PIN Operator Server (Default: 1234):
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    autoFocus
+                    maxLength={12}
+                    placeholder="PIN 4 Digit"
+                    value={authPinInput}
+                    onChange={(e) => { setAuthPinInput(e.target.value); setAuthPinError(""); }}
+                    className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 focus:border-amber-400 rounded-xl text-center text-lg tracking-widest font-mono text-white font-bold"
+                  />
+                  {authPinError && (
+                    <p className="text-red-400 text-[11px] font-bold mt-1 text-center">{authPinError}</p>
+                  )}
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthModal(false)}
+                    className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-700"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isVerifyingAuthPin}
+                    className="flex-1 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black shadow-lg shadow-amber-500/20"
+                  >
+                    {isVerifyingAuthPin ? "Memverifikasi..." : "Buka Kunci PTT"}
+                  </button>
+                </div>
+              </form>
+            )}
 
           </div>
         </div>

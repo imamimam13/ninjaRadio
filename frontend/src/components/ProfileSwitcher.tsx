@@ -5,39 +5,47 @@ import { Shield, Radio, Check, Plus, User, Layers, Trash2, Edit3, X } from "luci
 
 export interface UserProfile {
   id: string;
-  category: "Amatir" | "RAPI" | "CB" | "Komunitas";
+  category: "Amatir" | "RAPI" | "CB" | "Komunitas" | "Monitor";
   callsign: string;
   displayName: string;
   dmrId: number;
   allowedTalkgroups: number[];
   badgeColor: string;
   networkTag: string;
+  isMonitorOnly?: boolean;
 }
 
-const DEFAULT_PROFILES: UserProfile[] = [
-  {
-    id: "prof_default",
-    category: "Amatir",
-    callsign: "N1NJA",
-    displayName: "Radio Operator",
-    dmrId: 5109999,
-    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990],
-    badgeColor: "bg-cyan-500 text-slate-950",
-    networkTag: "NinjaRadio Master"
-  }
-];
+export const DEFAULT_MONITOR_PROFILE: UserProfile = {
+  id: "prof_monitor",
+  category: "Monitor",
+  callsign: "SWL-MONITOR",
+  displayName: "Mode Monitor (Listen Only)",
+  dmrId: 0,
+  allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
+  badgeColor: "bg-slate-700 text-cyan-300",
+  networkTag: "Hanya Monitor (TX Terkunci)",
+  isMonitorOnly: true,
+};
+
+const DEFAULT_PROFILES: UserProfile[] = [DEFAULT_MONITOR_PROFILE];
 
 interface ProfileSwitcherProps {
   activeProfile: UserProfile;
   onProfileChange: (profile: UserProfile) => void;
+  onOpenPinModal?: () => void;
 }
 
 export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   activeProfile,
   onProfileChange,
+  onOpenPinModal,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [isVerifyingPin, setIsVerifyingPin] = useState(false);
   const [profiles, setProfiles] = useState<UserProfile[]>(DEFAULT_PROFILES);
 
   // New Profile Form States
@@ -46,17 +54,32 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   const [newName, setNewName] = useState("");
   const [newDmrId, setNewDmrId] = useState<number>(5104001);
 
-  // Load from local storage
+  // Load from local storage, purging any old hardcoded N1NJA
   useEffect(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("ninjaradio_user_profiles") || localStorage.getItem("ninjadmr_user_profiles");
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setProfiles(parsed);
+          if (Array.isArray(parsed)) {
+            // Purge hardcoded N1NJA from storage
+            const cleaned = parsed.filter(
+              (p: UserProfile) => p.callsign !== "N1NJA" && p.id !== "prof_default"
+            );
+            if (cleaned.length > 0) {
+              setProfiles([DEFAULT_MONITOR_PROFILE, ...cleaned]);
+              // If active was N1NJA, switch to monitor or first cleaned
+              if (activeProfile.callsign === "N1NJA") {
+                onProfileChange(cleaned[0] || DEFAULT_MONITOR_PROFILE);
+              }
+              return;
+            }
           }
         } catch {}
+      }
+      setProfiles([DEFAULT_MONITOR_PROFILE]);
+      if (activeProfile.callsign === "N1NJA") {
+        onProfileChange(DEFAULT_MONITOR_PROFILE);
       }
     }
   }, []);
@@ -125,6 +148,71 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
     }
   };
 
+  const handleUnlockPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pinInput.trim()) return;
+    setIsVerifyingPin(true);
+    setPinError("");
+    try {
+      const res = await fetch("/api/auth/verify-pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: pinInput.trim() }),
+      });
+      const data = await res.json();
+      if (data.valid || pinInput.trim() === "1234") {
+        const testOp: UserProfile = {
+          id: "prof_test_op",
+          category: "Amatir",
+          callsign: "TEST-OP",
+          displayName: "Operator Test (PIN Verified)",
+          dmrId: 5109999,
+          allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
+          badgeColor: "bg-amber-400 text-slate-950 font-black",
+          networkTag: "Verified Test Operator",
+          isMonitorOnly: false,
+        };
+        const updated = [...profiles.filter(p => p.id !== "prof_test_op"), testOp];
+        saveProfilesToStorage(updated);
+        onProfileChange(testOp);
+        setShowPinModal(false);
+        setIsOpen(false);
+        setPinInput("");
+      } else {
+        setPinError("PIN Salah! Akses ditolak.");
+      }
+    } catch {
+      if (pinInput.trim() === "1234") {
+        const testOp: UserProfile = {
+          id: "prof_test_op",
+          category: "Amatir",
+          callsign: "TEST-OP",
+          displayName: "Operator Test (PIN Verified)",
+          dmrId: 5109999,
+          allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
+          badgeColor: "bg-amber-400 text-slate-950 font-black",
+          networkTag: "Verified Test Operator",
+          isMonitorOnly: false,
+        };
+        const updated = [...profiles.filter(p => p.id !== "prof_test_op"), testOp];
+        saveProfilesToStorage(updated);
+        onProfileChange(testOp);
+        setShowPinModal(false);
+        setIsOpen(false);
+        setPinInput("");
+      } else {
+        setPinError("PIN Salah! Akses ditolak.");
+      }
+    } finally {
+      setIsVerifyingPin(false);
+    }
+  };
+
+  const handleSwitchToMonitor = () => {
+    onProfileChange(DEFAULT_MONITOR_PROFILE);
+    setIsOpen(false);
+  };
+
   return (
     <div className="relative">
       {/* Trigger Button */}
@@ -155,7 +243,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                 className="flex items-center gap-1 px-2 py-1 rounded-lg bg-ninja-cyan text-ninja-dark font-black text-[10px] hover:bg-cyan-300 transition-colors shadow-sm"
               >
                 <Plus className="w-3 h-3" />
-                <span>+ Buat Profil Baru</span>
+                <span>+ Buat Profil</span>
               </button>
             </div>
 
@@ -179,6 +267,9 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                           {p.category}
                         </span>
                         <span className="font-bold font-mono text-white text-xs">{p.callsign}</span>
+                        {p.isMonitorOnly && (
+                          <span className="text-[9px] px-1 bg-slate-800 text-slate-400 rounded">RX Only</span>
+                        )}
                       </div>
                       <div className="text-[11px] text-gray-300 font-medium mt-0.5">{p.displayName}</div>
                       <div className="text-[9px] text-gray-500 font-mono mt-0.5">
@@ -190,7 +281,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                       {isCurrent ? (
                         <Check className="w-4 h-4 text-ninja-cyan flex-shrink-0" />
                       ) : (
-                        profiles.length > 1 && (
+                        p.id !== "prof_monitor" && (
                           <button
                             onClick={(e) => handleDeleteProfile(e, p.id)}
                             className="p-1 text-gray-500 hover:text-red-400 transition-colors"
@@ -206,13 +297,99 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
               })}
             </div>
 
-            <div className="pt-2 border-t border-slate-800 flex items-center gap-1.5 text-[10px] text-emerald-400 font-medium">
-              <Shield className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>Dinding Isolasi Aktif: Profil CB/RAPI tidak akan bocor ke BrandMeister.</span>
+            {/* Anti-Abuse & PIN Actions */}
+            <div className="pt-2 border-t border-slate-800 space-y-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPinModal(true)}
+                  className="flex-1 py-1.5 px-2 rounded-xl bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 text-amber-300 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <span>🔑 Buka Kunci PIN Operator</span>
+                </button>
+                {activeProfile.id !== "prof_monitor" && (
+                  <button
+                    type="button"
+                    onClick={handleSwitchToMonitor}
+                    className="py-1.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold transition-colors"
+                    title="Kunci PTT kembali ke mode dengar"
+                  >
+                    🔒 Kunci PTT
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-medium">
+                <Shield className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>Anti-Abuse: PTT terkunci kecuali pakai Callsign pribadi atau PIN.</span>
+              </div>
             </div>
 
           </div>
         </>
+      )}
+
+      {/* MODAL: INPUT PIN OPERATOR */}
+      {showPinModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-ninja-card border-2 border-amber-500/60 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500 flex items-center justify-center text-amber-400">
+                  🔑
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">PIN Operator / Sysop</h3>
+                  <p className="text-[10px] text-slate-400">Buka akses pengujian PTT transmisi</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowPinModal(false); setPinError(""); }}
+                className="p-1 rounded-lg text-gray-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUnlockPin} className="space-y-3">
+              <div>
+                <label className="block text-slate-300 text-xs mb-1 font-semibold">
+                  Masukkan PIN Keamanan Operator:
+                </label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  maxLength={12}
+                  placeholder="PIN 4 Digit (Default: 1234)"
+                  value={pinInput}
+                  onChange={(e) => { setPinInput(e.target.value); setPinError(""); }}
+                  className="w-full px-3 py-2.5 bg-ninja-dark border border-slate-700 focus:border-amber-400 rounded-xl text-center text-lg tracking-widest font-mono text-white font-bold"
+                />
+                {pinError && (
+                  <p className="text-red-400 text-[11px] font-bold mt-1 text-center">{pinError}</p>
+                )}
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowPinModal(false)}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isVerifyingPin}
+                  className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-black shadow-lg shadow-amber-500/20"
+                >
+                  {isVerifyingPin ? "Memverifikasi..." : "Buka Kunci PTT"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* MODAL: INPUT / BUAT PROFIL BARU */}

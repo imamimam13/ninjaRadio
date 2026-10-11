@@ -29,10 +29,11 @@ export default function DashboardPage() {
   const { lastHeard, activeTx, isConnected } = useLiveMonitor();
   const [filterMode, setFilterMode] = useState<string>("ALL");
   const [searchTerm, setSearchTerm] = useState<string>("");
+  const [selectedTgFilter, setSelectedTgFilter] = useState<number | null>(null);
   const [vizMode, setVizMode] = useState<"oscilloscope" | "smeter" | "bars">("oscilloscope");
   const [stats, setStats] = useState({
-    server_callsign: "N1NJA",
-    server_id: 5109999,
+    server_callsign: "ONLINE",
+    server_id: 510,
     uptime: "0s",
     active_transmissions: 0,
     connected_hotspots: 0,
@@ -74,13 +75,16 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, []);
 
+  const activeTgs = Array.from(new Set(lastHeard.map((item) => item.talkgroup))).filter(Boolean);
+
   const filteredLastHeard = lastHeard.filter((item) => {
     const matchesMode = filterMode === "ALL" || item.mode.toUpperCase() === filterMode.toUpperCase();
+    const matchesTg = selectedTgFilter === null || item.talkgroup === selectedTgFilter;
     const matchesSearch =
       item.callsign.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.talkgroup.toString().includes(searchTerm);
-    return matchesMode && matchesSearch;
+    return matchesMode && matchesTg && matchesSearch;
   });
 
   return (
@@ -306,6 +310,44 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* Active Talkgroups Filter Chips Bar */}
+          <div className="px-4 py-2.5 bg-[#060a12] border-b border-cyan-900/30 flex items-center gap-2 overflow-x-auto text-xs font-mono">
+            <span className="text-[10px] text-slate-400 uppercase font-bold shrink-0">
+              Filter TG:
+            </span>
+            <button
+              onClick={() => setSelectedTgFilter(null)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition-all ${
+                selectedTgFilter === null
+                  ? "bg-cyan-400 text-slate-950 font-black shadow-sm"
+                  : "bg-slate-900 text-slate-400 hover:text-white border border-slate-800"
+              }`}
+            >
+              Semua TG ({lastHeard.length})
+            </button>
+            {activeTgs.map((tg) => {
+              const count = lastHeard.filter((i) => i.talkgroup === tg).length;
+              const isSelected = selectedTgFilter === tg;
+              return (
+                <button
+                  key={tg}
+                  onClick={() => setSelectedTgFilter(isSelected ? null : tg)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 flex items-center gap-1.5 transition-all ${
+                    isSelected
+                      ? "bg-cyan-400 text-slate-950 font-black shadow-sm"
+                      : "bg-[#0b1322] border border-cyan-900/60 text-cyan-300 hover:border-cyan-400"
+                  }`}
+                  title={`Klik untuk memonitor hanya TG ${tg}`}
+                >
+                  <span>TG {tg}</span>
+                  <span className={`px-1 py-0.2 rounded text-[9px] ${isSelected ? "bg-slate-900 text-cyan-300" : "bg-cyan-950 text-cyan-400"}`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
           {/* Table Body */}
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
@@ -348,9 +390,18 @@ export default function DashboardPage() {
                       </td>
                       <td className="py-2.5 px-3 text-slate-400">{item.dmr_id}</td>
                       <td className="py-2.5 px-3 font-bold text-slate-200">
-                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-cyan-300">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTgFilter(selectedTgFilter === item.talkgroup ? null : item.talkgroup)}
+                          className={`px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+                            selectedTgFilter === item.talkgroup
+                              ? "bg-cyan-500 text-slate-950 font-black border-cyan-400"
+                              : "bg-slate-900 border-slate-700 text-cyan-300 hover:border-cyan-400"
+                          }`}
+                          title={`Klik untuk filter TG ${item.talkgroup}`}
+                        >
                           TG {item.talkgroup}
-                        </span>
+                        </button>
                       </td>
                       <td className="py-2.5 px-3 text-slate-400">TS{item.slot}</td>
                       <td className="py-2.5 px-3">
