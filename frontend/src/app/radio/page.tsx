@@ -83,14 +83,34 @@ interface SmsItem {
 export default function RadioPocketMode() {
   const { activeTx, isConnected } = useLiveMonitor();
 
-  // UI Display Mode: Auto-detected by device screen dimensions
+  // UI Display Mode: Standard 2.4" Cyberdeck Touchscreen vs 1.8" Rugged PoC Radio
   const [deviceSkin, setDeviceSkin] = useState<"standard" | "poc18">("standard");
 
-  // Auto-detect device dimensions on mount and resize
+  const saveDeviceSkin = (skin: "standard" | "poc18") => {
+    setDeviceSkin(skin);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ninjaradio_device_skin", skin);
+    }
+  };
+
+  // Auto-detect device dimensions on mount and resize if not manually set
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedSkin = localStorage.getItem("ninjaradio_device_skin");
+      if (savedSkin === "standard" || savedSkin === "poc18") {
+        setDeviceSkin(savedSkin);
+        return;
+      }
+    }
+
     const handleScreenSize = () => {
       if (typeof window !== "undefined") {
-        if (window.innerWidth <= 360 || window.innerHeight <= 520) {
+        const savedSkin = localStorage.getItem("ninjaradio_device_skin");
+        if (savedSkin) return;
+
+        // Specialized micro-screen hardware radios have tiny viewports (<= 240x320)
+        // Standard smartphones (even 5-6" screens) have CSS pixel width of 360px - 430px
+        if (window.innerWidth <= 240 && window.innerHeight <= 320) {
           setDeviceSkin("poc18");
         } else {
           setDeviceSkin("standard");
@@ -2121,6 +2141,36 @@ export default function RadioPocketMode() {
                   <option value="HeadsetHook">🎧 Tombol Headset / Mic Bluetooth PTT</option>
                   <option value="Space">⌨️ Tombol Spasi (PC / Laptop)</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">3. Tampilan Layar Radio (Skin):</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => saveDeviceSkin("standard")}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      deviceSkin === "standard"
+                        ? "bg-cyan-500 text-slate-950 font-black border-cyan-400 shadow"
+                        : "bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="font-bold">📱 Layar 2.4" Cyberdeck</div>
+                    <div className="text-[10px] opacity-80">Smartphone / Touchscreen</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => saveDeviceSkin("poc18")}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      deviceSkin === "poc18"
+                        ? "bg-amber-400 text-slate-950 font-black border-amber-300 shadow"
+                        : "bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="font-bold">📻 Layar 1.8" Rugged</div>
+                    <div className="text-[10px] opacity-80">Zello PoC / Layar Mini</div>
+                  </button>
+                </div>
               </div>
 
               {/* Live Hardware Key Tester */}
