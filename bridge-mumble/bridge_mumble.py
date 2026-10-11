@@ -16,11 +16,24 @@ MUMBLE_HOST = os.getenv("MUMBLE_HOST", "mumble-server")
 MUMBLE_PORT = int(os.getenv("MUMBLE_PORT", "64738"))
 MUMBLE_USER = os.getenv("MUMBLE_USER", "NinjaRadio-Gateway")
 MUMBLE_PASSWORD = os.getenv("MUMBLE_PASSWORD", "")
-MUMBLE_CHANNEL = os.getenv("MUMBLE_CHANNEL", "NinjaRadio-Room")
+MUMBLE_CHANNEL = os.getenv("MUMBLE_CHANNEL", "NinjaRadio-Nasional")
 
 USRP_HOST = os.getenv("DMR_USRP_HOST", "core")
-USRP_PORT = int(os.getenv("DMR_USRP_PORT", "12345"))
+USRP_PORT = int(os.getenv("DMR_USRP_PORT", "32345"))
 TARGET_TG = int(os.getenv("TARGET_TG", "5109"))
+
+# Multi-room / Multi-Talkgroup dictionary
+RAW_ROOM_MAP = os.getenv("MUMBLE_ROOM_MAP", "NinjaRadio-Nasional:510,NinjaRadio-Nusantara:5109,NinjaRadio-Darurat:5108,NinjaRadio-Worldwide:91")
+ROOM_MAPPINGS = {}
+for item in RAW_ROOM_MAP.split(","):
+    if ":" in item:
+        ch, tg = item.split(":", 1)
+        try:
+            ROOM_MAPPINGS[ch.strip()] = int(tg.strip())
+        except ValueError:
+            pass
+if not ROOM_MAPPINGS:
+    ROOM_MAPPINGS = {"NinjaRadio-Nasional": 510, "NinjaRadio-Nusantara": 5109}
 
 # Anti-loop state
 last_mumble_tx = 0
@@ -61,11 +74,14 @@ def run_usrp_listener(mumble_instance):
 
 def main():
     logger.info("==================================================")
-    logger.info("  NinjaRadio <--> Mumble (Murmur) Audio Gateway   ")
+    logger.info("  NinjaRadio Multi-Room Mumble (Murmur) Gateway   ")
     logger.info("==================================================")
     logger.info(f"Connecting to Mumble Server: {MUMBLE_HOST}:{MUMBLE_PORT}")
-    logger.info(f"Bot Username: {MUMBLE_USER} | Target Room: {MUMBLE_CHANNEL}")
-    logger.info(f"Target DMR Talkgroup: TG {TARGET_TG} | USRP Host: {USRP_HOST}:{USRP_PORT}")
+    logger.info(f"Bot Username: {MUMBLE_USER}")
+    logger.info(f"Configured Multi-Room Mappings:")
+    for room_name, tg_val in ROOM_MAPPINGS.items():
+        logger.info(f"  • Room '{room_name}' <---> DMR TG {tg_val}")
+    logger.info(f"USRP Audio Host: {USRP_HOST}:{USRP_PORT}")
 
     mumble = None
 
@@ -79,13 +95,25 @@ def main():
         mumble.is_ready()
         logger.info("✓ Successfully connected to Mumble Server!")
 
-        # Move to target channel if specified
-        channel = mumble.channels.find_by_name(MUMBLE_CHANNEL)
+        # Initialize and setup multi-rooms
+        for room_name, tg_val in ROOM_MAPPINGS.items():
+            ch = mumble.channels.find_by_name(room_name)
+            if not ch:
+                try:
+                    # Create channel under root if possible
+                    mumble.channels.new_channel(0, room_name, temporary=False)
+                    logger.info(f"✓ Created Mumble Channel: {room_name} (TG {tg_val})")
+                except Exception as ce:
+                    logger.debug(f"Channel create notice: {ce}")
+            else:
+                logger.info(f"✓ Found Mumble Channel: {room_name} (TG {tg_val})")
+
+        # Move bot into first configured channel or root
+        first_ch_name = list(ROOM_MAPPINGS.keys())[0]
+        channel = mumble.channels.find_by_name(first_ch_name)
         if channel:
             mumble.users.myself.move_in(channel)
-            logger.info(f"✓ Joined Mumble Channel: {MUMBLE_CHANNEL}")
-        else:
-            logger.info(f"Channel '{MUMBLE_CHANNEL}' not found yet, staying in Root channel.")
+            logger.info(f"✓ Joined Primary Mumble Channel: {first_ch_name}")
 
     except Exception as e:
         logger.warning(f"pymumble connection standby / simulated mode: {e}")
