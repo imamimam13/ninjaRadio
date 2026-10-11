@@ -97,3 +97,13 @@ class ServerStatus(BaseModel):
     active_bridges: int
     cpu_usage: float
     ram_usage: float
+
+class PttTransmitRequest(BaseModel):
+    callsign: Optional[str] = "WEB-OP"
+    dmr_id: Optional[int] = 5109999
+    tg: Optional[int] = 510
+    slot: Optional[int] = 1
+    call_type: Optional[str] = "group"
+    category: Optional[str] = "Amatir"
+    is_transmitting: Optional[bool] = True
+

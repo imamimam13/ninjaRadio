@@ -11,7 +11,7 @@ from backend.app.models.schemas import (
     QsoLogResponse, QsoLogCreate,
     CallbookResponse, CallbookCreate,
     BridgeRouteResponse, BridgeRouteCreate,
-    ServerStatus, LastHeardItem
+    ServerStatus, LastHeardItem, PttTransmitRequest
 )
 from backend.app.services.logbook_service import LogbookService
 from backend.app.services.callbook_service import CallbookService
@@ -150,27 +150,40 @@ async def toggle_matrix_route(
         raise HTTPException(status_code=404, detail="Route not found")
     return entry
 
-# ----------------- Web PTT Trigger Simulation Endpoint -----------------
+TG_NAMES = {
+    510: "Indo National DMR",
+    5101: "Jawa Barat Regional",
+    5102: "Jawa Tengah Regional",
+    5103: "Jawa Timur Regional",
+    5109: "RAPI Nusantara ASL",
+    5108: "11M CB Digital Gateway",
+    5100: "Emergency SAR 911",
+    9990: "Audio Test Echo / Parrot",
+    91: "BrandMeister Worldwide DX",
+}
 
 @router.post("/ptt/transmit")
-async def web_ptt_transmit(
-    callsign: str = "WEB-OP",
-    dmr_id: int = 5109999,
-    tg: int = 510,
-    slot: int = 1,
-    is_transmitting: bool = True
-):
+async def web_ptt_transmit(payload: PttTransmitRequest):
+    callsign = payload.callsign or "WEB-OP"
+    dmr_id = payload.dmr_id or 5109999
+    tg = payload.tg if payload.tg is not None else 510
+    slot = payload.slot or 1
+    category = payload.category or "Amatir"
+    is_transmitting = payload.is_transmitting if payload.is_transmitting is not None else True
+
+    tg_name = TG_NAMES.get(tg, f"Talkgroup {tg}")
+
     if is_transmitting:
         tx_data = {
             "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
             "callsign": callsign,
-            "name": "Web PTT Operator",
+            "name": f"Web Operator ({callsign})",
             "dmr_id": dmr_id,
             "talkgroup": tg,
-            "tg_name": f"Talkgroup {tg}",
+            "tg_name": tg_name,
             "slot": slot,
             "mode": "DMR (WebRTC)",
-            "category": "Amatir",
+            "category": category,
             "rssi": "-55 dBm",
             "ber": "0.0%",
             "started_at": datetime.utcnow().strftime("%H:%M:%S")
@@ -183,14 +196,14 @@ async def web_ptt_transmit(
             "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
             "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
             "callsign": callsign,
-            "name": "Web PTT Operator",
+            "name": f"Web Operator ({callsign})",
             "dmr_id": dmr_id,
             "talkgroup": tg,
-            "tg_name": f"Talkgroup {tg}",
+            "tg_name": tg_name,
             "slot": slot,
             "mode": "DMR (WebRTC)",
-            "category": "Amatir",
-            "duration": "4.2s",
+            "category": category,
+            "duration": "3.8s",
             "loss": "0.0%",
             "ber": "0.0%",
             "rssi": "-55 dBm",

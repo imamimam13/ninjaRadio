@@ -121,9 +121,9 @@ export default function RadioPocketMode() {
     { id: "2", sender: "JZ10XYZ", target: "TG 5109", type: "group", text: "Posko 1 Jakarta Timur 10-28 aman terkendali.", time: "09:15" },
   ]);
 
-  // Filter talkgroups strictly allowed for the active profile
+  // Filter talkgroups strictly allowed for the active profile (TG 9990 Echo is always permitted for audio testing)
   const availableTgs = ALL_TALKGROUPS.filter((tg) =>
-    activeProfile.allowedTalkgroups.includes(tg.id)
+    activeProfile.allowedTalkgroups.includes(tg.id) || tg.id === 9990
   );
 
   const currentTg = availableTgs[selectedTgIndex % (availableTgs.length || 1)] || ALL_TALKGROUPS[0];
