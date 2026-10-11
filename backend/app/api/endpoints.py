@@ -461,12 +461,21 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
                 import math
                 raw_payload = base64.b64decode(payload_b64)
                 if len(raw_payload) >= 320:
-                    # Genuine decoded 8kHz 16-bit mono PCM from vocoder (all frames e.g. 960 bytes / 60ms)
                     even_len = len(raw_payload) - (len(raw_payload) % 2)
-                    pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
+                    int16_samples = struct.unpack(f"<{even_len//2}h", raw_payload[:even_len])
+                    max_amp = max(abs(s) for s in int16_samples)
+                    if max_amp > 80:
+                        pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
+                    else:
+                        pcm_b64_to_send = None
                 elif len(raw_payload) >= 2 and len(raw_payload) != 33:
                     even_len = len(raw_payload) - (len(raw_payload) % 2)
-                    pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
+                    int16_samples = struct.unpack(f"<{even_len//2}h", raw_payload[:even_len])
+                    max_amp = max(abs(s) for s in int16_samples)
+                    if max_amp > 80:
+                        pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
+                    else:
+                        pcm_b64_to_send = None
                 else:
                     pcm_b64_to_send = None
 
