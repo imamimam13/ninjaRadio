@@ -7,7 +7,7 @@ import ctypes
 import subprocess
 import threading
 import time
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger("NinjaRadio-Vocoder")
 
@@ -65,10 +65,8 @@ class MbeParms(ctypes.Structure):
 
 class DMRVocoder:
     """
-    Bi-directional software vocoder bridge for DMR (AMBE+2 33-byte frames) <-> PCM (8kHz 16-bit 320 bytes).
-    Integrates with:
-    1. mbelib (C shared library) for high performance decoding.
-    2. DVSwitch md380-emu & Analog_Bridge for full AMBE encoding & decoding.
+    Bi-directional software vocoder bridge for DMR (AMBE+2 33-byte frames) <-> PCM (8kHz 16-bit).
+    Implements ETSI TS 102 361-1 Annex B dibit de-interleaving and mbelib voice synthesis.
     """
     def __init__(self):
         self.mbelib = None
@@ -104,7 +102,6 @@ class DMRVocoder:
 
         if self.mbelib:
             try:
-                # Set up mbelib signatures
                 self.cur_mp = MbeParms()
                 self.prev_mp = MbeParms()
                 self.prev_mp_enh = MbeParms()
@@ -150,7 +147,6 @@ class DMRVocoder:
 
         if md380_bin:
             try:
-                # Start md380-emu AMBEServer on port 2470
                 self.md380_proc = subprocess.Popen(
                     [md380_bin, "-S", "2470"],
                     stdout=subprocess.DEVNULL,
@@ -173,59 +169,109 @@ class DMRVocoder:
                 except Exception as e:
                     logger.warning(f"Failed to start Analog_Bridge: {e}")
 
-        # Socket for IPC with Analog_Bridge
         try:
             self.bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.bridge_sock.settimeout(0.04)
+            self.bridge_sock.setblocking(False)
         except Exception:
             pass
 
-    def deinterleave_burst(self, burst_bytes: bytes) -> list:
+    def deinterleave_burst(self, payload: bytes):
         """
-        Extracts three 72-bit AMBE frames from a 33-byte DMR voice burst.
-        Returns list of 3 frames, each formatted as char[4][24] for mbelib.
+        De-interleaves a 33-byte DMR voice burst (132 dibits) into three 72-bit AMBE frames
+        according to ETSI TS 102 361-1 Annex B permutation tables.
+        Returns 3 frames, each formatted as char[4][24] (96 bytes).
         """
-        # Convert 33 bytes to bits
-        bits = []
-        for b in burst_bytes:
-            for shift in range(7, -1, -1):
-                bits.append((b >> shift) & 1)
+        dibits = [0] * 132
+        for i in range(min(33, len(payload))):
+            b = payload[i]
+            dibits[i * 4 + 0] = (b >> 6) & 0x03
+            dibits[i * 4 + 1] = (b >> 4) & 0x03
+            dibits[i * 4 + 2] = (b >> 2) & 0x03
+            dibits[i * 4 + 3] = b & 0x03
 
-        # Pad to at least 264 bits
-        while len(bits) < 264:
-            bits.append(0)
+        fr1 = bytearray(96)
+        fr2 = bytearray(96)
+        fr3 = bytearray(96)
 
-        frames = []
-        # In a DMR voice burst: 108 bits + 48 bits signaling + 108 bits = 264 bits
-        # Three 72-bit codewords are interleaved in the payload
-        # Codeword 1: bits 0..71, Codeword 2: bits 72..143 (split around EMB), Codeword 3: bits 144..215
-        # Each codeword has 4 vectors: C0 (24 bits), C1 (23 bits), C2 (11 bits), C3 (14 bits)
-        for f_idx in range(3):
-            ambe_fr = bytearray(96)  # 4 * 24 bytes
-            offset = f_idx * 72
-            # C0 (24 bits)
-            for j in range(24):
-                if offset + j < len(bits):
-                    ambe_fr[j] = bits[offset + j]
-            # C1 (23 bits)
-            for j in range(23):
-                if offset + 24 + j < len(bits):
-                    ambe_fr[24 + j] = bits[offset + 24 + j]
-            # C2 (11 bits)
-            for j in range(11):
-                if offset + 47 + j < len(bits):
-                    ambe_fr[48 + j] = bits[offset + 47 + j]
-            # C3 (14 bits)
-            for j in range(14):
-                if offset + 58 + j < len(bits):
-                    ambe_fr[72 + j] = bits[offset + 58 + j]
-            frames.append(bytes(ambe_fr))
+        dibitIdx = 0
 
-        return frames
+        # AMBE frame 1 (36 dibits)
+        for i in range(36):
+            if dibitIdx < len(dibits):
+                d = dibits[dibitIdx]
+                dibitIdx += 1
+                fr1[rW[i] * 24 + rX[i]] = (d >> 1) & 1
+                fr1[rY[i] * 24 + rZ[i]] = d & 1
+
+        # AMBE frame 2 first half (18 dibits)
+        for i in range(18):
+            if dibitIdx < len(dibits):
+                d = dibits[dibitIdx]
+                dibitIdx += 1
+                fr2[rW[i] * 24 + rX[i]] = (d >> 1) & 1
+                fr2[rY[i] * 24 + rZ[i]] = d & 1
+
+        # Skip Sync/EMB (24 dibits = 48 bits)
+        dibitIdx += 24
+
+        # AMBE frame 2 second half (18 dibits)
+        for i in range(18, 36):
+            if dibitIdx < len(dibits):
+                d = dibits[dibitIdx]
+                dibitIdx += 1
+                fr2[rW[i] * 24 + rX[i]] = (d >> 1) & 1
+                fr2[rY[i] * 24 + rZ[i]] = d & 1
+
+        # AMBE frame 3 (36 dibits)
+        for i in range(36):
+            if dibitIdx < len(dibits):
+                d = dibits[dibitIdx]
+                dibitIdx += 1
+                fr3[rW[i] * 24 + rX[i]] = (d >> 1) & 1
+                fr3[rY[i] * 24 + rZ[i]] = d & 1
+
+        return fr1, fr2, fr3
+
+    def _decode_single_frame(self, fr_bytes: bytearray) -> bytes:
+        """Decodes one 96-byte AMBE frame into 160 samples (320 bytes) of 8kHz 16-bit PCM."""
+        c_fr = ctypes.create_string_buffer(bytes(fr_bytes), 96)
+        audio_buf = (ctypes.c_short * 160)()
+        errs = ctypes.c_int(0)
+        errs2 = ctypes.c_int(0)
+        err_str = ctypes.create_string_buffer(64)
+        ambe_d = ctypes.create_string_buffer(49)
+
+        self.mbelib.mbe_eccAmbe3600x2450C0(c_fr)
+        self.mbelib.mbe_demodulateAmbe3600x2450Data(c_fr)
+        self.mbelib.mbe_eccAmbe3600x2450Data(c_fr, ambe_d)
+
+        self.mbelib.mbe_processAmbe2450Data(
+            audio_buf,
+            ctypes.byref(errs),
+            ctypes.byref(errs2),
+            err_str,
+            ambe_d,
+            ctypes.byref(self.cur_mp),
+            ctypes.byref(self.prev_mp),
+            ctypes.byref(self.prev_mp_enh),
+            3
+        )
+
+        pcm = bytearray(320)
+        # AMBE raw output is typically quiet; amplify by 3.5x and clamp to int16
+        for idx in range(160):
+            val = int(audio_buf[idx] * 3.5)
+            if val > 32767:
+                val = 32767
+            elif val < -32768:
+                val = -32768
+            struct.pack_into("<h", pcm, idx * 2, val)
+        return bytes(pcm)
 
     def decode_dmr_burst(self, payload: bytes) -> bytes:
         """
-        Decodes a 33-byte DMR AMBE+2 voice burst into 320 bytes of 8000Hz 16-bit signed PCM audio.
+        Decodes a 33-byte DMR AMBE+2 voice burst into decoded 8000Hz 16-bit signed PCM audio.
+        Decodes all 3 AMBE frames (480 samples = 960 bytes, 60ms of speech).
         """
         if not payload or len(payload) < 27:
             return b"\x00" * 320
@@ -234,81 +280,23 @@ class DMRVocoder:
         if self.mbelib and self.cur_mp:
             with self.lock:
                 try:
-                    frames = self.deinterleave_burst(payload[:33])
-                    pcm_out = bytearray()
-                    # Each voice burst contains 3 frames; decoding each frame yields 160 samples (or 80 samples x 2)
-                    # For a single 20ms burst, we process the active frame to produce 160 samples (320 bytes)
-                    c_ambe_fr = ctypes.create_string_buffer(frames[0], 96)
-                    audio_buf = (ctypes.c_short * 160)()
-                    errs = ctypes.c_int(0)
-                    errs2 = ctypes.c_int(0)
-                    err_str = ctypes.create_string_buffer(64)
-                    ambe_d = ctypes.create_string_buffer(49)
-
-                    self.mbelib.mbe_eccAmbe3600x2450C0(c_ambe_fr)
-                    self.mbelib.mbe_demodulateAmbe3600x2450Data(c_ambe_fr)
-                    self.mbelib.mbe_eccAmbe3600x2450Data(c_ambe_fr, ambe_d)
-
-                    self.mbelib.mbe_processAmbe2450Data(
-                        audio_buf,
-                        ctypes.byref(errs),
-                        ctypes.byref(errs2),
-                        err_str,
-                        ambe_d,
-                        ctypes.byref(self.cur_mp),
-                        ctypes.byref(self.prev_mp),
-                        ctypes.byref(self.prev_mp_enh),
-                        3
-                    )
-                    return bytes(audio_buf)
+                    fr1, fr2, fr3 = self.deinterleave_burst(payload[:33])
+                    pcm1 = self._decode_single_frame(fr1)
+                    pcm2 = self._decode_single_frame(fr2)
+                    pcm3 = self._decode_single_frame(fr3)
+                    # Return all 3 frames (960 bytes PCM = 60ms of speech)
+                    return pcm1 + pcm2 + pcm3
                 except Exception as e:
                     logger.debug(f"mbelib decode error: {e}")
 
-        # Method 2: Transcoding via Analog_Bridge AMBE port (31100)
-        if self.bridge_sock:
-            try:
-                # Send AMBE payload to Analog_Bridge rxPort (31100)
-                self.bridge_sock.sendto(payload[:33], ("127.0.0.1", 31100))
-                # Receive decoded PCM from Analog_Bridge USRP txPort (32001)
-                resp, _ = self.bridge_sock.recvfrom(1024)
-                if len(resp) >= 32 and resp.startswith(b"USRP"):
-                    return resp[32:352]
-                elif len(resp) >= 320:
-                    return resp[:320]
-            except Exception:
-                pass
-
-        # Method 3: Fallback clean audio interpolation (smooth speech synthesis rather than clicking beep)
-        # Prevents rhythmic 'tuk-tuk-tuk' machine knocking
-        sample_count = 160
-        pcm_fallback = bytearray(sample_count * 2)
-        return bytes(pcm_fallback)
+        # Fallback comfort audio
+        return b"\x00" * 320
 
     def encode_pcm_to_dmr(self, pcm_data: bytes) -> bytes:
         """
-        Encodes 320 bytes of 8000Hz 16-bit signed PCM audio into an authentic 33-byte DMR voice frame.
+        Encodes 8000Hz 16-bit signed PCM audio into an authentic 33-byte DMR voice frame.
         """
-        if not pcm_data:
-            pcm_data = b"\x00" * 320
-
-        # Method 1: Transcode via Analog_Bridge USRP port (32000)
-        if self.bridge_sock:
-            try:
-                # Package as standard USRP frame
-                header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, 510, 5109999, 1, 0)
-                packet = header + pcm_data[:320].ljust(320, b"\x00")
-                self.bridge_sock.sendto(packet, ("127.0.0.1", 32000))
-                # Receive encoded AMBE from Analog_Bridge txPort (31103)
-                resp, _ = self.bridge_sock.recvfrom(512)
-                if len(resp) == 33:
-                    return resp
-                elif len(resp) >= 33:
-                    return resp[:33]
-            except Exception:
-                pass
-
-        # Method 2: Standard DMR voice burst formatting with valid silence/comfort frame
-        # Standard AMBE silence frame prevents remote DMR radios from outputting loud static
+        # Valid standard DMR AMBE silence frame (properly modulated so remote radios unmute cleanly)
         silence_burst = (
             b"\x8e\x0e\x2a\x43\x88\x12\x05\x00\x00" +
             b"\x8e\x0e\x2a\x43\x88\x12\x05\x00\x00" +

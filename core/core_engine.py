@@ -193,20 +193,23 @@ class CoreEngineManager:
                 if raw_packet and self.master_server:
                     self.master_server.broadcast_dmrd(raw_packet)
 
-            # 2. Transcode 33-byte DMR AMBE frame to 320-byte 8kHz 16-bit PCM human voice
+            # 2. Transcode 33-byte DMR AMBE frame to 8kHz 16-bit PCM human voice
             payload = traffic_data.get("payload", b"")
             pcm_payload = self.vocoder.decode_dmr_burst(payload) if len(payload) == 33 else payload
 
-            # Forward decoded PCM to Mumble bridge (UDP 12346) & DVSwitch clients
-            header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, dst_tg, src_id, slot, 0)
-            usrp_packet = header + (pcm_payload if pcm_payload else b"\x00" * 320)
-
-            try:
-                self.bridge_sock.sendto(usrp_packet, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-            except Exception:
-                pass
-
-            self.broadcast_to_usrp_clients(usrp_packet)
+            # Forward decoded PCM to Mumble bridge (UDP 12346) & DVSwitch clients in 320-byte frames
+            if pcm_payload:
+                for offset in range(0, len(pcm_payload), 320):
+                    chunk = pcm_payload[offset:offset + 320]
+                    if len(chunk) < 320:
+                        chunk = chunk.ljust(320, b"\x00")
+                    header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, 1, dst_tg, src_id, slot, 0)
+                    usrp_packet = header + chunk
+                    try:
+                        self.bridge_sock.sendto(usrp_packet, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                    except Exception:
+                        pass
+                    self.broadcast_to_usrp_clients(usrp_packet)
         except Exception as e:
             logger.debug(f"handle_incoming_dmr_traffic error: {e}")
 

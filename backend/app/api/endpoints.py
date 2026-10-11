@@ -461,8 +461,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
                 import math
                 raw_payload = base64.b64decode(payload_b64)
                 if len(raw_payload) >= 320:
-                    # Genuine decoded 8kHz 16-bit mono PCM from vocoder
-                    pcm_b64_to_send = base64.b64encode(raw_payload[:320]).decode("ascii")
+                    # Genuine decoded 8kHz 16-bit mono PCM from vocoder (all frames e.g. 960 bytes / 60ms)
+                    even_len = len(raw_payload) - (len(raw_payload) % 2)
+                    pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
                 elif len(raw_payload) >= 2 and len(raw_payload) != 33:
                     even_len = len(raw_payload) - (len(raw_payload) % 2)
                     pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
