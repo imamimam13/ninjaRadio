@@ -163,6 +163,55 @@ TG_NAMES = {
     91: "BrandMeister Worldwide DX",
 }
 
+async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
+    """Simulates real DMR repeater Parrot / Echo service replying back after PTT release."""
+    try:
+        await asyncio.sleep(1.5)
+        # 1. Parrot starts transmitting back on TG 9990
+        parrot_tx = {
+            "id": f"tx_parrot_{int(datetime.utcnow().timestamp())}",
+            "callsign": "PARROT",
+            "name": f"Echo Audio Playback ({caller_callsign})",
+            "dmr_id": 9990,
+            "talkgroup": 9990,
+            "tg_name": "Audio Test Echo / Parrot",
+            "slot": slot,
+            "mode": "DMR (Echo Server)",
+            "category": "Amatir",
+            "rssi": "-48 dBm",
+            "ber": "0.0%",
+            "started_at": datetime.utcnow().strftime("%H:%M:%S")
+        }
+        await manager.update_tx_state(parrot_tx)
+        
+        # Audio playback duration
+        await asyncio.sleep(3.5)
+        
+        # 2. Parrot stops transmitting
+        await manager.update_tx_state(None)
+        
+        # 3. Push Parrot to Last Heard
+        lh_item = {
+            "id": f"tx_parrot_{int(datetime.utcnow().timestamp())}",
+            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+            "callsign": "PARROT",
+            "name": f"Echo Audio Playback ({caller_callsign})",
+            "dmr_id": 9990,
+            "talkgroup": 9990,
+            "tg_name": "Audio Test Echo / Parrot",
+            "slot": slot,
+            "mode": "DMR (Echo Server)",
+            "category": "Amatir",
+            "duration": "3.5s",
+            "loss": "0.0%",
+            "ber": "0.0%",
+            "rssi": "-48 dBm",
+            "is_tx": False
+        }
+        await manager.push_last_heard(lh_item)
+    except Exception as e:
+        pass
+
 @router.post("/ptt/transmit")
 async def web_ptt_transmit(payload: PttTransmitRequest):
     callsign = payload.callsign or "WEB-OP"
@@ -211,6 +260,11 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
             "is_tx": False
         }
         await manager.push_last_heard(lh_item)
+
+        # Trigger automatic Parrot reply if user transmitted to TG 9990
+        if tg == 9990:
+            asyncio.create_task(trigger_parrot_reply(callsign, dmr_id, slot))
+
         return {"status": "TX_STOPPED", "data": lh_item}
 
 # ----------------- Server Configuration Management -----------------
