@@ -269,7 +269,8 @@ class CoreEngineManager:
         if not self.http_session:
             return
         try:
-            async with self.http_session.post(BACKEND_EVENT_URL, json=traffic, timeout=2.0) as resp:
+            timeout = aiohttp.ClientTimeout(total=2.0)
+            async with self.http_session.post(BACKEND_EVENT_URL, json=traffic, timeout=timeout) as resp:
                 pass
         except Exception:
             pass

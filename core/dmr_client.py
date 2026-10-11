@@ -198,24 +198,34 @@ class HomeBrewClient:
         logger.info(f"[{self.name}] ✓ Successfully connected & subscribed to TGs {self.subscribed_tgs} on {self.host}:{self.port}!")
 
     async def _ping_worker(self):
-        """Periodically pings the Master to maintain keepalive."""
+        """Periodically pings the Master to maintain keepalive or retries login."""
+        retry_count = 0
         while self.running:
             await asyncio.sleep(5)
-            if self.state in ["CONNECTED", "KEY_SENT", "LOGIN_SENT"] and self.sock and self.target_addr:
+            if self.sock and self.target_addr:
                 try:
-                    ping_pkt = RPTP + struct.pack(">I", self.dmr_id)
-                    self.sock.sendto(ping_pkt, self.target_addr)
-                    self.packets_tx += 1
+                    if self.state in ["LOGGING_IN", "LOGIN_SENT"]:
+                        retry_count += 1
+                        logger.info(f"[{self.name}] Retrying RPTL login to {self.target_addr} (attempt {retry_count})...")
+                        await self._send_rptl()
+                    elif self.state == "CONNECTED":
+                        ping_pkt = RPTP + struct.pack(">I", self.dmr_id)
+                        self.sock.sendto(ping_pkt, self.target_addr)
+                        self.packets_tx += 1
+                    elif self.state in ["AUTH_FAILED", "RETRYING"]:
+                        retry_count += 1
+                        if retry_count % 3 == 0:
+                            logger.info(f"[{self.name}] Retrying handshake to {self.target_addr}...")
+                            await self._send_rptl()
                 except Exception as e:
-                    logger.debug(f"[{self.name}] Ping send failed: {e}")
+                    logger.debug(f"[{self.name}] Ping/retry worker error: {e}")
 
     async def _handle_packet(self, data: bytes, addr: tuple):
         header = data[:4]
 
         # 1. RPTACK (Auth challenge or ACK)
         if data.startswith(RPTACK):
-            if self.state == "LOGIN_SENT":
-                # Master responded with Salt (usually bytes 6 to 10 or 4 to 8)
+            if self.state in ["LOGGING_IN", "LOGIN_SENT"]:
                 salt = data[6:10] if len(data) >= 10 else data[4:8] if len(data) >= 8 else os.urandom(4)
                 logger.info(f"[{self.name}] Received RPTACK with salt: {salt.hex()}")
                 await self._send_rptk(salt)
@@ -223,10 +233,14 @@ class HomeBrewClient:
                 logger.info(f"[{self.name}] Key accepted by master! Sending configuration...")
                 await self._send_rptc()
 
-        # 2. Ping Keepalive responses
+        # 2. Master NAK (Auth rejected or invalid ID)
+        elif data.startswith(MSTNAK):
+            logger.warning(f"[{self.name}] ❌ Authentication REJECTED by Master (MSTNAK)! Invalid password or DMR ID.")
+            self._set_state("AUTH_FAILED")
+
+        # 3. Ping Keepalive responses
         elif data.startswith(MSTPING) or data.startswith(MSTP) or data.startswith(MSTACK):
             self.last_ping_rx = time.time()
-            # Reply pong
             if self.sock and self.target_addr:
                 pong = MSTP + struct.pack(">I", self.dmr_id)
                 self.sock.sendto(pong, self.target_addr)
