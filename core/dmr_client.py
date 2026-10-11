@@ -22,6 +22,34 @@ MSTACK = b"MSTACK"
 MSTNAK = b"MSTNAK"
 DMRD = b"DMRD"
 
+def format_freq_hz_9(val) -> bytes:
+    """Formats a frequency (either in MHz like 438.8000 or Hz like 438800000) into 9-byte ASCII string."""
+    try:
+        s = str(val).strip().replace(" ", "").replace("MHz", "").replace("mhz", "")
+        if "." in s:
+            hz = int(float(s) * 1_000_000)
+        else:
+            hz = int(s)
+            if hz < 1_000_000:
+                hz = hz * 1_000_000
+        return f"{hz:09d}"[:9].encode("ascii")
+    except Exception:
+        return b"438800000"
+
+def format_tx_pwr(val) -> bytes:
+    try:
+        p = int(str(val).strip().replace("W", "").replace("w", ""))
+        return f"{p:02d}"[:2].encode("ascii")
+    except Exception:
+        return b"25"
+
+def format_color_code(val) -> bytes:
+    try:
+        c = int(str(val).strip())
+        return f"{c:02d}"[:2].encode("ascii")
+    except Exception:
+        return b"01"
+
 class HomeBrewClient:
     """
     Native HomeBrew / MMDVM Repeater Protocol Client.
@@ -39,6 +67,10 @@ class HomeBrewClient:
         callsign: str,
         password: str = "",
         subscribed_tgs: str = "",
+        rx_freq: str = "438.8000",
+        tx_freq: str = "438.8000",
+        color_code: int = 1,
+        tx_pwr: int = 25,
         on_traffic: Optional[Callable] = None,
         on_status_change: Optional[Callable] = None
     ):
@@ -48,6 +80,10 @@ class HomeBrewClient:
         self.dmr_id = int(dmr_id)
         self.callsign = callsign.upper().strip()
         self.password = password.strip()
+        self.rx_freq = str(rx_freq).strip()
+        self.tx_freq = str(tx_freq).strip()
+        self.color_code = int(color_code)
+        self.tx_pwr = int(tx_pwr)
         self.raw_tgs_str = str(subscribed_tgs).strip()
         self.ts1_tgs: List[int] = []
         self.ts2_tgs: List[int] = []
@@ -103,6 +139,10 @@ class HomeBrewClient:
             "ts1_tgs": self.ts1_tgs,
             "ts2_tgs": self.ts2_tgs,
             "subscribed_tgs": self.subscribed_tgs,
+            "rx_freq": self.rx_freq,
+            "tx_freq": self.tx_freq,
+            "color_code": self.color_code,
+            "tx_pwr": self.tx_pwr,
             "packets_rx": self.packets_rx,
             "packets_tx": self.packets_tx,
             "last_ping_rx": self.last_ping_rx,
@@ -225,10 +265,10 @@ class HomeBrewClient:
         - options: variable (e.g. OPTIONS:TS1_1=...;TS2_1=...;)
         """
         callsign_bytes = self.callsign.ljust(8)[:8].encode("utf-8")
-        rx_freq = b"438800000"
-        tx_freq = b"438800000"
-        tx_pwr = b"25"
-        color_code = b"01"
+        rx_freq = format_freq_hz_9(self.rx_freq)
+        tx_freq = format_freq_hz_9(self.tx_freq)
+        tx_pwr = format_tx_pwr(self.tx_pwr)
+        color_code = format_color_code(self.color_code)
         lat = b"-06.2088"                           # 8 bytes
         lon = b"+106.8450"                          # 9 bytes (fixed 1-byte shift)
         height = b"050"                             # 3 bytes
@@ -249,7 +289,7 @@ class HomeBrewClient:
 
         tg_options = ";".join(opt_parts) + ";"
         options_bytes = f"OPTIONS:{tg_options}".encode("utf-8")
-        logger.info(f"[{self.name}] Configured RPTC Options: {tg_options} (TS1: {self.ts1_tgs}, TS2: {self.ts2_tgs})")
+        logger.info(f"[{self.name}] Configured RPTC Options: {tg_options} (TS1: {self.ts1_tgs}, TS2: {self.ts2_tgs}, Freq: {self.tx_freq}/{self.rx_freq} MHz, CC: {self.color_code})")
 
         config_data = (
             callsign_bytes + rx_freq + tx_freq + tx_pwr + color_code +

@@ -119,6 +119,10 @@ class CoreEngineManager:
             tgs = p.get("subscribedTgs") or p.get("subscribed_tgs", "")
             callsign = (p.get("callsign") or self.config.get("server_callsign", "N1NJA")).strip().upper()
             dmr_id = int(p.get("dmr_id") or p.get("dmrId") or self.config.get("server_dmr_id", 5109999))
+            rx_freq = str(p.get("rx_freq") or p.get("rxFreq") or self.config.get("rx_freq", "438.8000")).strip()
+            tx_freq = str(p.get("tx_freq") or p.get("txFreq") or self.config.get("tx_freq", "438.8000")).strip()
+            color_code = int(p.get("color_code") or p.get("colorCode") or self.config.get("color_code", 1))
+            tx_pwr = int(p.get("tx_pwr") or p.get("txPwr") or self.config.get("tx_pwr", 25))
 
             # If client exists and ANY settings changed or disabled, stop it so it reloads with new credentials
             if peer_id in self.active_clients:
@@ -129,14 +133,18 @@ class CoreEngineManager:
                     client.dmr_id != dmr_id or 
                     client.callsign != callsign or 
                     client.password != password or 
-                    client.subscribed_tgs != tgs):
-                    logger.info(f"Configuration changed for peer {peer_id} (DMR ID: {client.dmr_id} -> {dmr_id}, Callsign: {client.callsign} -> {callsign}). Re-connecting...")
+                    client.subscribed_tgs != tgs or
+                    getattr(client, "rx_freq", "") != rx_freq or
+                    getattr(client, "tx_freq", "") != tx_freq or
+                    getattr(client, "color_code", 1) != color_code or
+                    getattr(client, "tx_pwr", 25) != tx_pwr):
+                    logger.info(f"Configuration changed for peer {peer_id} (DMR ID: {client.dmr_id} -> {dmr_id}, Freq: {getattr(client, 'tx_freq', '')}/{getattr(client, 'rx_freq', '')} -> {tx_freq}/{rx_freq}). Re-connecting...")
                     await client.stop()
                     del self.active_clients[peer_id]
 
             # Start client if active and not already running
             if is_active and peer_id not in self.active_clients:
-                logger.info(f"🚀 Initializing active HomeBrew client for {p.get('name', host)} -> {host}:{port} (DMR ID: {dmr_id}, Callsign: {callsign}, TGs: {tgs})...")
+                logger.info(f"🚀 Initializing active HomeBrew client for {p.get('name', host)} -> {host}:{port} (DMR ID: {dmr_id}, Callsign: {callsign}, Freq: {tx_freq}/{rx_freq} MHz, TGs: {tgs})...")
                 client = HomeBrewClient(
                     name=p.get("name") or host,
                     host=host,
@@ -145,6 +153,10 @@ class CoreEngineManager:
                     callsign=callsign,
                     password=password,
                     subscribed_tgs=tgs,
+                    rx_freq=rx_freq,
+                    tx_freq=tx_freq,
+                    color_code=color_code,
+                    tx_pwr=tx_pwr,
                     on_traffic=self.handle_incoming_dmr_traffic,
                     on_status_change=self.handle_peer_status_change
                 )
