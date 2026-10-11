@@ -93,6 +93,7 @@ class ServerStatus(BaseModel):
     uptime: str
     active_transmissions: int
     connected_hotspots: int
+    web_clients: int = 1
     connected_peers: int
     active_bridges: int
     cpu_usage: float
