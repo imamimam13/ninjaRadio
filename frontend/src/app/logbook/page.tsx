@@ -82,7 +82,7 @@ export default function LogbookPage() {
         body: JSON.stringify({ pin: newCatPin.trim() }),
       });
       const data = await res.json();
-      if (data.valid || newCatPin.trim() === "1234") {
+      if (data && data.valid === true) {
         const catId = newCatLabel.trim().replace(/\s+/g, "_");
         const newCat = { id: catId, label: newCatLabel.trim() };
         
@@ -104,17 +104,7 @@ export default function LogbookPage() {
         setNewCatError("PIN Admin Salah! Hanya Administrator yang dapat menambah kategori.");
       }
     } catch {
-      if (newCatPin.trim() === "1234") {
-        const catId = newCatLabel.trim().replace(/\s+/g, "_");
-        const newCat = { id: catId, label: newCatLabel.trim() };
-        setCategories([...categories, newCat]);
-        setNewCategory(catId);
-        setShowAddCatModal(false);
-        setNewCatLabel("");
-        setNewCatPin("");
-      } else {
-        setNewCatError("PIN Admin Salah!");
-      }
+      setNewCatError("Gagal menghubungi server untuk verifikasi PIN.");
     } finally {
       setIsSavingCat(false);
     }
@@ -324,6 +314,8 @@ export default function LogbookPage() {
             </table>
           </div>
         </div>
+
+      </main>
 
       {/* Manual QSO Modal */}
       {showAddModal && (
