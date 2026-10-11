@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     # Network Ports
     DMR_MASTER_PORT: int = 62031
     HBLINK_PEER_PORT: int = 62030
-    USRP_AUDIO_PORT: int = 12345
+    USRP_AUDIO_PORT: int = 32345
+    ADMIN_PIN: str = "1234"
     
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./ninjaradio.db"

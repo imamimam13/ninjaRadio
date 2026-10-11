@@ -33,7 +33,9 @@ services:
       # OpenBridge Peering Port (BrandMeister / FreeDMR)
       - "62030:62030/udp"
       # DVSwitch Mobile Android & USRP Audio Port
-      - "12345:12345/udp"
+      - "${USRP_AUDIO_PORT:-32345}:${USRP_AUDIO_PORT:-32345}/udp"
+    environment:
+      - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
     networks:
       - ninjaradio_net
 
@@ -64,10 +66,11 @@ services:
       - MUMBLE_PORT=64738
       - MUMBLE_USER=NinjaRadio-Gateway
       - MUMBLE_PASSWORD=
-      - MUMBLE_CHANNEL=NinjaRadio-Room
+      - MUMBLE_CHANNEL=NinjaRadio-Nasional
+      - MUMBLE_ROOM_MAP=NinjaRadio-Nasional:510,NinjaRadio-Nusantara:5109,NinjaRadio-Darurat:5108,NinjaRadio-Worldwide:91
       - DMR_USRP_HOST=core
-      - DMR_USRP_PORT=12345
-      - TARGET_TG=5109
+      - DMR_USRP_PORT=${USRP_AUDIO_PORT:-32345}
+      - TARGET_TG=510
     depends_on:
       - mumble-server
       - core
@@ -87,6 +90,7 @@ services:
       - SERVER_CALLSIGN=N1NJA
       - SERVER_DMR_ID=5109999
       - DEFAULT_TALKGROUP=510
+      - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/ninjaradio.db
     volumes:
       - ninjaradio_data:/app/data

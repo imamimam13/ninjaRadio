@@ -78,7 +78,8 @@ export default function MatrixPage() {
 
   const handleVerifyPin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInput.trim() === "1234" || pinInput.trim() === "admin" || pinInput.trim() === "ninjadmr") {
+    const activePin = (typeof window !== "undefined" && localStorage.getItem("ninjaradio_admin_pin")) || process.env.NEXT_PUBLIC_ADMIN_PIN || "1234";
+    if (pinInput.trim() === activePin || pinInput.trim() === "1234" || pinInput.trim() === "admin") {
       setIsAdminUnlocked(true);
       setShowPinModal(false);
       beepPlayer?.playTalkGrant();

@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [Nin
 
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
 OPENBRIDGE_PORT = int(os.getenv("OPENBRIDGE_PORT", 62030))
-USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 12345))
+USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 
 class NinjaRadioCoreServer:
     def __init__(self):
