@@ -155,11 +155,25 @@ export default function RadioPocketMode() {
 
   // TalkGroup Active Object State (Locks TG and avoids reverting to 510)
   const [currentTg, setCurrentTg] = useState<RadioTalkgroup>(ALL_TALKGROUPS[0]);
+  const [currentTimeSlot, setCurrentTimeSlot] = useState<1 | 2>(1);
+
+  const toggleTimeSlot = () => {
+    const nextSlot = (currentTimeSlot === 1 ? 2 : 1) as 1 | 2;
+    setCurrentTimeSlot(nextSlot);
+    beepPlayer?.playRogerBeep();
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ninjaradio_locked_ts", String(nextSlot));
+    }
+  };
 
   const tuneToTalkgroup = (tg: RadioTalkgroup) => {
     setCurrentTg(tg);
+    if (tg.slot === 1 || tg.slot === 2) {
+      setCurrentTimeSlot(tg.slot as 1 | 2);
+    }
     if (typeof window !== "undefined") {
       localStorage.setItem("ninjaradio_locked_tg", String(tg.id));
+      localStorage.setItem("ninjaradio_locked_ts", String(tg.slot || 1));
     }
   };
 
@@ -178,19 +192,33 @@ export default function RadioPocketMode() {
         } catch {}
       }
 
+      // Check saved locked TimeSlot
+      const savedTs = localStorage.getItem("ninjaradio_locked_ts");
+      if (savedTs === "1" || savedTs === "2") {
+        setCurrentTimeSlot(Number(savedTs) as 1 | 2);
+      }
+
       // Check saved locked TG first
       const savedTg = localStorage.getItem("ninjaradio_locked_tg");
       if (savedTg) {
         const tgNum = Number(savedTg);
         if (!isNaN(tgNum) && tgNum > 0) {
-          setCurrentTg(resolveTalkgroup(tgNum, initialProf.category));
+          const resolved = resolveTalkgroup(tgNum, initialProf.category);
+          setCurrentTg(resolved);
+          if (!savedTs && (resolved.slot === 1 || resolved.slot === 2)) {
+            setCurrentTimeSlot(resolved.slot as 1 | 2);
+          }
           return;
         }
       }
 
       // Otherwise fall back to profile default TG if exists
       if (initialProf.defaultTg) {
-        setCurrentTg(resolveTalkgroup(initialProf.defaultTg, initialProf.category));
+        const resolved = resolveTalkgroup(initialProf.defaultTg, initialProf.category);
+        setCurrentTg(resolved);
+        if (!savedTs && (resolved.slot === 1 || resolved.slot === 2)) {
+          setCurrentTimeSlot(resolved.slot as 1 | 2);
+        }
       }
     }
   }, []);
@@ -285,7 +313,7 @@ export default function RadioPocketMode() {
           callsign: activeProfile.callsign,
           dmr_id: activeProfile.dmrId,
           tg: targetTgNum,
-          slot: currentTg.slot,
+          slot: currentTimeSlot,
           call_type: callType,
           category: activeProfile.category,
           is_transmitting: true,
@@ -320,7 +348,7 @@ export default function RadioPocketMode() {
           callsign: activeProfile.callsign,
           dmr_id: activeProfile.dmrId,
           tg: targetTgNum,
-          slot: currentTg.slot,
+          slot: currentTimeSlot,
           call_type: callType,
           category: activeProfile.category,
           is_transmitting: false,
@@ -839,7 +867,14 @@ export default function RadioPocketMode() {
                   </span>
                 )}
                 {isVoxEnabled && <span className="bg-emerald-900 text-emerald-300 px-1 rounded text-[8px]">VOX</span>}
-                <span>TS{currentTg.slot}</span>
+                <button
+                  type="button"
+                  onClick={toggleTimeSlot}
+                  className="bg-emerald-950 hover:bg-emerald-900 px-1.5 py-0.2 rounded text-[8px] font-bold text-emerald-300 border border-emerald-800 transition-all cursor-pointer active:scale-95"
+                  title="Klik untuk ganti TimeSlot (TS1 ↔ TS2)"
+                >
+                  TS{currentTimeSlot} ⇄
+                </button>
                 <span className="bg-emerald-950 px-1 rounded text-[8px]">{currentTg.mode}</span>
               </div>
             </div>
@@ -1033,7 +1068,19 @@ export default function RadioPocketMode() {
                 )}
               </div>
               <div className="flex items-center gap-2 font-mono text-[11px]">
-                <span>TS{currentTg.slot}</span>
+                <button
+                  type="button"
+                  onClick={toggleTimeSlot}
+                  className={`px-2 py-0.5 rounded font-mono font-black text-[11px] transition-all flex items-center gap-1 cursor-pointer active:scale-95 border ${
+                    currentTimeSlot === 1
+                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/60 hover:bg-emerald-500/30 shadow-sm"
+                      : "bg-cyan-500/20 text-cyan-300 border-cyan-500/60 hover:bg-cyan-500/30 shadow-sm"
+                  }`}
+                  title="Klik untuk ganti TimeSlot (TS1 ↔ TS2)"
+                >
+                  <span>TS{currentTimeSlot}</span>
+                  <span className="text-[9px] opacity-80">⇄</span>
+                </button>
                 <span className="px-1.5 py-0.2 bg-emerald-950 rounded text-emerald-300">{currentTg.mode}</span>
               </div>
             </div>
