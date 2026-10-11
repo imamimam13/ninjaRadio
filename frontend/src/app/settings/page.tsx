@@ -28,7 +28,8 @@ import {
   Trash2,
   Power,
   X,
-  Copy
+  Copy,
+  Edit2
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -71,9 +72,10 @@ export default function SettingsPage() {
     callsign?: string;
   }>>([]);
   const [showAddPeerModal, setShowAddPeerModal] = useState(false);
+  const [editingPeerId, setEditingPeerId] = useState<string | null>(null);
   const [newPeerName, setNewPeerName] = useState("");
   const [newPeerHost, setNewPeerHost] = useState("");
-  const [newPeerPort, setNewPeerPort] = useState(60231);
+  const [newPeerPort, setNewPeerPort] = useState(62031);
   const [newPeerPassword, setNewPeerPassword] = useState("");
   const [newPeerTgs, setNewPeerTgs] = useState("1025, 1023");
   const [newPeerMode, setNewPeerMode] = useState<"homebrew" | "openbridge">("homebrew");
@@ -140,23 +142,71 @@ export default function SettingsPage() {
     } catch {}
   };
 
+  const handleOpenAddModal = () => {
+    setEditingPeerId(null);
+    setNewPeerName("");
+    setNewPeerHost("");
+    setNewPeerPort(62031);
+    setNewPeerPassword("");
+    setNewPeerTgs("1025, 1023");
+    setNewPeerMode("homebrew");
+    setNewPeerDmrId("");
+    setNewPeerCallsign("");
+    setShowAddPeerModal(true);
+  };
+
+  const handleEditPeer = (peer: typeof peerList[0]) => {
+    setEditingPeerId(peer.id);
+    setNewPeerName(peer.name);
+    setNewPeerHost(peer.host);
+    setNewPeerPort(peer.port || 62031);
+    setNewPeerPassword(peer.password || "");
+    setNewPeerTgs(peer.subscribedTgs || "1025, 1023");
+    setNewPeerMode(peer.mode || "homebrew");
+    setNewPeerDmrId(peer.dmrId ? String(peer.dmrId) : "");
+    setNewPeerCallsign(peer.callsign || "");
+    setShowAddPeerModal(true);
+  };
+
   const handleAddPeer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPeerName.trim() || !newPeerHost.trim()) return;
-    const newPeer = {
-      id: `peer_${Date.now()}`,
-      name: newPeerName.trim(),
-      host: newPeerHost.trim(),
-      port: Number(newPeerPort) || 60231,
-      password: newPeerPassword.trim(),
-      subscribedTgs: newPeerTgs.trim() || "1025, 1023",
-      isActive: true,
-      mode: newPeerMode,
-      dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
-      callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
-    };
-    savePeers([...peerList, newPeer]);
+
+    if (editingPeerId) {
+      const updated = peerList.map((p) =>
+        p.id === editingPeerId
+          ? {
+              ...p,
+              name: newPeerName.trim(),
+              host: newPeerHost.trim(),
+              port: Number(newPeerPort) || 62031,
+              password: newPeerPassword.trim(),
+              subscribedTgs: newPeerTgs.trim() || "1025, 1023",
+              mode: newPeerMode,
+              dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
+              callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
+            }
+          : p
+      );
+      savePeers(updated);
+    } else {
+      const newPeer = {
+        id: `peer_${Date.now()}`,
+        name: newPeerName.trim(),
+        host: newPeerHost.trim(),
+        port: Number(newPeerPort) || 62031,
+        password: newPeerPassword.trim(),
+        subscribedTgs: newPeerTgs.trim() || "1025, 1023",
+        isActive: true,
+        mode: newPeerMode,
+        dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
+        callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
+      };
+      savePeers([...peerList, newPeer]);
+    }
+
     setShowAddPeerModal(false);
+    setEditingPeerId(null);
     setNewPeerName("");
     setNewPeerHost("");
     setNewPeerPassword("");
@@ -624,7 +674,7 @@ export default function SettingsPage() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setShowAddPeerModal(true)}
+                      onClick={handleOpenAddModal}
                       className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white font-mono font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-purple-500/20"
                     >
                       <Plus className="w-3.5 h-3.5" /> Tambah Server Peer
@@ -659,6 +709,14 @@ export default function SettingsPage() {
                         </span>
                         {isAdminUnlocked && (
                           <>
+                            <button
+                              type="button"
+                              onClick={() => handleEditPeer(peer)}
+                              title="Edit Parameter Server Peer"
+                              className="p-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900 text-cyan-400 border border-cyan-800/40"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleTogglePeer(peer.id)}
@@ -1132,13 +1190,17 @@ export default function SettingsPage() {
                   <Globe className="w-5 h-5 text-purple-400" />
                 </div>
                 <div>
-                  <h3 className="font-heading font-black text-sm text-white">Tambah Server Peer OpenBridge</h3>
-                  <p className="text-[11px] font-mono text-slate-400">Hubungkan ke FreeDMR, BM, atau HBLink</p>
+                  <h3 className="font-heading font-black text-sm text-white">
+                    {editingPeerId ? "Edit Konfigurasi Server Peer" : "Tambah Server Peer OpenBridge"}
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400">
+                    {editingPeerId ? "Ubah parameter host, port, password, atau Talkgroup terdaftar" : "Hubungkan ke FreeDMR, BM, atau HBLink"}
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowAddPeerModal(false)}
+                onClick={() => { setShowAddPeerModal(false); setEditingPeerId(null); }}
                 className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
               >
                 <X className="w-4 h-4" />
@@ -1262,7 +1324,7 @@ export default function SettingsPage() {
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddPeerModal(false)}
+                  onClick={() => { setShowAddPeerModal(false); setEditingPeerId(null); }}
                   className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs hover:bg-slate-700"
                 >
                   Batal
@@ -1271,7 +1333,7 @@ export default function SettingsPage() {
                   type="submit"
                   className="flex-1 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white rounded-xl font-black text-xs shadow-lg shadow-purple-500/20"
                 >
-                  Simpan & Tambah Peer
+                  {editingPeerId ? "Simpan Perubahan Peer" : "Simpan & Tambah Peer"}
                 </button>
               </div>
             </form>
