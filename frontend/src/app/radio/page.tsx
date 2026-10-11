@@ -326,7 +326,10 @@ export default function RadioPocketMode() {
   }, []);
 
   useEffect(() => {
-    if (!incomingAudio || !incomingAudio.pcm || isMuted) return;
+    // Half-duplex lockout: Do not play incoming audio while user is transmitting
+    if (!incomingAudio || !incomingAudio.pcm || isMuted || isTransmitting) return;
+    // Suppress self-echo audio
+    if (incomingAudio.src_id && incomingAudio.src_id === activeProfile.dmrId) return;
     try {
       if (!rxAudioCtxRef.current) {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -426,7 +429,11 @@ export default function RadioPocketMode() {
       };
 
       source.connect(processor);
-      processor.connect(ctx.destination);
+      // Mute local output so microphone audio does not play into own speakers while transmitting
+      const muteGain = ctx.createGain();
+      muteGain.gain.value = 0;
+      processor.connect(muteGain);
+      muteGain.connect(ctx.destination);
     } catch (err) {
       console.warn("Could not start Web TX microphone stream:", err);
     }
@@ -467,7 +474,6 @@ export default function RadioPocketMode() {
         return;
       }
 
-      beepPlayer?.playTalkGrant();
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
 
       // Start real microphone audio streaming through USRP & DMR network
@@ -506,7 +512,6 @@ export default function RadioPocketMode() {
       }
     },
     onTransmitEnd: () => {
-      beepPlayer?.playRogerBeep();
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
 
       // Stop real microphone audio streaming

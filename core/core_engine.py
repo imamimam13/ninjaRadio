@@ -160,6 +160,17 @@ class CoreEngineManager:
             raw_packet = traffic_data.get("raw_packet")
             network = traffic_data.get("network", "")
 
+            # Anti-echo suppression: Drop if src_id is our own client DMR ID or server DMR ID
+            client_ids = {c.dmr_id for c in self.active_clients.values()}
+            if self.master_server:
+                client_ids.add(self.master_server.server_dmr_id)
+            if src_id in client_ids:
+                return
+
+            # Anti-echo suppression: Drop if src_id was transmitting locally within the last 1.5s
+            if src_id == getattr(self, "last_tx_src_id", None) and (time.time() - getattr(self, "last_tx_time", 0)) < 1.5:
+                return
+
             # 1. Bi-directional DMR cross-routing between Master Server and External Peers
             if "Local DMR Master" in network:
                 # Arrived from local hotspot -> Forward out to all connected external DMR peers
@@ -230,6 +241,8 @@ class CoreEngineManager:
                     else:
                         payload = data[32:]
                         if key_flag == 1:
+                            self.last_tx_src_id = dmr_id
+                            self.last_tx_time = time.time()
                             # 1. Transmit voice burst to active DMR Master connections
                             for client in self.active_clients.values():
                                 if client.state == "CONNECTED":

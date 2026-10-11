@@ -310,6 +310,11 @@ class HomeBrewClient:
             seq = data[4]
             src_id = int.from_bytes(data[5:8], "big")
             dst_id = int.from_bytes(data[8:11], "big")
+
+            # Self-Echo Suppression: ignore packets reflected back by Master when we are the source
+            if src_id == self.dmr_id:
+                return
+
             bits = data[15]
             slot = 2 if (bits & 0x80) else 1
             call_type = "unit" if (bits & 0x40) else "group"

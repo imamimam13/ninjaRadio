@@ -87,6 +87,15 @@ class ConnectionManager:
             self.active_connections.discard(dead)
 
     async def push_last_heard(self, item: Dict):
+        # Deduplication check: if latest entry is the same DMR ID, talkgroup and slot, update duration rather than duplicating
+        if self.last_heard_history:
+            prev = self.last_heard_history[0]
+            if (prev.get("dmr_id") == item.get("dmr_id") and 
+                prev.get("talkgroup") == item.get("talkgroup") and 
+                prev.get("slot") == item.get("slot")):
+                prev["duration"] = item.get("duration", prev.get("duration"))
+                return
+
         self.last_heard_history.insert(0, item)
         if len(self.last_heard_history) > 100:
             self.last_heard_history.pop()

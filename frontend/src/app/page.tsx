@@ -51,7 +51,7 @@ export default function DashboardPage() {
 
   // Live RX Audio Playback through browser speaker
   useEffect(() => {
-    if (!incomingAudio || !incomingAudio.pcm || isMuted) return;
+    if (!incomingAudio || !incomingAudio.pcm || isMuted || (activeTx as any)?.is_tx) return;
     try {
       if (!rxAudioCtxRef.current) {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
