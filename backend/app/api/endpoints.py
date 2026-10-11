@@ -45,14 +45,13 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
     connected_hotspots = 0
     connected_peers = 0
     try:
-        import aiohttp
-        timeout = aiohttp.ClientTimeout(total=0.5)
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.get("http://core:5000/api/status") as r:
-                if r.status == 200:
-                    cinfo = await r.json()
-                    connected_hotspots = cinfo.get("master_server", {}).get("connected_hotspots", 0)
-                    connected_peers = len([p for p in cinfo.get("peers", []) if p.get("state") == "CONNECTED"])
+        import httpx
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            r = await client.get("http://core:5000/api/status")
+            if r.status_code == 200:
+                cinfo = r.json()
+                connected_hotspots = cinfo.get("master_server", {}).get("connected_hotspots", 0)
+                connected_peers = len([p for p in cinfo.get("peers", []) if p.get("state") == "CONNECTED"])
     except Exception:
         pass
 
@@ -292,15 +291,15 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
 
     # Notify Core DMR engine via HTTP control API
     try:
-        import aiohttp
-        async with aiohttp.ClientSession() as s:
-            await s.post("http://core:5000/api/tx", json={
+        import httpx
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            await client.post("http://core:5000/api/tx", json={
                 "callsign": callsign,
                 "dmr_id": dmr_id,
                 "tg": tg,
                 "slot": slot,
                 "is_transmitting": is_transmitting
-            }, timeout=1.0)
+            })
     except Exception:
         pass
 
@@ -365,7 +364,7 @@ async def run_stream_watchdog():
             now = time.time()
             stale_keys = []
             for stream_key, info in list(ACTIVE_STREAMS.items()):
-                if now - info.get("last_active", 0) > 1.5:
+                if now - info.get("last_active", 0) > 2.0:
                     stale_keys.append((stream_key, info))
 
             for stream_key, info in stale_keys:
@@ -403,7 +402,6 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     src_id = event.get("src_id", 0)
     dst_tg = event.get("dst_tg", 510)
     slot = event.get("slot", 1)
-    stream_id = event.get("stream_id", 0)
     network = event.get("network", "DMR-Network")
     is_tx = event.get("is_tx", False)
 
@@ -412,7 +410,8 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     if data_type is None:
         data_type = event.get("dtype_vseq", 1)
 
-    stream_key = f"{stream_id}" if stream_id else f"{src_id}_{dst_tg}_{slot}"
+    # Consistent session key for this active transmission on this slot
+    stream_key = f"{src_id}_{dst_tg}_{slot}"
 
     # Resolve callsign from database or fallback to Radio ID
     callsign = f"ID-{src_id}"
@@ -560,13 +559,14 @@ async def get_system_config():
     
     # Try querying live Core Engine status
     try:
-        import aiohttp
-        timeout = aiohttp.ClientTimeout(total=2.0)
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.get("http://core:5000/api/status") as r:
-                if r.status == 200:
-                    core_info = await r.json()
-                    cfg["_core_status"] = core_info
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get("http://core:5000/api/status")
+            if r.status_code == 200:
+                core_info = r.json()
+                cfg["_core_status"] = core_info
+            else:
+                cfg["_core_status"] = {"status": "STANDBY", "error": f"Core HTTP {r.status_code}"}
     except Exception as e:
         cfg["_core_status"] = {"status": "STANDBY", "error": str(e)}
 
@@ -583,12 +583,11 @@ async def save_system_config(config: dict):
     # Instruct Core Engine to reload immediately
     core_reloaded = False
     try:
-        import aiohttp
-        timeout = aiohttp.ClientTimeout(total=2.0)
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.post("http://core:5000/api/reload") as r:
-                if r.status == 200:
-                    core_reloaded = True
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.post("http://core:5000/api/reload")
+            if r.status_code == 200:
+                core_reloaded = True
     except Exception:
         pass
 

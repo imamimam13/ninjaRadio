@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
@@ -12,6 +12,7 @@ import {
   Zap, 
   Layers, 
   Volume2, 
+  VolumeX,
   Signal, 
   ShieldCheck, 
   Clock, 
@@ -26,7 +27,73 @@ import {
 } from "lucide-react";
 
 export default function DashboardPage() {
-  const { lastHeard, activeTx, isConnected } = useLiveMonitor();
+  const { lastHeard, activeTx, incomingAudio, isConnected } = useLiveMonitor();
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const rxAudioCtxRef = useRef<AudioContext | null>(null);
+  const rxNextTimeRef = useRef<number>(0);
+
+  // Autoplay Policy: Unlock Web AudioContext on first user interaction
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (rxAudioCtxRef.current && rxAudioCtxRef.current.state === "suspended") {
+        rxAudioCtxRef.current.resume().catch(() => {});
+      }
+    };
+    window.addEventListener("click", unlockAudio);
+    window.addEventListener("touchstart", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+    return () => {
+      window.removeEventListener("click", unlockAudio);
+      window.removeEventListener("touchstart", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, []);
+
+  // Live RX Audio Playback through browser speaker
+  useEffect(() => {
+    if (!incomingAudio || !incomingAudio.pcm || isMuted) return;
+    try {
+      if (!rxAudioCtxRef.current) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        rxAudioCtxRef.current = new AudioCtx();
+      }
+      const ctx = rxAudioCtxRef.current;
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+
+      const binaryStr = atob(incomingAudio.pcm);
+      const len = binaryStr.length;
+      const safeLen = len - (len % 2);
+      if (safeLen < 2) return;
+      const bytes = new Uint8Array(safeLen);
+      for (let i = 0; i < safeLen; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768.0;
+      }
+
+      const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
+      audioBuffer.copyToChannel(float32, 0);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+
+      const now = ctx.currentTime;
+      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
+        rxNextTimeRef.current = now;
+      }
+      source.start(rxNextTimeRef.current);
+      rxNextTimeRef.current += audioBuffer.duration;
+    } catch (e) {
+      console.warn("Dashboard audio playback note:", e);
+    }
+  }, [incomingAudio, isMuted]);
+
   const [filterMode, setFilterMode] = useState<string>("ALL");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedTgFilter, setSelectedTgFilter] = useState<number | null>(null);
@@ -115,6 +182,23 @@ export default function DashboardPage() {
                     <span className="text-xs text-cyan-400 font-mono">
                       SLOT {activeTx.slot}
                     </span>
+                    <button
+                      onClick={() => {
+                        setIsMuted(!isMuted);
+                        if (rxAudioCtxRef.current && rxAudioCtxRef.current.state === "suspended") {
+                          rxAudioCtxRef.current.resume();
+                        }
+                      }}
+                      className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
+                        isMuted 
+                          ? "bg-rose-950/80 border border-rose-500/50 text-rose-300 hover:bg-rose-900" 
+                          : "bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900 shadow-[0_0_10px_rgba(6,182,212,0.3)]"
+                      }`}
+                      title="Klik untuk Mute / Unmute Audio Live RX di Speaker Browser"
+                    >
+                      {isMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />}
+                      <span>{isMuted ? "SPEAKER: MUTE" : "SPEAKER: ON"}</span>
+                    </button>
                   </div>
                   <div className="flex items-baseline gap-3 mt-1.5">
                     <h2 className="text-3xl sm:text-4xl font-heading font-black text-white tracking-wider">
