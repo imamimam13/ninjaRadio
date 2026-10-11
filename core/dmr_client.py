@@ -37,7 +37,7 @@ class HomeBrewClient:
         dmr_id: int,
         callsign: str,
         password: str = "",
-        subscribed_tgs: str = "1025, 1023",
+        subscribed_tgs: str = "",
         on_traffic: Optional[Callable] = None,
         on_status_change: Optional[Callable] = None
     ):
@@ -47,9 +47,35 @@ class HomeBrewClient:
         self.dmr_id = int(dmr_id)
         self.callsign = callsign.upper().strip()
         self.password = password.strip()
-        self.subscribed_tgs = [int(tg.strip()) for tg in subscribed_tgs.split(",") if tg.strip().isdigit()]
-        if not self.subscribed_tgs:
-            self.subscribed_tgs = [1025, 1023]
+        self.raw_tgs_str = str(subscribed_tgs).strip()
+        self.ts1_tgs: List[int] = []
+        self.ts2_tgs: List[int] = []
+
+        # Parse explicit Timeslot notation (e.g. "TS1;1023,TS2;1025", "TS1=1023;TS2=1025", "TS1: 1023, TS2: 1025")
+        import re
+        ts_matches = re.findall(r'(?i)TS([12])\s*[=:;_]\s*([0-9, ]+)', self.raw_tgs_str)
+        if ts_matches:
+            for ts_num, tgs in ts_matches:
+                for tg_part in re.split(r'[,; ]+', tgs):
+                    if tg_part.strip().isdigit():
+                        val = int(tg_part.strip())
+                        if ts_num == "1":
+                            if val not in self.ts1_tgs:
+                                self.ts1_tgs.append(val)
+                        else:
+                            if val not in self.ts2_tgs:
+                                self.ts2_tgs.append(val)
+        else:
+            # Simple list: first TG goes to TS1, second to TS2
+            parts = [int(tg.strip()) for tg in re.split(r'[,; ]+', self.raw_tgs_str) if tg.strip().isdigit()]
+            if len(parts) == 1:
+                self.ts1_tgs.append(parts[0])
+            elif len(parts) >= 2:
+                self.ts1_tgs.append(parts[0])
+                self.ts2_tgs.extend(parts[1:])
+
+        self.subscribed_tgs = list(dict.fromkeys(self.ts1_tgs + self.ts2_tgs))
+        logger.info(f"[{self.name}] Configured Talkgroups: TS1={self.ts1_tgs} | TS2={self.ts2_tgs}")
         
         self.on_traffic = on_traffic
         self.on_status_change = on_status_change
@@ -73,6 +99,8 @@ class HomeBrewClient:
             "dmr_id": self.dmr_id,
             "callsign": self.callsign,
             "state": self.state,
+            "ts1_tgs": self.ts1_tgs,
+            "ts2_tgs": self.ts2_tgs,
             "subscribed_tgs": self.subscribed_tgs,
             "packets_rx": self.packets_rx,
             "packets_tx": self.packets_tx,
@@ -180,10 +208,17 @@ class HomeBrewClient:
         soft_id = "v2.0.0".ljust(10)[:10].encode("utf-8")
         pkg_id = "FreeDMR".ljust(10)[:10].encode("utf-8")
 
-        tg_options = ";".join([f"TS1={tg}" for tg in self.subscribed_tgs]) + ";"
-        if len(self.subscribed_tgs) > 1:
-            tg_options += ";".join([f"TS2={tg}" for tg in self.subscribed_tgs]) + ";"
+        opt_parts = []
+        for i, tg in enumerate(self.ts1_tgs, start=1):
+            opt_parts.append(f"TS1_{i}={tg}")
+            opt_parts.append(f"TS1={tg}")
+        for i, tg in enumerate(self.ts2_tgs, start=1):
+            opt_parts.append(f"TS2_{i}={tg}")
+            opt_parts.append(f"TS2={tg}")
+
+        tg_options = ";".join(opt_parts) + ";"
         options_bytes = f"OPTIONS:{tg_options}".encode("utf-8")
+        logger.info(f"[{self.name}] Configured RPTC Options: {tg_options} (TS1: {self.ts1_tgs}, TS2: {self.ts2_tgs})")
 
         config_data = (
             callsign_bytes + rx_freq + tx_freq + tx_pwr + color_code +
@@ -195,7 +230,7 @@ class HomeBrewClient:
         self.sock.sendto(packet, self.target_addr)
         self.packets_tx += 1
         self._set_state("CONNECTED")
-        logger.info(f"[{self.name}] ✓ Successfully connected & subscribed to TGs {self.subscribed_tgs} on {self.host}:{self.port}!")
+        logger.info(f"[{self.name}] ✓ Successfully connected! TS1: {self.ts1_tgs} | TS2: {self.ts2_tgs} on {self.host}:{self.port}")
 
     async def _ping_worker(self):
         """Periodically pings the Master to maintain keepalive or retries login."""

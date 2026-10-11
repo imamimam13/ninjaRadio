@@ -105,7 +105,7 @@ class CoreEngineManager:
                 host = p.get("host")
                 port = int(p.get("port", 60231))
                 password = p.get("password", "")
-                tgs = p.get("subscribedTgs", "1025, 1023")
+                tgs = p.get("subscribedTgs", "")
                 callsign = p.get("callsign") or self.config.get("server_callsign", "N1NJA")
                 dmr_id = int(p.get("dmr_id") or self.config.get("server_dmr_id", 5109999))
 

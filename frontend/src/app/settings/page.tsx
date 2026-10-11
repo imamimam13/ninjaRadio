@@ -77,7 +77,7 @@ export default function SettingsPage() {
   const [newPeerHost, setNewPeerHost] = useState("");
   const [newPeerPort, setNewPeerPort] = useState(62031);
   const [newPeerPassword, setNewPeerPassword] = useState("");
-  const [newPeerTgs, setNewPeerTgs] = useState("1025, 1023");
+  const [newPeerTgs, setNewPeerTgs] = useState("");
   const [newPeerMode, setNewPeerMode] = useState<"homebrew" | "openbridge">("homebrew");
   const [newPeerDmrId, setNewPeerDmrId] = useState("");
   const [newPeerCallsign, setNewPeerCallsign] = useState("");
@@ -148,7 +148,7 @@ export default function SettingsPage() {
     setNewPeerHost("");
     setNewPeerPort(62031);
     setNewPeerPassword("");
-    setNewPeerTgs("1025, 1023");
+    setNewPeerTgs("");
     setNewPeerMode("homebrew");
     setNewPeerDmrId("");
     setNewPeerCallsign("");
@@ -161,7 +161,7 @@ export default function SettingsPage() {
     setNewPeerHost(peer.host);
     setNewPeerPort(peer.port || 62031);
     setNewPeerPassword(peer.password || "");
-    setNewPeerTgs(peer.subscribedTgs || "1025, 1023");
+    setNewPeerTgs(peer.subscribedTgs || "");
     setNewPeerMode(peer.mode || "homebrew");
     setNewPeerDmrId(peer.dmrId ? String(peer.dmrId) : "");
     setNewPeerCallsign(peer.callsign || "");
@@ -181,7 +181,7 @@ export default function SettingsPage() {
               host: newPeerHost.trim(),
               port: Number(newPeerPort) || 62031,
               password: newPeerPassword.trim(),
-              subscribedTgs: newPeerTgs.trim() || "1025, 1023",
+              subscribedTgs: newPeerTgs.trim(),
               mode: newPeerMode,
               dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
               callsign: newPeerCallsign ? newPeerCallsign.toUpperCase().trim() : undefined,
@@ -196,7 +196,7 @@ export default function SettingsPage() {
         host: newPeerHost.trim(),
         port: Number(newPeerPort) || 62031,
         password: newPeerPassword.trim(),
-        subscribedTgs: newPeerTgs.trim() || "1025, 1023",
+        subscribedTgs: newPeerTgs.trim(),
         isActive: true,
         mode: newPeerMode,
         dmrId: newPeerDmrId ? Number(newPeerDmrId) : undefined,
@@ -278,6 +278,7 @@ export default function SettingsPage() {
     },
   ]);
   const [showAddMumbleModal, setShowAddMumbleModal] = useState(false);
+  const [editingMumbleRoomId, setEditingMumbleRoomId] = useState<string | null>(null);
   const [newRoomName, setNewRoomName] = useState("");
   const [newRoomTg, setNewRoomTg] = useState(510);
   const [newRoomDesc, setNewRoomDesc] = useState("");
@@ -302,18 +303,51 @@ export default function SettingsPage() {
     }
   };
 
+  const handleOpenAddMumbleModal = () => {
+    setEditingMumbleRoomId(null);
+    setNewRoomName("");
+    setNewRoomTg(510);
+    setNewRoomDesc("");
+    setShowAddMumbleModal(true);
+  };
+
+  const handleEditMumbleRoom = (room: MumbleRoomBridge) => {
+    setEditingMumbleRoomId(room.id);
+    setNewRoomName(room.name);
+    setNewRoomTg(room.targetTg);
+    setNewRoomDesc(room.description || "");
+    setShowAddMumbleModal(true);
+  };
+
   const handleAddMumbleRoom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomName.trim()) return;
-    const newRoom: MumbleRoomBridge = {
-      id: `mroom_${Date.now()}`,
-      name: newRoomName.trim(),
-      targetTg: Number(newRoomTg) || 510,
-      description: newRoomDesc.trim() || "Mumble Room Bridge",
-      isActive: true,
-    };
-    saveMumbleRooms([...mumbleRooms, newRoom]);
+
+    if (editingMumbleRoomId) {
+      const updated = mumbleRooms.map((r) =>
+        r.id === editingMumbleRoomId
+          ? {
+              ...r,
+              name: newRoomName.trim(),
+              targetTg: Number(newRoomTg) || 510,
+              description: newRoomDesc.trim() || "Mumble Room Bridge",
+            }
+          : r
+      );
+      saveMumbleRooms(updated);
+    } else {
+      const newRoom: MumbleRoomBridge = {
+        id: `mroom_${Date.now()}`,
+        name: newRoomName.trim(),
+        targetTg: Number(newRoomTg) || 510,
+        description: newRoomDesc.trim() || "Mumble Room Bridge",
+        isActive: true,
+      };
+      saveMumbleRooms([...mumbleRooms, newRoom]);
+    }
+
     setShowAddMumbleModal(false);
+    setEditingMumbleRoomId(null);
     setNewRoomName("");
     setNewRoomDesc("");
     beepPlayer?.playTalkGrant();
@@ -778,11 +812,37 @@ export default function SettingsPage() {
                       <div className="pt-1.5 border-t border-slate-800">
                         <span className="text-slate-500 block mb-1">Subscribed Talkgroups:</span>
                         <div className="flex flex-wrap gap-1">
-                          {peer.subscribedTgs.split(",").map((tg, i) => (
-                            <span key={i} className="px-1.5 py-0.5 rounded bg-cyan-950/70 border border-cyan-800/60 text-cyan-300 font-bold text-[10px]">
-                              TG {tg.trim()}
-                            </span>
-                          ))}
+                          {(() => {
+                            const raw = (peer.subscribedTgs || "").trim();
+                            if (!raw) return <span className="text-[10px] text-slate-500 italic">Semua TG (Dynamic / Pass-through)</span>;
+
+                            const tsRegex = /TS([12])\s*[=:;_]\s*([0-9, ]+)/gi;
+                            const matches = [...raw.matchAll(tsRegex)];
+                            if (matches.length > 0) {
+                              return matches.map((m, mIdx) => {
+                                const slot = m[1];
+                                const tgs = m[2].split(/[,; ]+/).filter(Boolean);
+                                return tgs.map((tg, tIdx) => (
+                                  <span
+                                    key={`${mIdx}-${tIdx}`}
+                                    className={`px-1.5 py-0.5 rounded font-bold text-[10px] border ${
+                                      slot === "1"
+                                        ? "bg-cyan-950/80 border-cyan-700/60 text-cyan-300"
+                                        : "bg-purple-950/80 border-purple-700/60 text-purple-300"
+                                    }`}
+                                  >
+                                    TS{slot}: TG {tg.trim()}
+                                  </span>
+                                ));
+                              });
+                            }
+
+                            return raw.split(/[,; ]+/).filter(Boolean).map((tg, i) => (
+                              <span key={i} className="px-1.5 py-0.5 rounded bg-cyan-950/70 border border-cyan-800/60 text-cyan-300 font-bold text-[10px]">
+                                TG {tg.trim()}
+                              </span>
+                            ));
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -893,7 +953,7 @@ export default function SettingsPage() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setShowAddMumbleModal(true)}
+                      onClick={handleOpenAddMumbleModal}
                       className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-mono font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
                     >
                       <Plus className="w-3.5 h-3.5" /> Tambah Room Mumble
@@ -969,6 +1029,14 @@ export default function SettingsPage() {
                           </span>
                           {isAdminUnlocked && (
                             <>
+                              <button
+                                type="button"
+                                onClick={() => handleEditMumbleRoom(room)}
+                                title="Edit Channel Mumble & Talkgroup"
+                                className="p-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900 text-cyan-400 border border-cyan-800/40"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => handleToggleMumbleRoom(room.id)}
@@ -1309,16 +1377,20 @@ export default function SettingsPage() {
               </div>
 
               <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Subscribed Talkgroups (Pisahkan Koma)</label>
+                <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                  <span>Subscribed Talkgroups</span>
+                  <span className="text-[10px] text-purple-400">Dukungan: TS1;xxxx, TS2;xxxx</span>
+                </label>
                 <input
                   type="text"
-                  required
-                  placeholder="Contoh: 1025, 1023, 510"
+                  placeholder="Contoh: TS1;1023, TS2;1025 atau TS1=1023; TS2=1025"
                   value={newPeerTgs}
                   onChange={(e) => setNewPeerTgs(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none"
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none font-mono"
                 />
-                <p className="text-[10px] text-slate-500 mt-1">Daftar TG yang akan didengarkan dan di-stream bolak-balik dengan server ini.</p>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Ketik <strong className="text-cyan-300 font-mono">TS1;xxxx</strong> dan <strong className="text-purple-300 font-mono">TS2;xxxx</strong> untuk menetapkan nomor TG ke masing-masing Timeslot secara presisi agar tidak tertukar di server DMR.
+                </p>
               </div>
 
               <div className="flex gap-2 pt-2">
@@ -1351,13 +1423,17 @@ export default function SettingsPage() {
                   <Radio className="w-5 h-5 text-emerald-400" />
                 </div>
                 <div>
-                  <h3 className="font-heading font-black text-sm text-white">Tambah Saluran / Room Mumble</h3>
-                  <p className="text-[11px] font-mono text-slate-400">Hubungkan room Mumla ke Talkgroup DMR</p>
+                  <h3 className="font-heading font-black text-sm text-white">
+                    {editingMumbleRoomId ? "Edit Channel Mumble & Talkgroup" : "Tambah Saluran / Room Mumble"}
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400">
+                    {editingMumbleRoomId ? "Ubah nama room atau nomor Talkgroup DMR yang di-bridge" : "Hubungkan room Mumla ke Talkgroup DMR"}
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowAddMumbleModal(false)}
+                onClick={() => { setShowAddMumbleModal(false); setEditingMumbleRoomId(null); }}
                 className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
               >
                 <X className="w-4 h-4" />
@@ -1405,7 +1481,7 @@ export default function SettingsPage() {
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddMumbleModal(false)}
+                  onClick={() => { setShowAddMumbleModal(false); setEditingMumbleRoomId(null); }}
                   className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs hover:bg-slate-700"
                 >
                   Batal
@@ -1414,7 +1490,7 @@ export default function SettingsPage() {
                   type="submit"
                   className="flex-1 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 rounded-xl font-black text-xs shadow-lg shadow-emerald-500/20"
                 >
-                  Simpan & Buat Room
+                  {editingMumbleRoomId ? "Simpan Perubahan Room" : "Simpan & Buat Room"}
                 </button>
               </div>
             </form>
