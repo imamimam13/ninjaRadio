@@ -691,10 +691,13 @@ export default function SettingsPage() {
                       </div>
                       {/* Live Core Connection Status */}
                       {(() => {
-                        const live = coreStatus?.peers?.find((p: any) => p.host === peer.host && Number(p.port) === Number(peer.port)) ||
-                                     coreStatus?.peers?.find((p: any) => p.name === peer.name);
+                        const live = coreStatus?.peers?.find((p: any) => 
+                          (p.host?.toLowerCase().trim() === peer.host?.toLowerCase().trim() && Number(p.port) === Number(peer.port)) ||
+                          (p.name?.toLowerCase().trim() === peer.name?.toLowerCase().trim())
+                        );
                         const isConnected = live?.state === "CONNECTED";
-                        const isHandshaking = live?.state === "LOGIN_SENT" || live?.state === "KEY_SENT" || live?.state === "LOGGING_IN";
+                        const isHandshaking = live?.state === "LOGIN_SENT" || live?.state === "KEY_SENT" || live?.state === "LOGGING_IN" || live?.state === "RESOLVING";
+                        const isAuthFailed = live?.state === "AUTH_FAILED";
                         return (
                           <div className="flex items-center justify-between pt-1 border-t border-slate-800 text-[10px]">
                             <span>Status DMR Engine:</span>
@@ -703,6 +706,8 @@ export default function SettingsPage() {
                                 ? "bg-emerald-950 text-emerald-300 border border-emerald-700 shadow-sm"
                                 : isHandshaking
                                 ? "bg-amber-950 text-amber-300 border border-amber-700 animate-pulse"
+                                : isAuthFailed
+                                ? "bg-red-950 text-red-400 border border-red-700 animate-pulse"
                                 : peer.isActive
                                 ? "bg-rose-950 text-rose-300 border border-rose-800"
                                 : "bg-slate-900 text-slate-500"

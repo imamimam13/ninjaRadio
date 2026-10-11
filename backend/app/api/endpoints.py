@@ -438,13 +438,14 @@ async def get_system_config():
     # Try querying live Core Engine status
     try:
         import aiohttp
-        async with aiohttp.ClientSession() as s:
-            async with s.get("http://core:5000/api/status", timeout=1.5) as r:
+        timeout = aiohttp.ClientTimeout(total=2.0)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get("http://core:5000/api/status") as r:
                 if r.status == 200:
                     core_info = await r.json()
                     cfg["_core_status"] = core_info
-    except Exception:
-        cfg["_core_status"] = {"status": "STANDBY"}
+    except Exception as e:
+        cfg["_core_status"] = {"status": "STANDBY", "error": str(e)}
 
     return cfg
 
@@ -460,8 +461,9 @@ async def save_system_config(config: dict):
     core_reloaded = False
     try:
         import aiohttp
-        async with aiohttp.ClientSession() as s:
-            async with s.post("http://core:5000/api/reload", timeout=2.0) as r:
+        timeout = aiohttp.ClientTimeout(total=2.0)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.post("http://core:5000/api/reload") as r:
                 if r.status == 200:
                     core_reloaded = True
     except Exception:
