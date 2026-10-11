@@ -2053,6 +2053,9 @@ export default function RadioPocketMode() {
             )}
 
           </div>
+        </div>
+      )}
+
       {/* MODAL: PTT PHYSICAL BUTTON & TRIGGER MODE SETTINGS */}
       {showPttSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
