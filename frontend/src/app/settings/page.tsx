@@ -774,6 +774,43 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              {/* LIVE CORE ENGINE STATUS BANNER */}
+              <div className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono transition-all ${
+                coreStatus?.status === "ONLINE"
+                  ? "bg-emerald-950/20 border-emerald-500/30 text-emerald-300"
+                  : "bg-rose-950/30 border-rose-500/40 text-rose-300"
+              }`}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-3.5 h-3.5 rounded-full flex-shrink-0 ${
+                    coreStatus?.status === "ONLINE" ? "bg-emerald-400 animate-pulse shadow-md shadow-emerald-400/50" : "bg-rose-500 animate-ping"
+                  }`} />
+                  <div>
+                    <div className="font-bold flex items-center gap-2">
+                      <span className="text-white">Status DMR Core Engine:</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-black tracking-wider ${
+                        coreStatus?.status === "ONLINE"
+                          ? "bg-emerald-900/80 text-emerald-200 border border-emerald-600"
+                          : "bg-rose-900/80 text-rose-200 border border-rose-600"
+                      }`}>
+                        {coreStatus?.status === "ONLINE" ? "ONLINE (BERJALAN)" : "OFFLINE / TIDAK TERHUBUNG"}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {coreStatus?.status === "ONLINE"
+                        ? `Port Internal 5000 Aktif • Master Server: UDP ${coreStatus?.master_server?.port || 62031} (${coreStatus?.master_server?.connected_hotspots || 0} Hotspot Terhubung) • USRP: UDP 32345`
+                        : `Peringatan: ${coreStatus?.error || "Container core tidak merespons di port 5000. Periksa container dengan: docker compose up -d core"}`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-[10px] flex-shrink-0 bg-[#05080f] px-3 py-1.5 rounded-xl border border-slate-800">
+                  <span className="text-slate-400">Peer Terhubung:</span>
+                  <span className="font-bold text-white font-mono">
+                    {coreStatus?.peers?.filter((p: any) => p.state === "CONNECTED").length || 0} / {peerList.length}
+                  </span>
+                </div>
+              </div>
+
               {/* Grid of Peer Server Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 {peerList.map((peer) => (
@@ -840,6 +877,18 @@ export default function SettingsPage() {
                       </div>
                       {/* Live Core Connection Status */}
                       {(() => {
+                        const isCoreOnline = coreStatus?.status === "ONLINE";
+                        if (!isCoreOnline) {
+                          return (
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-800 text-[10px]">
+                              <span>Status DMR Engine:</span>
+                              <span className="px-2 py-0.5 rounded font-bold uppercase tracking-wider bg-rose-950 text-rose-400 border border-rose-800">
+                                🔴 CORE OFFLINE
+                              </span>
+                            </div>
+                          );
+                        }
+
                         const live = coreStatus?.peers?.find((p: any) => 
                           (p.host?.toLowerCase().trim() === peer.host?.toLowerCase().trim() && Number(p.port) === Number(peer.port)) ||
                           (p.name?.toLowerCase().trim() === peer.name?.toLowerCase().trim())
@@ -858,10 +907,10 @@ export default function SettingsPage() {
                                 : isAuthFailed
                                 ? "bg-red-950 text-red-400 border border-red-700 animate-pulse"
                                 : peer.isActive
-                                ? "bg-rose-950 text-rose-300 border border-rose-800"
+                                ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
                                 : "bg-slate-900 text-slate-500"
                             }`}>
-                              {live ? `${live.state} (RX: ${live.packets_rx || 0})` : (peer.isActive ? "CONNECTING..." : "NONAKTIF")}
+                              {live ? `${live.state} (RX: ${live.packets_rx || 0})` : (peer.isActive ? "INITIALIZING..." : "NONAKTIF")}
                             </span>
                           </div>
                         );
