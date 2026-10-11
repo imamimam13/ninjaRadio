@@ -32,6 +32,7 @@ export interface ActiveTransmission {
   category: string;
   rssi: string;
   ber: string;
+  loss?: string;
   started_at: string;
 }
 

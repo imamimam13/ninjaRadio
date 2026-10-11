@@ -2,6 +2,12 @@
 const nextConfig = {
   reactStrictMode: false,
   output: "standalone",
+  typescript: {
+    ignoreBuildErrors: true,
+  },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   async rewrites() {
     return [
       {

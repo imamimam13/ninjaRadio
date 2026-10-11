@@ -99,7 +99,7 @@ export default function DashboardPage() {
                     <span>•</span>
                     <span>RSSI: <strong className="text-emerald-300 font-bold">{activeTx.rssi}</strong></span>
                     <span>•</span>
-                    <span>LOSS: <strong className="text-emerald-300 font-bold">{activeTx.loss}</strong></span>
+                    <span>LOSS: <strong className="text-emerald-300 font-bold">{activeTx.loss || "0.0%"}</strong></span>
                   </div>
                 </div>
               </div>
