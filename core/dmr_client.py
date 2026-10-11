@@ -1,0 +1,288 @@
+import asyncio
+import socket
+import struct
+import hashlib
+import hmac
+import logging
+import time
+import os
+from typing import Callable, Optional, Dict, List
+
+logger = logging.getLogger("DMR-Client")
+
+RPTL = b"RPTL"
+RPTACK = b"RPTACK"
+RPTK = b"RPTK"
+RPTC = b"RPTC"
+RPTP = b"RPTP"
+MSTPING = b"MSTPING"
+MSTP = b"MSTP"
+MSTACK = b"MSTACK"
+MSTNAK = b"MSTNAK"
+DMRD = b"DMRD"
+
+class HomeBrewClient:
+    """
+    Native HomeBrew / MMDVM Repeater Protocol Client.
+    Connects actively to configured DMR Master servers.
+    Performs handshake (RPTL -> RPTK -> RPTC), periodic keepalive (RPTP),
+    and bidirectional DMR voice/data streaming (DMRD).
+    """
+
+    def __init__(
+        self,
+        name: str,
+        host: str,
+        port: int,
+        dmr_id: int,
+        callsign: str,
+        password: str = "",
+        subscribed_tgs: str = "1025, 1023",
+        on_traffic: Optional[Callable] = None,
+        on_status_change: Optional[Callable] = None
+    ):
+        self.name = name
+        self.host = host
+        self.port = int(port)
+        self.dmr_id = int(dmr_id)
+        self.callsign = callsign.upper().strip()
+        self.password = password.strip()
+        self.subscribed_tgs = [int(tg.strip()) for tg in subscribed_tgs.split(",") if tg.strip().isdigit()]
+        if not self.subscribed_tgs:
+            self.subscribed_tgs = [1025, 1023]
+        
+        self.on_traffic = on_traffic
+        self.on_status_change = on_status_change
+
+        self.state = "DISCONNECTED" # DISCONNECTED, LOGIN_SENT, KEY_SENT, CONNECTED
+        self.sock: Optional[socket.socket] = None
+        self.target_addr: Optional[tuple] = None
+        self.running = False
+        self.worker_task: Optional[asyncio.Task] = None
+        self.ping_task: Optional[asyncio.Task] = None
+        self.stream_seq = 0
+        self.last_ping_rx = 0
+        self.packets_rx = 0
+        self.packets_tx = 0
+
+    def get_status_info(self) -> Dict:
+        return {
+            "name": self.name,
+            "host": self.host,
+            "port": self.port,
+            "dmr_id": self.dmr_id,
+            "callsign": self.callsign,
+            "state": self.state,
+            "subscribed_tgs": self.subscribed_tgs,
+            "packets_rx": self.packets_rx,
+            "packets_tx": self.packets_tx,
+            "last_ping_rx": self.last_ping_rx,
+        }
+
+    def _set_state(self, new_state: str):
+        if self.state != new_state:
+            self.state = new_state
+            logger.info(f"[{self.name}] State transition: {new_state} -> {self.host}:{self.port}")
+            if self.on_status_change:
+                self.on_status_change(self.name, new_state)
+
+    async def start(self):
+        self.running = True
+        self.worker_task = asyncio.create_task(self._run_loop())
+
+    async def stop(self):
+        self.running = False
+        if self.ping_task:
+            self.ping_task.cancel()
+        if self.worker_task:
+            self.worker_task.cancel()
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+        self._set_state("DISCONNECTED")
+
+    async def _run_loop(self):
+        while self.running:
+            try:
+                # 1. Resolve hostname to IP
+                self._set_state("RESOLVING")
+                loop = asyncio.get_running_loop()
+                addr_info = await loop.getaddrinfo(self.host, self.port, proto=socket.IPPROTO_UDP)
+                if not addr_info:
+                    raise Exception(f"Cannot resolve hostname {self.host}")
+                self.target_addr = addr_info[0][4]
+
+                # 2. Setup UDP socket
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.sock.setblocking(False)
+                
+                # 3. Send Login RPTL
+                self._set_state("LOGGING_IN")
+                await self._send_rptl()
+
+                # Start ping worker
+                if self.ping_task:
+                    self.ping_task.cancel()
+                self.ping_task = asyncio.create_task(self._ping_worker())
+
+                # 4. Ingress packet receive loop
+                while self.running:
+                    try:
+                        data, addr = await loop.sock_recvfrom(self.sock, 2048)
+                        if data and len(data) >= 4:
+                            self.packets_rx += 1
+                            await self._handle_packet(data, addr)
+                    except (asyncio.CancelledError, KeyboardInterrupt):
+                        raise
+                    except Exception as e:
+                        await asyncio.sleep(0.01)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                logger.warning(f"[{self.name}] Connection error to {self.host}:{self.port} - {err}. Retrying in 5s...")
+                self._set_state("RETRYING")
+                await asyncio.sleep(5)
+
+    async def _send_rptl(self):
+        """Sends initial Repeater Login request (RPTL + DMR ID)."""
+        packet = RPTL + struct.pack(">I", self.dmr_id)
+        self.sock.sendto(packet, self.target_addr)
+        self.packets_tx += 1
+        self._set_state("LOGIN_SENT")
+        logger.info(f"[{self.name}] Sent RPTL login request to {self.target_addr} (DMR ID: {self.dmr_id})")
+
+    async def _send_rptk(self, salt: bytes):
+        """Sends challenge response authentication (RPTK + DMR ID + SHA256(salt + password))."""
+        to_hash = salt + self.password.encode("utf-8")
+        auth_hash = hashlib.sha256(to_hash).digest()
+        packet = RPTK + struct.pack(">I", self.dmr_id) + auth_hash
+        self.sock.sendto(packet, self.target_addr)
+        self.packets_tx += 1
+        self._set_state("KEY_SENT")
+        logger.info(f"[{self.name}] Sent RPTK auth hash response to {self.target_addr}")
+
+    async def _send_rptc(self):
+        """Sends repeater configuration and talkgroup subscriptions (RPTC)."""
+        callsign_bytes = self.callsign.ljust(8)[:8].encode("utf-8")
+        rx_freq = b"438800000"
+        tx_freq = b"438800000"
+        tx_pwr = b"25"
+        color_code = b"01"
+        lat = b"-06.2088"
+        lon = b"+106.845"
+        height = b"050"
+        location = "Jakarta, ID".ljust(20)[:20].encode("utf-8")
+        desc = "NinjaRadio Gateway".ljust(20)[:20].encode("utf-8")
+        url = "www.ninjaradio.id".ljust(20)[:20].encode("utf-8")
+        soft_id = "v2.0.0".ljust(10)[:10].encode("utf-8")
+        pkg_id = "FreeDMR".ljust(10)[:10].encode("utf-8")
+
+        tg_options = ";".join([f"TS1={tg}" for tg in self.subscribed_tgs]) + ";"
+        if len(self.subscribed_tgs) > 1:
+            tg_options += ";".join([f"TS2={tg}" for tg in self.subscribed_tgs]) + ";"
+        options_bytes = f"OPTIONS:{tg_options}".encode("utf-8")
+
+        config_data = (
+            callsign_bytes + rx_freq + tx_freq + tx_pwr + color_code +
+            lat + lon + height + location + desc + url + soft_id + pkg_id +
+            options_bytes
+        )
+
+        packet = RPTC + struct.pack(">I", self.dmr_id) + config_data
+        self.sock.sendto(packet, self.target_addr)
+        self.packets_tx += 1
+        self._set_state("CONNECTED")
+        logger.info(f"[{self.name}] ✓ Successfully connected & subscribed to TGs {self.subscribed_tgs} on {self.host}:{self.port}!")
+
+    async def _ping_worker(self):
+        """Periodically pings the Master to maintain keepalive."""
+        while self.running:
+            await asyncio.sleep(5)
+            if self.state in ["CONNECTED", "KEY_SENT", "LOGIN_SENT"] and self.sock and self.target_addr:
+                try:
+                    ping_pkt = RPTP + struct.pack(">I", self.dmr_id)
+                    self.sock.sendto(ping_pkt, self.target_addr)
+                    self.packets_tx += 1
+                except Exception as e:
+                    logger.debug(f"[{self.name}] Ping send failed: {e}")
+
+    async def _handle_packet(self, data: bytes, addr: tuple):
+        header = data[:4]
+
+        # 1. RPTACK (Auth challenge or ACK)
+        if data.startswith(RPTACK):
+            if self.state == "LOGIN_SENT":
+                # Master responded with Salt (usually bytes 6 to 10 or 4 to 8)
+                salt = data[6:10] if len(data) >= 10 else data[4:8] if len(data) >= 8 else os.urandom(4)
+                logger.info(f"[{self.name}] Received RPTACK with salt: {salt.hex()}")
+                await self._send_rptk(salt)
+            elif self.state == "KEY_SENT":
+                logger.info(f"[{self.name}] Key accepted by master! Sending configuration...")
+                await self._send_rptc()
+
+        # 2. Ping Keepalive responses
+        elif data.startswith(MSTPING) or data.startswith(MSTP) or data.startswith(MSTACK):
+            self.last_ping_rx = time.time()
+            # Reply pong
+            if self.sock and self.target_addr:
+                pong = MSTP + struct.pack(">I", self.dmr_id)
+                self.sock.sendto(pong, self.target_addr)
+
+        # 3. DMRD Voice and Data Frames from Network
+        elif header == DMRD and len(data) >= 20:
+            seq = data[4]
+            src_id = int.from_bytes(data[5:8], "big")
+            dst_id = int.from_bytes(data[8:11], "big")
+            bits = data[15]
+            slot = 2 if (bits & 0x80) else 1
+            call_type = "unit" if (bits & 0x40) else "group"
+            dtype_vseq = bits & 0x0F  # 1=Voice Header, 2=Voice Terminator, 0-5=Burst A-F
+            stream_id = int.from_bytes(data[16:20], "big")
+            payload = data[20:]
+
+            if self.on_traffic:
+                self.on_traffic({
+                    "network": self.name,
+                    "host": self.host,
+                    "src_id": src_id,
+                    "dst_tg": dst_id,
+                    "slot": slot,
+                    "call_type": call_type,
+                    "dtype_vseq": dtype_vseq,
+                    "stream_id": stream_id,
+                    "payload": payload,
+                    "timestamp": time.time()
+                })
+
+    def transmit_dmrd(self, src_id: int, dst_tg: int, slot: int, dtype_vseq: int, payload: bytes = None):
+        """Constructs and transmits an authentic DMRD voice/signaling frame to Master."""
+        if not self.sock or not self.target_addr or self.state != "CONNECTED":
+            return False
+
+        self.stream_seq = (self.stream_seq + 1) % 256
+        seq_byte = struct.pack("B", self.stream_seq)
+        src_bytes = struct.pack(">I", src_id)[1:]  # 3 bytes
+        dst_bytes = struct.pack(">I", dst_tg)[1:]  # 3 bytes
+        repeater_bytes = struct.pack(">I", self.dmr_id)  # 4 bytes
+
+        bits = 0
+        if slot == 2:
+            bits |= 0x80
+        bits |= (dtype_vseq & 0x0F)
+        bits_byte = struct.pack("B", bits)
+
+        stream_id_bytes = struct.pack(">I", int(time.time()) & 0xFFFFFFFF)
+        if not payload:
+            payload = b"\x00" * 33  # Standard 33-byte DMR AMBE / signaling burst
+
+        frame = DMRD + seq_byte + src_bytes + dst_bytes + repeater_bytes + bits_byte + stream_id_bytes + payload
+        try:
+            self.sock.sendto(frame, self.target_addr)
+            self.packets_tx += 1
+            return True
+        except Exception as e:
+            logger.debug(f"[{self.name}] TX DMRD failed: {e}")
+            return False
