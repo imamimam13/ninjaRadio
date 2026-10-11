@@ -1,0 +1,35 @@
+# NinjaRadio Automatic Reverse Proxy with Zero-Config HTTPS / SSL
+
+{
+    # Optional Admin API configuration
+    admin off
+}
+
+# {$DOMAIN:localhost} will use the DOMAIN env variable, defaulting to localhost if unset
+{$DOMAIN:localhost} {
+    # Compress web traffic
+    encode gzip zstd
+
+    # Backend API endpoints
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # Live Real-time WebSocket Stream for Last Heard Feed & PTT Telemetry
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+
+    # Interactive API Documentation
+    handle /docs* {
+        reverse_proxy backend:8000
+    }
+    handle /openapi.json {
+        reverse_proxy backend:8000
+    }
+
+    # Next.js 14 Responsive PWA Frontend (Desktop & Mobile Radio Saku)
+    handle {
+        reverse_proxy frontend:3000
+    }
+}

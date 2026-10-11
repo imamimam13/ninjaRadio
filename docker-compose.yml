@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # 0. Automatic SSL/HTTPS Reverse Proxy (Caddy v2 with Let's Encrypt / sslip.io support)
+  proxy:
+    image: caddy:2-alpine
+    container_name: ninjaradio_proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3 QUIC support
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - ninjaradio_net
+
+  # 1. Radio DV Core Engine (FreeDMR Protocol + DVSwitch USRP Ports)
+  core:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: ninjaradio_core
+    restart: unless-stopped
+    ports:
+      # DMR Hotspot MMDVM Port (Pi-Star / OpenGD77)
+      - "62031:62031/udp"
+      # OpenBridge Peering Port (BrandMeister / FreeDMR)
+      - "62030:62030/udp"
+      # DVSwitch Mobile Android & USRP Audio Port
+      - "12345:12345/udp"
+    networks:
+      - ninjaradio_net
+
+  # 2. Built-in Lightweight Mumble Server (Murmur Protocol)
+  mumble-server:
+    image: mumblevoip/mumble-server:latest
+    container_name: ninjaradio_mumble
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+    environment:
+      - MUMBLE_SUPERUSER_PASSWORD=ninjaradio_admin
+    volumes:
+      - mumble_data:/data
+    networks:
+      - ninjaradio_net
+
+  # 3. Mumble VoIP <--> DMR USRP Audio Bridge Bot
+  mumble-bridge:
+    build:
+      context: ./bridge-mumble
+      dockerfile: Dockerfile
+    container_name: ninjaradio_mumble_bridge
+    restart: unless-stopped
+    environment:
+      - MUMBLE_HOST=mumble-server
+      - MUMBLE_PORT=64738
+      - MUMBLE_USER=NinjaRadio-Gateway
+      - MUMBLE_PASSWORD=
+      - MUMBLE_CHANNEL=NinjaRadio-Room
+      - DMR_USRP_HOST=core
+      - DMR_USRP_PORT=12345
+      - TARGET_TG=5109
+    depends_on:
+      - mumble-server
+      - core
+    networks:
+      - ninjaradio_net
+
+  # 4. Backend API & Live WebSocket Hub (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ninjaradio_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - SERVER_CALLSIGN=N1NJA
+      - SERVER_DMR_ID=5109999
+      - DEFAULT_TALKGROUP=510
+      - DATABASE_URL=sqlite+aiosqlite:///./ninjaradio.db
+    volumes:
+      - ninjaradio_data:/app
+    depends_on:
+      - core
+    networks:
+      - ninjaradio_net
+
+  # 5. Next.js 14 Responsive PWA Frontend (Supports 2.4" Screen & Desktop)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ninjaradio_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=/api
+    depends_on:
+      - backend
+    networks:
+      - ninjaradio_net
+
+networks:
+  ninjaradio_net:
+    driver: bridge
+
+volumes:
+  ninjaradio_data:
+  mumble_data:
+  caddy_data:
+  caddy_config:

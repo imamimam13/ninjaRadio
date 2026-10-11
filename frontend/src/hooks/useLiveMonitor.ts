@@ -1,0 +1,101 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+
+export interface LastHeardEntry {
+  id: string;
+  timestamp: string;
+  callsign: string;
+  name: string;
+  dmr_id: number;
+  talkgroup: number;
+  tg_name: string;
+  slot: number;
+  mode: string;
+  category: string;
+  duration: string;
+  loss: string;
+  ber: string;
+  rssi: string;
+  is_tx?: boolean;
+}
+
+export interface ActiveTransmission {
+  id: string;
+  callsign: string;
+  name: string;
+  dmr_id: number;
+  talkgroup: number;
+  tg_name: string;
+  slot: number;
+  mode: string;
+  category: string;
+  rssi: string;
+  ber: string;
+  started_at: string;
+}
+
+export function useLiveMonitor() {
+  const [lastHeard, setLastHeard] = useState<LastHeardEntry[]>([]);
+  const [activeTx, setActiveTx] = useState<ActiveTransmission | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = process.env.NEXT_PUBLIC_WS_HOST || (typeof window !== "undefined" ? window.location.host : "localhost:8000");
+    const wsUrl = `${protocol}//${host}/ws/live`;
+
+    function connect() {
+      try {
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          setIsConnected(true);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            if (message.type === "INITIAL_STATE") {
+              setLastHeard(message.data.last_heard || []);
+              setActiveTx(message.data.current_tx || null);
+            } else if (message.type === "TX_STATE_CHANGE") {
+              setActiveTx(message.data);
+            } else if (message.type === "LAST_HEARD_UPDATE") {
+              setLastHeard((prev) => [message.data, ...prev.slice(0, 49)]);
+            }
+          } catch {
+            // parse error
+          }
+        };
+
+        ws.onclose = () => {
+          setIsConnected(false);
+          setTimeout(connect, 3000); // Auto reconnect
+        };
+
+        ws.onerror = () => {
+          ws.close();
+        };
+      } catch {
+        // Handle initial connection fail
+      }
+    }
+
+    connect();
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
+
+  return {
+    lastHeard,
+    activeTx,
+    isConnected,
+  };
+}
