@@ -1,14 +1,15 @@
 {
-  "id": "/radio",
+  "id": "/",
   "name": "NinjaRadio Tactical Voice",
   "short_name": "NinjaRadio",
   "description": "Multi-Mode Digital & Analog Tactical Voice Transceiver Hub",
   "start_url": "/radio",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0a0c10",
+  "background_color": "#05070c",
   "theme_color": "#00f0ff",
   "orientation": "portrait-primary",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icon-192.png",

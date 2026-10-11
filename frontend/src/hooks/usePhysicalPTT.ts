@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { beepPlayer } from "@/components/BeepPlayer";
 
 interface UsePhysicalPTTOptions {
@@ -16,85 +16,131 @@ export function usePhysicalPTT({
 }: UsePhysicalPTTOptions = {}) {
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [lastKeyPressed, setLastKeyPressed] = useState<string>("");
-  const [pttKey, setPttKey] = useState<string>("Space"); // Default Space / F4 / PoC Key
+  // pttKey: "AUTO" (accepts Space, Volume Down/Up, PoC PTT, Headset Hook) or custom key code
+  const [pttKey, setPttKey] = useState<string>("AUTO");
+  // pttMode: "hold" (Momentary: tekan tahan) vs "toggle" (Latch: tekan sekali on, tekan lagi off)
+  const [pttMode, setPttMode] = useState<"hold" | "toggle">("hold");
 
-  // Load saved PTT key from localStorage
+  const isTxRef = useRef(false);
+  isTxRef.current = isTransmitting;
+
+  // Load saved PTT settings from localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ninjaradio_ptt_key") || localStorage.getItem("ninjadmr_ptt_key");
-      if (saved) setPttKey(saved);
+      const savedKey = localStorage.getItem("ninjaradio_ptt_key") || localStorage.getItem("ninjadmr_ptt_key");
+      if (savedKey) setPttKey(savedKey);
+      const savedMode = localStorage.getItem("ninjaradio_ptt_mode") as "hold" | "toggle";
+      if (savedMode === "hold" || savedMode === "toggle") setPttMode(savedMode);
     }
   }, []);
 
   const startTx = useCallback(() => {
-    if (isTransmitting) return;
+    if (isTxRef.current) return;
     setIsTransmitting(true);
     beepPlayer?.playTalkGrant();
     if (navigator.vibrate) navigator.vibrate(50);
     onTransmitStart?.();
-  }, [isTransmitting, onTransmitStart]);
+  }, [onTransmitStart]);
 
   const stopTx = useCallback(() => {
-    if (!isTransmitting) return;
+    if (!isTxRef.current) return;
     setIsTransmitting(false);
     beepPlayer?.playRogerBeep();
     if (navigator.vibrate) navigator.vibrate(30);
     onTransmitEnd?.();
-  }, [isTransmitting, onTransmitEnd]);
+  }, [onTransmitEnd]);
+
+  const toggleTx = useCallback(() => {
+    if (isTxRef.current) {
+      stopTx();
+    } else {
+      startTx();
+    }
+  }, [startTx, stopTx]);
+
+  // Helper to test if a keyboard / hardware event matches PTT key
+  const isPttEvent = useCallback((e: KeyboardEvent) => {
+    // If user is typing in a text field, don't trigger PTT
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      return false;
+    }
+
+    // 1. Explicit specific key set by user
+    if (pttKey !== "AUTO") {
+      if (pttKey === "VolumeDown") {
+        return e.code === "VolumeDown" || e.key === "AudioVolumeDown" || e.keyCode === 25;
+      }
+      if (pttKey === "VolumeUp") {
+        return e.code === "VolumeUp" || e.key === "AudioVolumeUp" || e.keyCode === 24;
+      }
+      if (pttKey === "Space") {
+        return e.code === "Space" || e.key === " " || e.keyCode === 32;
+      }
+      if (pttKey === "HeadsetHook") {
+        return e.key === "HeadsetHook" || e.key === "MediaPlayPause" || e.keyCode === 79 || e.keyCode === 85;
+      }
+      return e.code === pttKey || e.key === pttKey;
+    }
+
+    // 2. Default "AUTO" mode: accepts smartphone Volume Down, Volume Up, Headset Hook / Media, PoC hardware keys, and Spacebar
+    const isSpace = e.code === "Space" || e.key === " " || e.keyCode === 32;
+    const isVolumeDown = e.code === "VolumeDown" || e.key === "AudioVolumeDown" || e.keyCode === 25;
+    const isVolumeUp = e.code === "VolumeUp" || e.key === "AudioVolumeUp" || e.keyCode === 24;
+    const isHeadset =
+      e.key === "HeadsetHook" ||
+      e.key === "MediaPlayPause" ||
+      e.code === "MediaPlayPause" ||
+      e.keyCode === 79 ||
+      e.keyCode === 85;
+
+    const isPocHardware =
+      e.keyCode === 138 || // KEY_PTT
+      e.keyCode === 226 || // KEY_MEDIA_FAST_FORWARD (MTK PTT)
+      e.keyCode === 228 || // Qualcomm PTT
+      e.keyCode === 261 || // F4
+      e.keyCode === 262 || // F5
+      e.keyCode === 263 || // F6
+      e.key === "F4";
+
+    return isSpace || isVolumeDown || isVolumeUp || isHeadset || isPocHardware;
+  }, [pttKey]);
 
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Record any pressed key for settings/debug
-      setLastKeyPressed(`${e.code} (Key: ${e.key}, Code: ${e.keyCode})`);
+      // Record any pressed key for diagnostics
+      setLastKeyPressed(`${e.code || e.key} (key: ${e.key}, keyCode: ${e.keyCode})`);
 
-      // Match PTT conditions:
-      // 1. Matched saved key
-      // 2. PoC Android Radio typical PTT codes (138, 226, 228, F4, F8)
-      // 3. Prevent repeated events when holding key down
-      const isMatch =
-        e.code === pttKey ||
-        e.key === pttKey ||
-        e.keyCode === 138 ||
-        e.keyCode === 226;
+      if (isPttEvent(e)) {
+        e.preventDefault();
+        if (e.repeat) return; // Prevent repeated triggers from OS auto-repeat
 
-      if (isMatch && !e.repeat) {
-        // Prevent default only if not typing in an input
-        if (
-          !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-        ) {
-          e.preventDefault();
+        if (pttMode === "toggle") {
+          toggleTx();
+        } else {
           startTx();
         }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      const isMatch =
-        e.code === pttKey ||
-        e.key === pttKey ||
-        e.keyCode === 138 ||
-        e.keyCode === 226;
-
-      if (isMatch) {
-        if (
-          !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-        ) {
-          e.preventDefault();
+      if (isPttEvent(e)) {
+        e.preventDefault();
+        if (pttMode === "hold") {
           stopTx();
         }
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("keydown", handleKeyDown, { passive: false });
+    window.addEventListener("keyup", handleKeyUp, { passive: false });
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [enabled, pttKey, startTx, stopTx]);
+  }, [enabled, isPttEvent, pttMode, startTx, stopTx, toggleTx]);
 
   const saveCustomKey = (key: string) => {
     setPttKey(key);
@@ -103,12 +149,22 @@ export function usePhysicalPTT({
     }
   };
 
+  const savePttMode = (mode: "hold" | "toggle") => {
+    setPttMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ninjaradio_ptt_mode", mode);
+    }
+  };
+
   return {
     isTransmitting,
     startTx,
     stopTx,
+    toggleTx,
     pttKey,
+    pttMode,
     saveCustomKey,
+    savePttMode,
     lastKeyPressed,
   };
 }

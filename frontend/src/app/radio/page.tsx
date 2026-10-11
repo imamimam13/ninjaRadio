@@ -83,8 +83,58 @@ interface SmsItem {
 export default function RadioPocketMode() {
   const { activeTx, isConnected } = useLiveMonitor();
 
-  // UI Display Mode: Standard 2.4" Touchscreen vs 1.8" Rugged PoC Radio (Zello Chinese style)
+  // UI Display Mode: Auto-detected by device screen dimensions
   const [deviceSkin, setDeviceSkin] = useState<"standard" | "poc18">("standard");
+
+  // Auto-detect device dimensions on mount and resize
+  useEffect(() => {
+    const handleScreenSize = () => {
+      if (typeof window !== "undefined") {
+        if (window.innerWidth <= 360 || window.innerHeight <= 520) {
+          setDeviceSkin("poc18");
+        } else {
+          setDeviceSkin("standard");
+        }
+      }
+    };
+    handleScreenSize();
+    window.addEventListener("resize", handleScreenSize);
+    return () => window.removeEventListener("resize", handleScreenSize);
+  }, []);
+
+  // PTT Physical Key & Trigger Settings Modal State
+  const [showPttSettingsModal, setShowPttSettingsModal] = useState(false);
+
+  // PWA Install Prompt State
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
+  const [isPwaInstalled, setIsPwaInstalled] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstall = (e: any) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e);
+    };
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+
+    if (typeof window !== "undefined" && window.matchMedia("(display-mode: standalone)").matches) {
+      setIsPwaInstalled(true);
+    }
+
+    return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+  }, []);
+
+  const handleInstallPwa = async () => {
+    if (!deferredInstallPrompt) {
+      alert("Catatan Instalasi PWA Android:\n1. Pastikan mengakses via domain HTTPS (bukan http IP mentah).\n2. Di menu Chrome (titik 3 di kanan atas), klik 'Pasang Aplikasi' / 'Install App'.");
+      return;
+    }
+    deferredInstallPrompt.prompt();
+    const choice = await deferredInstallPrompt.userChoice;
+    if (choice && choice.outcome === "accepted") {
+      setIsPwaInstalled(true);
+      setDeferredInstallPrompt(null);
+    }
+  };
 
   // Default identity is Monitor Mode (TX locked) until user creates profile or enters PIN
   const [activeProfile, setActiveProfile] = useState<UserProfile>(DEFAULT_MONITOR_PROFILE);
@@ -206,8 +256,18 @@ export default function RadioPocketMode() {
   const recordedAudioChunksRef = useRef<Blob[]>([]);
   const [isEchoPlaying, setIsEchoPlaying] = useState(false);
 
-  // Hardware Physical PTT Listener (handles side PTT key, F-keys, space, PoC keycode 138/226)
-  const { isTransmitting, startTx, stopTx, pttKey } = usePhysicalPTT({
+  // Hardware Physical PTT Listener (handles phone volume buttons, bluetooth, spacebar, PoC keycodes)
+  const {
+    isTransmitting,
+    startTx,
+    stopTx,
+    toggleTx,
+    pttKey,
+    pttMode,
+    saveCustomKey,
+    savePttMode,
+    lastKeyPressed,
+  } = usePhysicalPTT({
     onTransmitStart: async () => {
       // Anti-abuse: if monitor mode, lock PTT and prompt authentication modal
       if (activeProfile.isMonitorOnly || activeProfile.callsign === "SWL-MONITOR" || activeProfile.dmrId === 0) {
@@ -570,7 +630,7 @@ export default function RadioPocketMode() {
   return (
     <div className="min-h-screen bg-[#05070c] text-slate-100 flex flex-col justify-between select-none p-2 sm:p-4 max-w-lg mx-auto">
       
-      {/* Top Device Header & Skin Switcher */}
+      {/* Top Device Header */}
       <div className="flex items-center justify-between border-b border-cyan-900/40 pb-2">
         <Link
           href="/"
@@ -580,31 +640,28 @@ export default function RadioPocketMode() {
           <span>NOC DASHBOARD</span>
         </Link>
 
-        {/* Radio Device Skin Selector */}
-        <div className="flex items-center gap-1 bg-[#0b121e] p-0.5 rounded-lg border border-cyan-900/50 text-[10px] font-mono">
-          <button
-            onClick={() => setDeviceSkin("standard")}
-            className={`px-2 py-1 rounded font-bold transition-all ${
-              deviceSkin === "standard"
-                ? "bg-cyan-400 text-slate-950 shadow-sm"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            📱 2.4" Touch
-          </button>
-          <button
-            onClick={() => setDeviceSkin("poc18")}
-            className={`px-2 py-1 rounded font-bold transition-all ${
-              deviceSkin === "poc18"
-                ? "bg-amber-400 text-slate-950 shadow-sm"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            📻 1.8" Rugged Zello
-          </button>
-        </div>
-
         <div className="flex items-center gap-1.5">
+          {/* PWA Install Button (Displays when install prompt is available or user wants to install) */}
+          {deferredInstallPrompt && !isPwaInstalled && (
+            <button
+              onClick={handleInstallPwa}
+              className="px-2 py-1 rounded-lg text-[10px] font-mono font-black bg-cyan-400 hover:bg-cyan-300 text-slate-950 flex items-center gap-1 shadow transition-all animate-pulse"
+              title="Pasang NinjaRadio PWA ke Layar Utama Hape"
+            >
+              <Smartphone className="w-3 h-3" />
+              <span>Install PWA</span>
+            </button>
+          )}
+
+          {/* Quick PTT Mode & Key Setting Button */}
+          <button
+            onClick={() => setShowPttSettingsModal(true)}
+            className="px-2 py-1 rounded-lg text-[10px] font-mono font-black border border-cyan-900/50 bg-[#0b121e] text-cyan-300 hover:border-cyan-400 flex items-center gap-1 transition-all"
+            title="Pengaturan Tombol Fisik PTT (Volume Hape / Spasi / Headset)"
+          >
+            <SlidersVertical className="w-3 h-3 text-cyan-400" />
+            <span>PTT: {pttMode === "hold" ? "HOLD" : "TOGGLE"}</span>
+          </button>
           {/* Audio Cable Gateway Toggle */}
           <button
             onClick={() => setShowCableModal(true)}
@@ -900,11 +957,28 @@ export default function RadioPocketMode() {
 
           {/* Large Side / Bottom Physical PTT Rocker */}
           <div className="w-full mt-3 px-2">
+            <div className="flex items-center justify-between px-1 mb-1 text-[9px] font-mono text-slate-400">
+              <button
+                type="button"
+                onClick={() => savePttMode(pttMode === "hold" ? "toggle" : "hold")}
+                className="text-amber-400 font-bold hover:underline"
+              >
+                PTT: {pttMode === "hold" ? "🖐️ HOLD" : "🔒 TOGGLE"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPttSettingsModal(true)}
+                className="text-cyan-400 font-bold hover:underline"
+              >
+                ⚙️ {pttKey === "AUTO" ? "VOL/SPASI" : pttKey}
+              </button>
+            </div>
             <button
-              onMouseDown={startTx}
-              onMouseUp={stopTx}
-              onTouchStart={(e) => { e.preventDefault(); startTx(); }}
-              onTouchEnd={(e) => { e.preventDefault(); stopTx(); }}
+              onClick={pttMode === "toggle" ? toggleTx : undefined}
+              onMouseDown={pttMode === "hold" ? startTx : undefined}
+              onMouseUp={pttMode === "hold" ? stopTx : undefined}
+              onTouchStart={pttMode === "hold" ? (e) => { e.preventDefault(); startTx(); } : undefined}
+              onTouchEnd={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
               className={`w-full py-4 rounded-2xl font-heading font-black text-sm tracking-wider flex items-center justify-center gap-2 shadow-2xl transition-all ${
                 isTransmitting
                   ? "bg-rose-600 text-white shadow-rose-600/50 border-2 border-rose-300 ring-4 ring-rose-900/50"
@@ -918,7 +992,13 @@ export default function RadioPocketMode() {
               ) : (
                 <>
                   <Mic className="w-5 h-5" />
-                  <span>{isTransmitting ? "🔴 TRANSMITTING..." : isVoxEnabled ? "🎙️ VOX ACTIVE (AUTO TALK)" : `HOLD PTT [ ${pttKey} ]`}</span>
+                  <span>
+                    {isTransmitting 
+                      ? pttMode === "toggle" ? "🔴 ON AIR (TAP STOP)" : "🔴 TRANSMITTING..." 
+                      : isVoxEnabled 
+                      ? "🎙️ VOX ACTIVE (AUTO TALK)" 
+                      : pttMode === "toggle" ? "🎙️ TAP TO TALK" : `HOLD PTT [ VOL / ${pttKey === "AUTO" ? "SPASI" : pttKey} ]`}
+                  </span>
                 </>
               )}
             </button>
@@ -1169,13 +1249,40 @@ export default function RadioPocketMode() {
             </div>
           )}
 
+          {/* Quick PTT Trigger Mode & Hardware Keybar */}
+          <div className="flex items-center justify-between w-full max-w-[320px] px-2 text-[10px] font-mono text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <span>Mode:</span>
+              <button
+                type="button"
+                onClick={() => savePttMode(pttMode === "hold" ? "toggle" : "hold")}
+                className={`px-2 py-0.5 rounded-lg font-bold border transition-all ${
+                  pttMode === "toggle"
+                    ? "bg-amber-400 text-slate-950 border-amber-300 shadow-sm"
+                    : "bg-slate-900 text-cyan-300 border-slate-700"
+                }`}
+                title="Ganti mode PTT: Tekan-Tahan vs Tekan-Sekali (Lock)"
+              >
+                {pttMode === "toggle" ? "🔒 KLIK SEKALI (TOGGLE)" : "🖐️ TEKAN TAHAN (HOLD)"}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPttSettingsModal(true)}
+              className="hover:text-cyan-300 flex items-center gap-1 font-bold bg-slate-900/60 px-2 py-0.5 rounded-lg border border-slate-800"
+            >
+              <span>⚙️ {pttKey === "AUTO" ? "Volume / Spasi" : pttKey}</span>
+            </button>
+          </div>
+
           {/* Massive Thumb PTT Button */}
           <div className="my-1 flex-1 flex flex-col justify-center items-center">
             <button
-              onMouseDown={startTx}
-              onMouseUp={stopTx}
-              onTouchStart={(e) => { e.preventDefault(); startTx(); }}
-              onTouchEnd={(e) => { e.preventDefault(); stopTx(); }}
+              onClick={pttMode === "toggle" ? toggleTx : undefined}
+              onMouseDown={pttMode === "hold" ? startTx : undefined}
+              onMouseUp={pttMode === "hold" ? stopTx : undefined}
+              onTouchStart={pttMode === "hold" ? (e) => { e.preventDefault(); startTx(); } : undefined}
+              onTouchEnd={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
               className={`w-full max-w-[320px] h-36 rounded-3xl font-heading font-black text-xl flex flex-col items-center justify-center gap-2 shadow-2xl transition-all cursor-pointer active:scale-95 ${
                 isTransmitting
                   ? "bg-gradient-to-b from-rose-500 to-red-700 text-white shadow-[0_0_30px_rgba(244,63,94,0.6)] border-4 border-rose-300 ring-8 ring-rose-900/40"
@@ -1203,12 +1310,12 @@ export default function RadioPocketMode() {
                   <Mic className={`w-9 h-9 ${isTransmitting ? "animate-bounce text-white" : isCableRxActive ? "text-amber-300" : isVoxEnabled ? "text-emerald-400 glow-emerald" : "text-cyan-400 glow-cyan"}`} />
                   <span>
                     {isTransmitting 
-                      ? "TRANSMITTING..." 
+                      ? pttMode === "toggle" ? "🔴 ON AIR (TAP STOP)" : "TRANSMITTING..." 
                       : isCableRxActive 
                       ? "CABLE RF RX (INGEST AUDIO)" 
                       : isVoxEnabled 
                       ? "VOX ACTIVE (BERBICARA UNTUK TX)" 
-                      : "PRESS & HOLD PTT"}
+                      : pttMode === "toggle" ? "🎙️ TAP TO TALK (KLIK ON/OFF)" : "PRESS & HOLD PTT"}
                   </span>
                   <span className="text-[11px] font-mono text-slate-400">
                     {isTransmitting 
@@ -1217,7 +1324,7 @@ export default function RadioPocketMode() {
                       ? `Kabel: ${currentMicDb} dB (Squelch: ${cableNoiseGate} dB)` 
                       : isVoxEnabled 
                       ? `VOX Level: ${currentMicDb} dB` 
-                      : `Tombol Fisik: [ ${pttKey} ]`}
+                      : `Tombol Hape: Volume Down / [ ${pttKey === "AUTO" ? "VOL/SPASI" : pttKey} ]`}
                   </span>
                 </>
               )}
@@ -1898,6 +2005,92 @@ export default function RadioPocketMode() {
               </form>
             )}
 
+          </div>
+      {/* MODAL: PTT PHYSICAL BUTTON & TRIGGER MODE SETTINGS */}
+      {showPttSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0b121e] border-2 border-cyan-500/70 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-2">
+                <SlidersVertical className="w-5 h-5 text-cyan-400" />
+                <h3 className="font-bold text-sm text-white">Pengaturan Tombol PTT Hape & PC</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPttSettingsModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">1. Cara Kerja Transmisi (PTT Mode):</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => savePttMode("hold")}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      pttMode === "hold"
+                        ? "bg-cyan-500 text-slate-950 font-black border-cyan-400 shadow"
+                        : "bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="font-bold">🖐️ Tekan-Tahan</div>
+                    <div className="text-[10px] opacity-80">Hold to Talk</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => savePttMode("toggle")}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      pttMode === "toggle"
+                        ? "bg-amber-400 text-slate-950 font-black border-amber-300 shadow"
+                        : "bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="font-bold">🔒 Tekan-Sekali</div>
+                    <div className="text-[10px] opacity-80">Click/Toggle PTT</div>
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  *Mode Tekan-Sekali sangat cocok untuk hape agar tidak perlu menahan tombol volume terus-menerus.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">2. Pemilihan Tombol Fisik PTT:</label>
+                <select
+                  value={pttKey}
+                  onChange={(e) => saveCustomKey(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono font-bold focus:border-cyan-400 outline-none"
+                >
+                  <option value="AUTO">📱 Otomatis (Volume Hape / Bluetooth / Spasi PC)</option>
+                  <option value="VolumeDown">🔉 Tombol Volume Down (Hape Android)</option>
+                  <option value="VolumeUp">🔊 Tombol Volume Up (Hape Android)</option>
+                  <option value="HeadsetHook">🎧 Tombol Headset / Mic Bluetooth PTT</option>
+                  <option value="Space">⌨️ Tombol Spasi (PC / Laptop)</option>
+                </select>
+              </div>
+
+              {/* Live Hardware Key Tester */}
+              <div className="bg-[#05070c] border border-cyan-900/50 rounded-xl p-3 text-center space-y-1">
+                <div className="text-[10px] text-slate-400 font-semibold">Live Key Tester (Coba tekan tombol fisik di hape Anda):</div>
+                <div className="text-xs font-mono font-bold text-amber-300 truncate">
+                  {lastKeyPressed || "Menunggu tombol ditekan..."}
+                </div>
+              </div>
+
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowPttSettingsModal(false)}
+                  className="w-full py-2.5 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black rounded-xl shadow transition-colors"
+                >
+                  Simpan Pengaturan
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
