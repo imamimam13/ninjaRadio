@@ -41,6 +41,21 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
         cpu = 0.0
         ram = 0.0
 
+    # Query live Core Engine stats
+    connected_hotspots = 0
+    connected_peers = 0
+    try:
+        import aiohttp
+        timeout = aiohttp.ClientTimeout(total=0.5)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get("http://core:5000/api/status") as r:
+                if r.status == 200:
+                    cinfo = await r.json()
+                    connected_hotspots = cinfo.get("master_server", {}).get("connected_hotspots", 0)
+                    connected_peers = len([p for p in cinfo.get("peers", []) if p.get("state") == "CONNECTED"])
+    except Exception:
+        pass
+
     return ServerStatus(
         server_name="NinjaRadio Master Core",
         server_callsign=settings.SERVER_CALLSIGN,
@@ -48,9 +63,9 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
         version=settings.VERSION,
         uptime=uptime_str,
         active_transmissions=1 if manager.current_tx else 0,
-        connected_hotspots=0,
+        connected_hotspots=connected_hotspots,
         web_clients=len(manager.active_connections) or 1,
-        connected_peers=0,
+        connected_peers=connected_peers,
         active_bridges=active_bridges,
         cpu_usage=cpu,
         ram_usage=ram
