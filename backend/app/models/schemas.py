@@ -108,3 +108,7 @@ class PttTransmitRequest(BaseModel):
     category: Optional[str] = "Amatir"
     is_transmitting: Optional[bool] = True
 
+class PinVerifyRequest(BaseModel):
+    pin: str
+
+

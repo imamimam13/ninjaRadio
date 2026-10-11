@@ -44,6 +44,7 @@ export function useLiveMonitor() {
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = process.env.NEXT_PUBLIC_WS_HOST || (typeof window !== "undefined" ? window.location.host : "localhost:8000");
     const appName = typeof window !== "undefined" && window.location.pathname.includes("radio") ? "Radio Pocket Web" : "NOC Dashboard";
     const wsUrl = `${protocol}//${host}/ws/live?app=${encodeURIComponent(appName)}`;
 

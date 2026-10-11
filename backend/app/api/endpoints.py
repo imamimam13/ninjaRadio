@@ -11,7 +11,7 @@ from backend.app.models.schemas import (
     QsoLogResponse, QsoLogCreate,
     CallbookResponse, CallbookCreate,
     BridgeRouteResponse, BridgeRouteCreate,
-    ServerStatus, LastHeardItem, PttTransmitRequest
+    ServerStatus, LastHeardItem, PttTransmitRequest, PinVerifyRequest
 )
 from backend.app.services.logbook_service import LogbookService
 from backend.app.services.callbook_service import CallbookService
@@ -243,14 +243,28 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
     except Exception:
         pass
 
+@router.post("/auth/verify-pin")
+async def verify_admin_pin(payload: PinVerifyRequest):
+    """Verifies operator / admin security PIN for PTT authorization."""
+    admin_pin = getattr(settings, "ADMIN_PIN", "1234")
+    return {"valid": payload.pin.strip() == str(admin_pin).strip()}
+
 @router.post("/ptt/transmit")
 async def web_ptt_transmit(payload: PttTransmitRequest):
-    callsign = payload.callsign or "WEB-OP"
-    dmr_id = payload.dmr_id or 5109999
+    callsign = (payload.callsign or "SWL-MONITOR").strip()
+    dmr_id = payload.dmr_id or 0
     tg = payload.tg if payload.tg is not None else 510
     slot = payload.slot or 1
     category = payload.category or "Amatir"
     is_transmitting = payload.is_transmitting if payload.is_transmitting is not None else True
+
+    # Anti-abuse validation: Monitor mode cannot transmit
+    if is_transmitting:
+        if callsign.upper() in ["SWL-MONITOR", "MONITOR", "LISTENER", "GUEST", "TAMU"] or dmr_id == 0:
+            raise HTTPException(
+                status_code=403,
+                detail="Mode Monitor (SWL) tidak diizinkan memancar. Silakan gunakan profil Callsign pribadi atau masukkan PIN Operator."
+            )
 
     tg_name = TG_NAMES.get(tg, f"Talkgroup {tg}")
 
