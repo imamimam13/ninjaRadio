@@ -38,8 +38,8 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
         cpu = psutil.cpu_percent(interval=None)
         ram = psutil.virtual_memory().percent
     except Exception:
-        cpu = 12.5
-        ram = 38.2
+        cpu = 0.0
+        ram = 0.0
 
     return ServerStatus(
         server_name="NinjaRadio Master Core",
@@ -48,8 +48,8 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
         version=settings.VERSION,
         uptime=uptime_str,
         active_transmissions=1 if manager.current_tx else 0,
-        connected_hotspots=len(manager.active_connections) + 3,
-        connected_peers=4,
+        connected_hotspots=len(manager.active_connections),
+        connected_peers=0,
         active_bridges=active_bridges,
         cpu_usage=cpu,
         ram_usage=ram

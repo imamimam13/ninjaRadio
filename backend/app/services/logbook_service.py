@@ -5,13 +5,7 @@ from datetime import datetime
 from backend.app.core.database import QsoLog
 from backend.app.models.schemas import QsoLogCreate
 
-INITIAL_QSO_DATA = [
-    {"timestamp": datetime.utcnow(), "callsign": "YB0AZ", "source_id": 5100001, "source_name": "Budi Santoso", "target_tg": 510, "target_name": "Indonesia National", "slot": 1, "mode": "DMR", "category": "Amatir", "duration_sec": 14.5, "rssi": "-72 dBm", "ber": "0.1%", "loss": "0.0%", "remarks": "Clear audio 5/9"},
-    {"timestamp": datetime.utcnow(), "callsign": "YB1AR", "source_id": 5101001, "source_name": "Arief Rahman", "target_tg": 5101, "target_name": "Jawa Barat Regional", "slot": 2, "mode": "YSF", "category": "Amatir", "duration_sec": 8.2, "rssi": "-80 dBm", "ber": "0.0%", "loss": "0.0%", "remarks": "Cross-mode test via YSF Bridge"},
-    {"timestamp": datetime.utcnow(), "callsign": "JZ10XYZ", "source_id": 5109101, "source_name": "Rapi Ranger 01", "target_tg": 5109, "target_name": "RAPI Nusantara TG", "slot": 1, "mode": "ANALOG", "category": "RAPI", "duration_sec": 21.0, "rssi": "-68 dBm", "ber": "0.0%", "loss": "0.0%", "remarks": "Laporan situasi kamtibmas 10-2"},
-    {"timestamp": datetime.utcnow(), "callsign": "91-DX-001", "source_id": 5109201, "source_name": "Garuda DXer", "target_tg": 5108, "target_name": "11M CB Gateway", "slot": 1, "mode": "CB", "category": "CB", "duration_sec": 12.0, "rssi": "-75 dBm", "ber": "0.0%", "loss": "0.0%", "remarks": "11 Meter Digital Voice check"},
-    {"timestamp": datetime.utcnow(), "callsign": "RESCUE-01", "source_id": 5109301, "source_name": "Relawan SAR", "target_tg": 5100, "target_name": "Emergency SAR 911", "slot": 1, "mode": "P25", "category": "Komunitas", "duration_sec": 5.4, "rssi": "-65 dBm", "ber": "0.0%", "loss": "0.0%", "remarks": "Radio check posko siaga"},
-]
+INITIAL_QSO_DATA = []
 
 class LogbookService:
     @staticmethod

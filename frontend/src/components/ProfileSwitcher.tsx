@@ -16,44 +16,14 @@ export interface UserProfile {
 
 const DEFAULT_PROFILES: UserProfile[] = [
   {
-    id: "prof_amatir_1",
+    id: "prof_default",
     category: "Amatir",
-    callsign: "YB1AR",
-    displayName: "Arief Rahman",
-    dmrId: 5101001,
-    allowedTalkgroups: [510, 5101, 5102, 5103],
-    badgeColor: "bg-emerald-500 text-slate-950",
-    networkTag: "ORARI / BrandMeister / FreeDMR"
-  },
-  {
-    id: "prof_rapi_1",
-    category: "RAPI",
-    callsign: "JZ10XYZ",
-    displayName: "Rapi Ranger 01",
-    dmrId: 5109101,
-    allowedTalkgroups: [5109],
-    badgeColor: "bg-blue-500 text-white",
-    networkTag: "RAPI KRAP Gateway"
-  },
-  {
-    id: "prof_cb_1",
-    category: "CB",
-    callsign: "91-DX-001",
-    displayName: "Garuda 11M DXer",
-    dmrId: 5109201,
-    allowedTalkgroups: [5108],
-    badgeColor: "bg-amber-500 text-slate-950",
-    networkTag: "11 Meter Citizens Band (Isolated)"
-  },
-  {
-    id: "prof_sar_1",
-    category: "Komunitas",
-    callsign: "RESCUE-01",
-    displayName: "Relawan SAR Nusantara",
-    dmrId: 5109301,
-    allowedTalkgroups: [5100],
-    badgeColor: "bg-purple-500 text-white",
-    networkTag: "SAR & Disaster Emergency Net"
+    callsign: "N1NJA",
+    displayName: "Radio Operator",
+    dmrId: 5109999,
+    allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100],
+    badgeColor: "bg-cyan-500 text-slate-950",
+    networkTag: "NinjaRadio Master"
   }
 ];
 
@@ -79,7 +49,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   // Load from local storage
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ninjadmr_user_profiles");
+      const saved = localStorage.getItem("ninjaradio_user_profiles") || localStorage.getItem("ninjadmr_user_profiles");
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
@@ -94,7 +64,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   const saveProfilesToStorage = (updated: UserProfile[]) => {
     setProfiles(updated);
     if (typeof window !== "undefined") {
-      localStorage.setItem("ninjadmr_user_profiles", JSON.stringify(updated));
+      localStorage.setItem("ninjaradio_user_profiles", JSON.stringify(updated));
     }
   };
 

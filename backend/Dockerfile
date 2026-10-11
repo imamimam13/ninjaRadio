@@ -10,7 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Create persistent data directory
+RUN mkdir -p /app/data
+
+# Copy backend code into /app/backend so `import backend.app...` works seamlessly
+COPY . /app/backend
 
 ENV PYTHONPATH=/app
 

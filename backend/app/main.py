@@ -22,9 +22,11 @@ async def lifespan(app: FastAPI):
         await LogbookService.seed_initial_qso(session)
         await BridgeService.seed_initial_routes(session)
     
-    # Start live background simulator
+    # Start live background simulator only if explicitly enabled
     global simulator_task
-    simulator_task = asyncio.create_task(run_dv_simulator())
+    import os
+    if os.getenv("ENABLE_DEMO_SIMULATOR", "false").lower() == "true":
+        simulator_task = asyncio.create_task(run_dv_simulator())
     
     yield
     
