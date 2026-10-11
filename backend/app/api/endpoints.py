@@ -233,19 +233,22 @@ async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
 
 CORE_USRP_HOST = "core"
 CORE_USRP_PORT = 32345
+_usrp_packet_seq = 0
 
-def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool):
+def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool, pcm_payload: bytes = None):
     """
     Constructs and dispatches standard 32-byte DVSwitch / USRP UDP packets
     directly to the NinjaRadio Core engine (core:32345) and Mumble Bridge.
     """
+    global _usrp_packet_seq
     try:
         import socket
         import struct
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         key_flag = 1 if is_tx else 0
-        header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, key_flag, tg, dmr_id, slot, 0)
-        payload = b"\x00" * 320
+        _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
+        header = struct.pack(">4sIIIIIII", b"USRP", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
+        payload = pcm_payload if (pcm_payload and len(pcm_payload) > 0) else (b"\x00" * 320)
         packet = header + payload
 
         # Send to Core USRP port (32345)
@@ -390,6 +393,20 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         }
         ACTIVE_STREAMS[stream_id] = tx_data
         await manager.update_tx_state(tx_data)
+
+        # Broadcast live audio chunk to web clients if payload present
+        payload_b64 = event.get("payload_b64")
+        if payload_b64:
+            await manager.broadcast({
+                "type": "AUDIO_RX",
+                "data": {
+                    "src_id": src_id,
+                    "callsign": callsign,
+                    "tg": dst_tg,
+                    "slot": slot,
+                    "pcm": payload_b64
+                }
+            })
     
     # Voice Terminator (Call Ended)
     elif dtype_vseq == 2:

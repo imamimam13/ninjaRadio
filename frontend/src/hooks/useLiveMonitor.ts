@@ -38,9 +38,21 @@ export interface ActiveTransmission {
 
 export function useLiveMonitor() {
   const [lastHeard, setLastHeard] = useState<LastHeardEntry[]>([]);
-  const [activeTx, setActiveTx] = useState<ActiveTransmission | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
+  const [incomingAudio, setIncomingAudio] = useState<{
+    src_id: number;
+    callsign: string;
+    tg: number;
+    slot: number;
+    pcm: string;
+  } | null>(null);
+
+  const sendJson = (data: any): boolean => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+      return true;
+    }
+    return false;
+  };
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -67,6 +79,8 @@ export function useLiveMonitor() {
               setActiveTx(message.data);
             } else if (message.type === "LAST_HEARD_UPDATE") {
               setLastHeard((prev) => [message.data, ...prev.slice(0, 49)]);
+            } else if (message.type === "AUDIO_RX") {
+              setIncomingAudio(message.data);
             }
           } catch {
             // parse error
@@ -98,6 +112,8 @@ export function useLiveMonitor() {
   return {
     lastHeard,
     activeTx,
+    incomingAudio,
+    sendJson,
     isConnected,
   };
 }
