@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qemu-user-static \
     libsndfile1-dev \
     libasound2-dev \
+    libsamplerate0-dev \
+    libsamplerate0 \
+    libudev-dev \
     sox \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,6 +29,7 @@ RUN curl -fsSL http://dvswitch.org/DVSwitch_Repository/dvswitch-keyring.gpg -o /
     apt-get update && \
     apt-get install -y --no-install-recommends dvswitch-base analog-bridge md380-emu mmdvm-bridge && \
     rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /var/log /app/data && \
     ln -sf /opt/Analog_Bridge/Analog_Bridge /usr/local/bin/Analog_Bridge || true && \
     ln -sf /opt/md380-emu/md380-emu /usr/local/bin/md380-emu || true && \
     ln -sf /opt/MMDVM_Bridge/MMDVM_Bridge /usr/local/bin/MMDVM_Bridge || true
