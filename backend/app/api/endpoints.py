@@ -1,0 +1,231 @@
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List, Optional
+from datetime import datetime
+import psutil
+import time
+
+from backend.app.core.database import get_db
+from backend.app.core.config import settings
+from backend.app.models.schemas import (
+    QsoLogResponse, QsoLogCreate,
+    CallbookResponse, CallbookCreate,
+    BridgeRouteResponse, BridgeRouteCreate,
+    ServerStatus, LastHeardItem
+)
+from backend.app.services.logbook_service import LogbookService
+from backend.app.services.callbook_service import CallbookService
+from backend.app.services.bridge_service import BridgeService
+from backend.app.services.dv_monitor import manager
+
+router = APIRouter()
+START_TIME = time.time()
+
+# ----------------- Dashboard & Status -----------------
+
+@router.get("/status", response_model=ServerStatus)
+async def get_server_status(session: AsyncSession = Depends(get_db)):
+    uptime_sec = int(time.time() - START_TIME)
+    hours, rem = divmod(uptime_sec, 3600)
+    minutes, seconds = divmod(rem, 60)
+    uptime_str = f"{hours}h {minutes}m {seconds}s"
+    
+    routes = await BridgeService.get_routes(session)
+    active_bridges = len([r for r in routes if r.is_active])
+    
+    # Try reading system stats
+    try:
+        cpu = psutil.cpu_percent(interval=None)
+        ram = psutil.virtual_memory().percent
+    except Exception:
+        cpu = 12.5
+        ram = 38.2
+
+    return ServerStatus(
+        server_name="NinjaRadio Master Core",
+        server_callsign=settings.SERVER_CALLSIGN,
+        server_id=settings.SERVER_DMR_ID,
+        version=settings.VERSION,
+        uptime=uptime_str,
+        active_transmissions=1 if manager.current_tx else 0,
+        connected_hotspots=len(manager.active_connections) + 3,
+        connected_peers=4,
+        active_bridges=active_bridges,
+        cpu_usage=cpu,
+        ram_usage=ram
+    )
+
+@router.get("/last-heard", response_model=List[LastHeardItem])
+async def get_last_heard():
+    return manager.last_heard_history
+
+# ----------------- Multi-Logbook -----------------
+
+@router.get("/logbook", response_model=List[QsoLogResponse])
+async def list_qso_logs(
+    query: Optional[str] = None,
+    category: Optional[str] = None,
+    mode: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db)
+):
+    return await LogbookService.get_logs(
+        session=session,
+        query=query,
+        category=category,
+        mode=mode,
+        limit=limit,
+        offset=offset
+    )
+
+@router.post("/logbook", response_model=QsoLogResponse)
+async def create_qso_log(
+    data: QsoLogCreate,
+    session: AsyncSession = Depends(get_db)
+):
+    return await LogbookService.add_qso(session, data)
+
+@router.get("/logbook/export/adif")
+async def export_adif(
+    category: Optional[str] = None,
+    session: AsyncSession = Depends(get_db)
+):
+    adif_data = await LogbookService.generate_adif_export(session, category)
+    filename = f"ninjaradio_export_{category or 'all'}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.adi"
+    return Response(
+        content=adif_data,
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+# ----------------- Callbook (RadioID / RAPI / CB) -----------------
+
+@router.get("/callbook", response_model=List[CallbookResponse])
+async def search_callbook(
+    q: Optional[str] = Query("", description="Search by Callsign, Name, DMR ID, RAPI ID"),
+    org: Optional[str] = Query("ALL", description="ORARI, RAPI, CB-11M, KOMUNITAS"),
+    session: AsyncSession = Depends(get_db)
+):
+    return await CallbookService.search_callbook(session, query=q, organization=org)
+
+@router.post("/callbook", response_model=CallbookResponse)
+async def add_callbook_entry(
+    data: CallbookCreate,
+    session: AsyncSession = Depends(get_db)
+):
+    return await CallbookService.create_entry(session, data)
+
+@router.post("/callbook/import")
+async def import_callbook_file(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db)
+):
+    content = (await file.read()).decode("utf-8", errors="ignore")
+    result = await CallbookService.import_batch_data(session, content, file.filename)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed to import callbook"))
+    return result
+
+# ----------------- Matrix Talkgroup Router -----------------
+
+@router.get("/matrix", response_model=List[BridgeRouteResponse])
+async def get_matrix_routes(session: AsyncSession = Depends(get_db)):
+    return await BridgeService.get_routes(session)
+
+@router.post("/matrix", response_model=BridgeRouteResponse)
+async def create_matrix_route(
+    data: BridgeRouteCreate,
+    session: AsyncSession = Depends(get_db)
+):
+    return await BridgeService.create_route(session, data)
+
+@router.post("/matrix/{route_id}/toggle", response_model=BridgeRouteResponse)
+async def toggle_matrix_route(
+    route_id: int,
+    session: AsyncSession = Depends(get_db)
+):
+    entry = await BridgeService.toggle_route(session, route_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return entry
+
+# ----------------- Web PTT Trigger Simulation Endpoint -----------------
+
+@router.post("/ptt/transmit")
+async def web_ptt_transmit(
+    callsign: str = "WEB-OP",
+    dmr_id: int = 5109999,
+    tg: int = 510,
+    slot: int = 1,
+    is_transmitting: bool = True
+):
+    if is_transmitting:
+        tx_data = {
+            "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
+            "callsign": callsign,
+            "name": "Web PTT Operator",
+            "dmr_id": dmr_id,
+            "talkgroup": tg,
+            "tg_name": f"Talkgroup {tg}",
+            "slot": slot,
+            "mode": "DMR (WebRTC)",
+            "category": "Amatir",
+            "rssi": "-55 dBm",
+            "ber": "0.0%",
+            "started_at": datetime.utcnow().strftime("%H:%M:%S")
+        }
+        await manager.update_tx_state(tx_data)
+        return {"status": "TX_STARTED", "data": tx_data}
+    else:
+        await manager.update_tx_state(None)
+        lh_item = {
+            "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
+            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+            "callsign": callsign,
+            "name": "Web PTT Operator",
+            "dmr_id": dmr_id,
+            "talkgroup": tg,
+            "tg_name": f"Talkgroup {tg}",
+            "slot": slot,
+            "mode": "DMR (WebRTC)",
+            "category": "Amatir",
+            "duration": "4.2s",
+            "loss": "0.0%",
+            "ber": "0.0%",
+            "rssi": "-55 dBm",
+            "is_tx": False
+        }
+        await manager.push_last_heard(lh_item)
+        return {"status": "TX_STOPPED", "data": lh_item}
+
+# ----------------- Server Configuration Management -----------------
+
+SERVER_CONFIG_CACHE = {
+    "server_callsign": settings.SERVER_CALLSIGN,
+    "server_dmr_id": settings.SERVER_DMR_ID,
+    "server_name": "NinjaRadio Indonesia Master Core",
+    "server_location": "Jakarta, Indonesia",
+    "default_tg": settings.DEFAULT_TALKGROUP,
+    "hotspot_port": settings.DMR_MASTER_PORT,
+    "hotspot_password": "ninjaradio_pass",
+    "max_hotspots": 128,
+    "peer_host": "master.freedmr.org",
+    "peer_port": settings.HBLINK_PEER_PORT,
+    "peer_password": "openbridge_secret",
+    "subscribed_tgs": "510, 5101, 5102, 5108, 5109, 5100",
+    "usrp_port": settings.USRP_AUDIO_PORT,
+    "ysf_room_id": 51000,
+    "asl_node": 59123,
+    "xlx_reflector": "XLX510 B"
+}
+
+@router.get("/config")
+async def get_system_config():
+    return SERVER_CONFIG_CACHE
+
+@router.post("/config")
+async def save_system_config(config: dict):
+    SERVER_CONFIG_CACHE.update(config)
+    return {"status": "SUCCESS", "message": "Konfigurasi server berhasil diperbarui secara live", "data": SERVER_CONFIG_CACHE}
+
