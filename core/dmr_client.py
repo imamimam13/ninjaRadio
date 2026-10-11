@@ -15,6 +15,7 @@ RPTACK = b"RPTACK"
 RPTK = b"RPTK"
 RPTC = b"RPTC"
 RPTP = b"RPTP"
+RPTCL = b"RPTCL"
 MSTPING = b"MSTPING"
 MSTP = b"MSTP"
 MSTACK = b"MSTACK"
@@ -124,7 +125,14 @@ class HomeBrewClient:
             self.ping_task.cancel()
         if self.worker_task:
             self.worker_task.cancel()
-        if self.sock:
+        if self.sock and self.target_addr:
+            try:
+                # Send graceful RPTCL de-registration so master immediately frees the DMR ID session
+                dereg = RPTCL + struct.pack(">I", self.dmr_id)
+                self.sock.sendto(dereg, self.target_addr)
+                logger.info(f"[{self.name}] Sent RPTCL logout to {self.target_addr}")
+            except Exception:
+                pass
             try:
                 self.sock.close()
             except Exception:
@@ -272,9 +280,8 @@ class HomeBrewClient:
                         self.packets_tx += 1
                     elif self.state in ["AUTH_FAILED", "RETRYING"]:
                         retry_count += 1
-                        if retry_count % 3 == 0:
-                            logger.info(f"[{self.name}] Retrying handshake to {self.target_addr}...")
-                            await self._send_rptl()
+                        logger.info(f"[{self.name}] Retrying RPTL handshake to {self.target_addr} (attempt {retry_count})...")
+                        await self._send_rptl()
                 except Exception as e:
                     logger.debug(f"[{self.name}] Ping/retry worker error: {e}")
 
@@ -284,7 +291,8 @@ class HomeBrewClient:
         # 1. RPTACK (Auth challenge or ACK)
         if data.startswith(RPTACK):
             if self.state in ["LOGGING_IN", "LOGIN_SENT"]:
-                salt = data[6:10] if len(data) >= 10 else data[4:8] if len(data) >= 8 else os.urandom(4)
+                # The 4-byte challenge salt is always the last 4 bytes of RPTACK (whether len is 8 or 12)
+                salt = data[-4:] if len(data) >= 8 else os.urandom(4)
                 logger.info(f"[{self.name}] Received RPTACK with salt: {salt.hex()}")
                 await self._send_rptk(salt)
             elif self.state == "KEY_SENT":
