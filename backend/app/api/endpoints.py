@@ -452,9 +452,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         ACTIVE_STREAMS[stream_key] = tx_data
         await manager.update_tx_state(tx_data)
 
-        # Broadcast live audio chunk to web clients if payload present
+        # Broadcast live audio chunk to web clients if payload present and NOT outgoing TX
         payload_b64 = event.get("payload_b64")
-        if payload_b64:
+        if payload_b64 and not is_tx:
             try:
                 import base64
                 import struct
