@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 0. Automatic SSL/HTTPS Reverse Proxy (Caddy v2 with Let's Encrypt / sslip.io support)
   proxy:

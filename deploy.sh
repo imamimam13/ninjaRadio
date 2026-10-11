@@ -64,10 +64,20 @@ if ! command -v docker &> /dev/null; then
     echo -e "${GREEN}✓ Docker berhasil dipasang.${NC}"
 fi
 
+# Tentukan apakah butuh sudo untuk menjalankan docker
+if docker info &>/dev/null; then
+    DOCKER_CMD="docker"
+elif command -v sudo &>/dev/null; then
+    DOCKER_CMD="sudo docker"
+    sudo usermod -aG docker "$USER" 2>/dev/null || true
+else
+    DOCKER_CMD="docker"
+fi
+
 # 5. Jalankan Seluruh Stack NinjaRadio di Docker
 echo ""
 echo -e "${CYAN}🚀 Membangun dan menjalankan seluruh kontainer NinjaRadio...${NC}"
-docker compose up -d --build
+$DOCKER_CMD compose up -d --build
 
 # 6. Tampilkan Hasil Akhir & Link Akses Langsung
 echo ""
