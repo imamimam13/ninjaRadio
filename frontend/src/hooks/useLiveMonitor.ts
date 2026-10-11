@@ -38,6 +38,9 @@ export interface ActiveTransmission {
 
 export function useLiveMonitor() {
   const [lastHeard, setLastHeard] = useState<LastHeardEntry[]>([]);
+  const [activeTx, setActiveTx] = useState<ActiveTransmission | null>(null);
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const wsRef = useRef<WebSocket | null>(null);
   const [incomingAudio, setIncomingAudio] = useState<{
     src_id: number;
     callsign: string;
