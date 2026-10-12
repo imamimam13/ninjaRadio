@@ -29,7 +29,9 @@ RUN curl -fsSL http://dvswitch.org/DVSwitch_Repository/dvswitch-keyring.gpg -o /
     apt-get update && \
     apt-get install -y --no-install-recommends dvswitch-base analog-bridge md380-emu mmdvm-bridge && \
     rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /var/log /app/data && \
+    mkdir -p /var/log /var/lib/dvswitch /var/log/dvswitch /opt/Analog_Bridge /opt/MMDVM_Bridge /opt/md380-emu /app/data && \
+    touch /var/lib/dvswitch/subscriber_ids.csv && \
+    ln -sf /usr/bin/qemu-arm-static /opt/md380-emu/qemu-arm-static || true && \
     ln -sf /opt/Analog_Bridge/Analog_Bridge /usr/local/bin/Analog_Bridge || true && \
     ln -sf /opt/md380-emu/md380-emu /usr/local/bin/md380-emu || true && \
     ln -sf /opt/MMDVM_Bridge/MMDVM_Bridge /usr/local/bin/MMDVM_Bridge || true
