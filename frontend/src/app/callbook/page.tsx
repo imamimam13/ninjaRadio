@@ -86,6 +86,8 @@ export default function CallbookPage() {
   const [newOrg, setNewOrg] = useState("ORARI");
   const [newOrgId, setNewOrgId] = useState("");
   const [newDefaultTg, setNewDefaultTg] = useState(510);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [isSubmittingAdd, setIsSubmittingAdd] = useState<boolean>(false);
 
   const fetchOrganizations = () => {
     fetch("/api/organizations")
@@ -199,6 +201,8 @@ export default function CallbookPage() {
   const handleAddCallbook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCallsign || !newDmrId) return;
+    setIsSubmittingAdd(true);
+    setAddError(null);
     try {
       const res = await fetch("/api/callbook", {
         method: "POST",
@@ -216,17 +220,24 @@ export default function CallbookPage() {
           default_tg: Number(newDefaultTg) || 510,
         }),
       });
+      const data = await res.json();
       if (res.ok) {
         setShowAddModal(false);
         setNewCallsign("");
         setNewName("");
         setNewCity("");
         setNewDefaultTg(510);
+        setAddError(null);
         fetchCallbook();
         beepPlayer?.playTalkGrant();
+      } else {
+        beepPlayer?.playRogerBeep();
+        setAddError(data.detail || data.error || "Gagal menyimpan data pengguna.");
       }
     } catch {
-      // Error
+      setAddError("Terjadi kesalahan jaringan saat menyimpan.");
+    } finally {
+      setIsSubmittingAdd(false);
     }
   };
 
@@ -364,7 +375,10 @@ export default function CallbookPage() {
             </button>
 
             <button
-              onClick={() => setShowAddModal(true)}
+              onClick={() => {
+                setAddError(null);
+                setShowAddModal(true);
+              }}
               className="flex items-center gap-1.5 px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-heading font-black text-xs rounded-xl shadow-lg shadow-cyan-500/20 transition-all"
             >
               <Plus className="w-4 h-4" />
@@ -696,6 +710,13 @@ export default function CallbookPage() {
               <Plus className="w-4 h-4 text-cyan-400" />
               Daftarkan Callsign / DMR ID Baru
             </h3>
+
+            {addError && (
+              <div className="p-3 bg-rose-500/20 border border-rose-500/50 text-rose-300 rounded-xl text-xs flex items-center gap-2 font-mono">
+                <span className="text-base">⚠️</span>
+                <span>{addError}</span>
+              </div>
+            )}
             <form onSubmit={handleAddCallbook} className="space-y-3 text-xs font-mono">
               <div>
                 <label className="block text-slate-400 mb-1">DMR ID (7 Digit)</label>
@@ -797,9 +818,10 @@ export default function CallbookPage() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 rounded-xl font-heading font-black shadow-md"
+                  disabled={isSubmittingAdd}
+                  className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 text-slate-950 rounded-xl font-heading font-black shadow-md flex items-center justify-center gap-2"
                 >
-                  Simpan ID
+                  {isSubmittingAdd ? "Menyimpan..." : "Simpan ID"}
                 </button>
               </div>
             </form>
