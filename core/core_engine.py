@@ -176,11 +176,12 @@ class DVSwitchCoreManager:
         """Generates Analog_Bridge.ini and MMDVM_Bridge.ini from live config."""
         cfg = self.config
         peers = cfg.get("peering", [])
-        active_peer = None
         for p in peers:
-            if p.get("isActive", True):
+            if p.get("isActive") is True:
                 active_peer = p
                 break
+        if not active_peer and peers:
+            active_peer = peers[0]
 
         if active_peer:
             master_host = active_peer.get("host", "127.0.0.1")
