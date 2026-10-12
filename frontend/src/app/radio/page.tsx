@@ -515,6 +515,14 @@ export default function RadioPocketMode() {
         float32[i] = int16[i] / 32768.0;
       }
 
+      // Micro cosine envelope (4 samples fade-in & fade-out) to eliminate chunk boundary pops ("klutuk-klutuk")
+      const fadeLen = Math.min(6, Math.floor(float32.length / 4));
+      for (let i = 0; i < fadeLen; i++) {
+        const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
+        float32[i] *= factor;
+        float32[float32.length - 1 - i] *= factor;
+      }
+
       const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
       audioBuffer.copyToChannel(float32, 0);
 
@@ -556,7 +564,10 @@ export default function RadioPocketMode() {
   }, [incomingAudio]);
 
   // Live TX Microphone Streamer to USRP / DMR Network
+  // Persistent refs prevent Chromium/V8 Garbage Collector from killing the audio pipeline after 2 seconds
   const txProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const txSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const txMuteGainRef = useRef<GainNode | null>(null);
   const txMicStreamRef = useRef<MediaStream | null>(null);
   const txAudioCtxRef = useRef<AudioContext | null>(null);
 
@@ -577,6 +588,8 @@ export default function RadioPocketMode() {
       txAudioCtxRef.current = ctx;
 
       const source = ctx.createMediaStreamSource(stream);
+      txSourceNodeRef.current = source;
+
       const bufferSize = 2048;
       const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
       txProcessorRef.current = processor;
@@ -604,6 +617,7 @@ export default function RadioPocketMode() {
         sendJson({
           type: "AUDIO_TX",
           pcm: b64,
+          is_tx: true,
           tg: tgNum,
           slot: currentTimeSlot,
           callsign: activeProfile.callsign,
@@ -615,6 +629,7 @@ export default function RadioPocketMode() {
       // Mute local output so microphone audio does not play into own speakers while transmitting
       const muteGain = ctx.createGain();
       muteGain.gain.value = 0;
+      txMuteGainRef.current = muteGain;
       processor.connect(muteGain);
       muteGain.connect(ctx.destination);
     } catch (err) {
@@ -626,6 +641,14 @@ export default function RadioPocketMode() {
     if (txProcessorRef.current) {
       try { txProcessorRef.current.disconnect(); } catch {}
       txProcessorRef.current = null;
+    }
+    if (txSourceNodeRef.current) {
+      try { txSourceNodeRef.current.disconnect(); } catch {}
+      txSourceNodeRef.current = null;
+    }
+    if (txMuteGainRef.current) {
+      try { txMuteGainRef.current.disconnect(); } catch {}
+      txMuteGainRef.current = null;
     }
     if (txAudioCtxRef.current) {
       try { txAudioCtxRef.current.close(); } catch {}

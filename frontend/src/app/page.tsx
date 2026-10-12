@@ -30,6 +30,7 @@ export default function DashboardPage() {
   const { lastHeard, activeTx, incomingAudio, isConnected } = useLiveMonitor();
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const rxAudioCtxRef = useRef<AudioContext | null>(null);
+  const rxInputNodeRef = useRef<AudioNode | null>(null);
   const rxNextTimeRef = useRef<number>(0);
 
   // Autoplay Policy: Unlock Web AudioContext on first user interaction
@@ -55,7 +56,36 @@ export default function DashboardPage() {
     try {
       if (!rxAudioCtxRef.current) {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        rxAudioCtxRef.current = new AudioCtx();
+        const ctx = new AudioCtx();
+
+        // Bandpass Filter & Dynamics Compressor
+        const hpf = ctx.createBiquadFilter();
+        hpf.type = "highpass";
+        hpf.frequency.value = 250;
+        hpf.Q.value = 0.707;
+
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = "lowpass";
+        lpf.frequency.value = 3400;
+        lpf.Q.value = 0.707;
+
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = 1.6;
+
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -12;
+        comp.knee.value = 6;
+        comp.ratio.value = 4;
+        comp.attack.value = 0.003;
+        comp.release.value = 0.15;
+
+        hpf.connect(lpf);
+        lpf.connect(gainNode);
+        gainNode.connect(comp);
+        comp.connect(ctx.destination);
+
+        rxAudioCtxRef.current = ctx;
+        rxInputNodeRef.current = hpf;
       }
       const ctx = rxAudioCtxRef.current;
       if (ctx.state === "suspended") {
@@ -83,16 +113,29 @@ export default function DashboardPage() {
         float32[i] = int16[i] / 32768.0;
       }
 
+      // Micro cosine envelope (4-6 samples fade-in & fade-out) to eliminate chunk boundary pops ("klutuk-klutuk")
+      const fadeLen = Math.min(6, Math.floor(float32.length / 4));
+      for (let i = 0; i < fadeLen; i++) {
+        const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
+        float32[i] *= factor;
+        float32[float32.length - 1 - i] *= factor;
+      }
+
       const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
       audioBuffer.copyToChannel(float32, 0);
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(ctx.destination);
+      if (rxInputNodeRef.current) {
+        source.connect(rxInputNodeRef.current);
+      } else {
+        source.connect(ctx.destination);
+      }
 
       const now = ctx.currentTime;
-      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
-        rxNextTimeRef.current = now;
+      // DMR 3-frame bursts arrive in 60-80ms cycles; 120ms cushion prevents buffer underrun clicks
+      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.40) {
+        rxNextTimeRef.current = now + 0.12;
       }
       source.start(rxNextTimeRef.current);
       rxNextTimeRef.current += audioBuffer.duration;

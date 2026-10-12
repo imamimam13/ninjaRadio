@@ -244,6 +244,7 @@ txPort = {AB_USRP_TX_PORT}
 rxPort = {AB_USRP_RX_PORT}
 usrpAudio = AUDIO_USE_BPF
 tlvAudio = AUDIO_USE_BPF
+usrpGain = 1.00
 """
         with open("/app/data/Analog_Bridge.ini", "w", encoding="utf-8") as f:
             f.write(ab_content)
@@ -815,7 +816,8 @@ Debug=1
             # If browser/client microphone stream paused or between bursts (>50ms), send comfort silence frame
             if time.time() - self.last_audio_tx_time > 0.05:
                 seq = (seq + 1) % 65536
-                pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 1, 0, 0, 0, 0) + (b"\x00" * 320)
+                target_dmr_id = getattr(self, "current_operator_dmr_id", dmr_id or 5109999)
+                pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 1, tg, target_dmr_id, slot, 0) + (b"\x00" * 320)
                 try:
                     self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
                 except Exception:
