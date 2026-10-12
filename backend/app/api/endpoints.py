@@ -281,7 +281,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                 if len(chunk) < 320:
                     chunk = chunk.ljust(320, b"\x00")
                 _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
-                header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, key_flag, 0, 0, 0, 0)
+                header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
                 packet = header + chunk
                 sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
                 try:
@@ -290,7 +290,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                     pass
         else:
             _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
-            header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, key_flag, 0, 0, 0, 0)
+            header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
             packet = header + (b"\x00" * 320)
             sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
             try:
@@ -299,6 +299,24 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                 pass
     except Exception:
         pass
+
+@router.post("/operator/switch")
+async def switch_operator_identity(payload: dict):
+    """Arms the core engine and Analog_Bridge with the active operator's personal DMR ID and Callsign."""
+    try:
+        callsign = str(payload.get("callsign", "N1NJA")).strip()
+        dmr_id = int(payload.get("dmr_id", 0))
+        if dmr_id > 0:
+            import httpx
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.post("http://core:5000/api/operator", json={
+                    "callsign": callsign,
+                    "dmr_id": dmr_id
+                })
+                return resp.json()
+    except Exception as e:
+        return {"status": "ERROR", "detail": str(e)}
+    return {"status": "IGNORED"}
 
 @router.post("/auth/verify-pin")
 async def verify_admin_pin(payload: PinVerifyRequest):

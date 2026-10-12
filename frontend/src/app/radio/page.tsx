@@ -223,6 +223,26 @@ export default function RadioPocketMode() {
   // Default identity is Monitor Mode (TX locked) until user creates profile or enters PIN
   const [activeProfile, setActiveProfile] = useState<UserProfile>(DEFAULT_MONITOR_PROFILE);
 
+  // Sync saved active operator profile to backend/core on load
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("ninjaradio_active_profile");
+        if (saved) {
+          const p = JSON.parse(saved);
+          if (p && p.dmrId > 0) {
+            setActiveProfile(p);
+            fetch("/api/operator/switch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ callsign: p.callsign, dmr_id: p.dmrId }),
+            }).catch(() => {});
+          }
+        }
+      } catch {}
+    }
+  }, []);
+
   // Anti-Abuse / Operator Auth Modal State
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModeTab, setAuthModeTab] = useState<"custom" | "pin">("custom");
@@ -477,9 +497,10 @@ export default function RadioPocketMode() {
       }
 
       const now = ctx.currentTime;
-      // Jitter buffer scheduling: if timeline fell behind or gap > 300ms, start with a 60ms cushion
-      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
-        rxNextTimeRef.current = now + 0.06;
+      // DMR 3-frame TDMA bursts arrive in 60-80ms cycles.
+      // Use 150ms cushion so TDMA inter-burst gaps (>70ms) never under-run and cause clicks.
+      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.45) {
+        rxNextTimeRef.current = now + 0.15;
       }
 
       source.start(rxNextTimeRef.current);
@@ -1087,6 +1108,13 @@ export default function RadioPocketMode() {
               setActiveProfile(newProf);
               if (typeof window !== "undefined") {
                 localStorage.setItem("ninjaradio_active_profile", JSON.stringify(newProf));
+              }
+              if (newProf.dmrId && newProf.dmrId > 0) {
+                fetch("/api/operator/switch", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ callsign: newProf.callsign, dmr_id: newProf.dmrId }),
+                }).catch(() => {});
               }
               if (newProf.defaultTg) {
                 tuneToTalkgroup(resolveTalkgroup(newProf.defaultTg, newProf.category));
