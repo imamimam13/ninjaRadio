@@ -82,8 +82,8 @@ export function usePhysicalPTT({
       return e.code === pttKey || e.key === pttKey;
     }
 
-    // 2. Default "AUTO" mode: accepts smartphone Volume Down, Volume Up, Headset Hook / Media, PoC hardware keys, and Spacebar
-    const isSpace = e.code === "Space" || e.key === " " || e.keyCode === 32;
+    // 2. Default "AUTO" mode: accepts smartphone Volume Down, Volume Up, Headset Hook / Media, and dedicated PoC hardware keys
+    // Note: Spacebar is NOT triggered automatically to prevent accidental transmissions while scrolling/typing
     const isVolumeDown = e.code === "VolumeDown" || e.key === "AudioVolumeDown" || e.keyCode === 25;
     const isVolumeUp = e.code === "VolumeUp" || e.key === "AudioVolumeUp" || e.keyCode === 24;
     const isHeadset =
@@ -102,8 +102,17 @@ export function usePhysicalPTT({
       e.keyCode === 263 || // F6
       e.key === "F4";
 
-    return isSpace || isVolumeDown || isVolumeUp || isHeadset || isPocHardware;
+    return isVolumeDown || isVolumeUp || isHeadset || isPocHardware;
   }, [pttKey]);
+
+  // Safety Time-Out Timer (TOT): Auto-release PTT after 60s
+  useEffect(() => {
+    if (!isTransmitting) return;
+    const timer = setTimeout(() => {
+      stopTx();
+    }, 60000);
+    return () => clearTimeout(timer);
+  }, [isTransmitting, stopTx]);
 
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
@@ -133,12 +142,31 @@ export function usePhysicalPTT({
       }
     };
 
+    // Auto-release PTT if tab loses focus, window blurs, or page is navigated away
+    const handleSafetyRelease = () => {
+      if (isTxRef.current) {
+        stopTx();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && isTxRef.current) {
+        stopTx();
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown, { passive: false });
     window.addEventListener("keyup", handleKeyUp, { passive: false });
+    window.addEventListener("blur", handleSafetyRelease);
+    window.addEventListener("beforeunload", handleSafetyRelease);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleSafetyRelease);
+      window.removeEventListener("beforeunload", handleSafetyRelease);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [enabled, isPttEvent, pttMode, startTx, stopTx, toggleTx]);
 

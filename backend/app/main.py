@@ -67,6 +67,29 @@ async def websocket_live_endpoint(websocket: WebSocket):
     from backend.app.api.endpoints import send_real_usrp_packet_to_core
 
     await manager.connect(websocket)
+    client_tx_active = False
+    last_tx_info = {"tg": 1025, "dmr_id": 102205798, "slot": 2, "callsign": "WEB-OP"}
+
+    async def notify_core_stop_tx():
+        nonlocal client_tx_active
+        if client_tx_active:
+            client_tx_active = False
+            send_real_usrp_packet_to_core(
+                last_tx_info["callsign"], last_tx_info["dmr_id"], last_tx_info["tg"], last_tx_info["slot"], is_tx=False
+            )
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=1.0) as client:
+                    await client.post("http://core:5000/api/tx", json={
+                        "callsign": last_tx_info["callsign"],
+                        "dmr_id": last_tx_info["dmr_id"],
+                        "tg": last_tx_info["tg"],
+                        "slot": last_tx_info["slot"],
+                        "is_transmitting": False
+                    })
+            except Exception:
+                pass
+
     try:
         while True:
             # Handle incoming client messages (audio stream from Web PTT, PTT events, ping)
@@ -81,17 +104,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         dmr_id = int(msg.get("dmr_id", 102205798))
                         slot = int(msg.get("slot", 2))
                         callsign = str(msg.get("callsign", "WEB-OP"))
+                        last_tx_info = {"tg": tg, "dmr_id": dmr_id, "slot": slot, "callsign": callsign}
                         is_tx = bool(msg.get("is_tx", True)) if pcm_b64 else False
                         if pcm_b64 and is_tx:
+                            client_tx_active = True
                             pcm_data = base64.b64decode(pcm_b64)
                             send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
                         elif not is_tx:
-                            send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=False)
+                            await notify_core_stop_tx()
                 except Exception:
                     pass
     except WebSocketDisconnect:
+        await notify_core_stop_tx()
         manager.disconnect(websocket)
     except Exception:
+        await notify_core_stop_tx()
         manager.disconnect(websocket)
 
 @app.get("/health")
