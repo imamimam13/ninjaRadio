@@ -209,6 +209,30 @@ class CallbookService:
 
     @staticmethod
     async def create_entry(session: AsyncSession, data: CallbookCreate) -> CallbookEntry:
+        # Check if DMR ID already exists; if so, update (upsert)
+        existing = await CallbookService.get_by_dmr_id(session, data.dmr_id)
+        if existing:
+            existing.callsign = data.callsign.upper()
+            existing.name = data.name
+            existing.city = data.city or ""
+            existing.province_state = data.province_state or ""
+            existing.country = data.country or "Indonesia"
+            existing.organization = data.organization.upper() if data.organization else "KOMUNITAS"
+            existing.organization_id = data.organization_id or data.callsign.upper()
+            existing.remarks = data.remarks or ""
+            existing.default_tg = data.default_tg if data.default_tg else 510
+            await session.commit()
+            await session.refresh(existing)
+            await CallbookService.sync_subscribers_csv(session)
+            return existing
+
+        target_org_clean = data.organization.strip().upper() if data.organization else None
+        if target_org_clean:
+            try:
+                await CallbookService.add_organization(session, code=target_org_clean, name=target_org_clean)
+            except Exception:
+                pass
+
         entry = CallbookEntry(**data.model_dump())
         session.add(entry)
         await session.commit()
