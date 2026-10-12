@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 import struct
 import socket
 import logging
@@ -258,13 +259,13 @@ class DMRVocoder:
         )
 
         pcm = bytearray(320)
-        # AMBE raw output is typically quiet; amplify by 3.5x and clamp to int16
+        # AMBE raw output: apply clean gain + soft saturation limiter to eliminate square-wave distortion ("kresek-kresek")
         for idx in range(160):
-            val = int(audio_buf[idx] * 3.5)
-            if val > 32767:
-                val = 32767
-            elif val < -32768:
-                val = -32768
+            sample = float(audio_buf[idx]) * 3.0
+            if abs(sample) > 22000.0:
+                norm = sample / 32767.0
+                sample = 32767.0 * math.tanh(norm)
+            val = int(max(-32767, min(32767, sample)))
             struct.pack_into("<h", pcm, idx * 2, val)
         return bytes(pcm)
 
