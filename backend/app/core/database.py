@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Integer, Float, DateTime, Boolean, Text
 from datetime import datetime
+from typing import Optional
 from backend.app.core.config import settings
 
 engine = create_async_engine(settings.DATABASE_URL, echo=False)
@@ -43,6 +44,7 @@ class CallbookEntry(Base):
     organization: Mapped[str] = mapped_column(String(32), default="ORARI") # ORARI, RAPI, CB-11M, KOMUNITAS, INTERNATIONAL
     organization_id: Mapped[str] = mapped_column(String(64), default="") # e.g. 10-28 code / RAPI ID
     remarks: Mapped[str] = mapped_column(String(255), default="")
+    default_tg: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=510)
 
 class BridgeRoute(Base):
     __tablename__ = "bridge_routes"
@@ -70,6 +72,12 @@ class Organization(Base):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Safe migration for existing SQLite database
+        try:
+            from sqlalchemy import text
+            await conn.execute(text("ALTER TABLE callbook ADD COLUMN default_tg INTEGER DEFAULT 510"))
+        except Exception:
+            pass
 
 async def get_db():
     async with async_session_maker() as session:

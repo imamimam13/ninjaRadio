@@ -38,6 +38,7 @@ class CallbookBase(BaseModel):
     organization: Optional[str] = "ORARI"
     organization_id: Optional[str] = ""
     remarks: Optional[str] = ""
+    default_tg: Optional[int] = 510
 
 class CallbookCreate(CallbookBase):
     pass

@@ -17,6 +17,7 @@ interface CallbookItem {
   organization: string;
   organization_id: string;
   remarks: string;
+  default_tg?: number;
 }
 
 interface OrgItem {
@@ -34,6 +35,14 @@ export default function CallbookPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Import CSV/JSON Modal state
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importOrg, setImportOrg] = useState("AUTO");
+  const [importTg, setImportTg] = useState("510");
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // Organizations registry state
   const [organizations, setOrganizations] = useState<OrgItem[]>([
@@ -57,6 +66,7 @@ export default function CallbookPage() {
   const [newCity, setNewCity] = useState("");
   const [newOrg, setNewOrg] = useState("ORARI");
   const [newOrgId, setNewOrgId] = useState("");
+  const [newDefaultTg, setNewDefaultTg] = useState(510);
 
   const fetchOrganizations = () => {
     fetch("/api/organizations")
@@ -127,33 +137,44 @@ export default function CallbookPage() {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleExecuteImport = async () => {
+    if (!importFile) return;
+
+    setIsImporting(true);
+    setImportError(null);
 
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", importFile);
+    if (importOrg && importOrg !== "AUTO") {
+      formData.append("organization", importOrg);
+    }
+    if (importTg) {
+      formData.append("default_tg", importTg);
+    }
 
-    setImportStatus("Mengimpor data callbook...");
     try {
       const res = await fetch("/api/callbook/import", {
         method: "POST",
         body: formData,
       });
       const data = await res.json();
-      if (res.ok) {
-        setImportStatus(`✓ Berhasil mengimpor ${data.imported_count || data.count || "semua"} data pengguna!`);
+      if (res.ok && data.success) {
+        setShowImportModal(false);
+        setImportStatus(`✓ Berhasil mengimpor ${data.imported_count || 0} data pengguna! (Dilewati: ${data.skipped_count || 0})`);
         beepPlayer?.playTalkGrant();
         fetchCallbook();
+        fetchOrganizations();
+        setTimeout(() => setImportStatus(null), 5000);
       } else {
-        setImportStatus(`❌ Gagal impor: ${data.detail || "Format tidak valid"}`);
+        beepPlayer?.playRogerBeep();
+        setImportError(data.detail || data.error || "Gagal mengimpor file data.");
       }
     } catch {
-      setImportStatus("❌ Terjadi kesalahan jaringan saat mengunggah.");
+      setImportError("Terjadi kesalahan jaringan saat mengunggah.");
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
-
-    setTimeout(() => setImportStatus(null), 4000);
-    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleAddCallbook = async (e: React.FormEvent) => {
@@ -173,6 +194,7 @@ export default function CallbookPage() {
           organization: newOrg,
           organization_id: newOrgId || newCallsign,
           remarks: "Registered via NinjaRadio Core",
+          default_tg: Number(newDefaultTg) || 510,
         }),
       });
       if (res.ok) {
@@ -180,6 +202,7 @@ export default function CallbookPage() {
         setNewCallsign("");
         setNewName("");
         setNewCity("");
+        setNewDefaultTg(510);
         fetchCallbook();
         beepPlayer?.playTalkGrant();
       }
@@ -207,17 +230,12 @@ export default function CallbookPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-            {/* Hidden File Input */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".csv,.json"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-            
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => {
+                setImportFile(null);
+                setImportError(null);
+                setShowImportModal(true);
+              }}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-[#05080f] border border-cyan-900/60 hover:border-cyan-400 text-cyan-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
             >
               <Upload className="w-4 h-4 text-cyan-400" />
@@ -281,7 +299,14 @@ export default function CallbookPage() {
             >
               <div className="flex items-start justify-between">
                 <div>
-                  <span className="text-[11px] font-mono text-slate-400">DMR ID: <strong className="text-cyan-400">{entry.dmr_id}</strong></span>
+                  <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-400">
+                    <span>DMR ID: <strong className="text-cyan-400">{entry.dmr_id}</strong></span>
+                    {entry.default_tg && (
+                      <span className="px-1.5 py-0.2 rounded bg-amber-950/70 border border-amber-600/40 text-[10px] text-amber-300 font-bold">
+                        TG {entry.default_tg}
+                      </span>
+                    )}
+                  </div>
                   <h3 className="text-2xl font-black text-white font-heading tracking-wide mt-0.5">
                     {entry.callsign}
                   </h3>
@@ -324,6 +349,202 @@ export default function CallbookPage() {
         </div>
 
       </main>
+
+      {/* Import File Modal (CSV / JSON) */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e1422] border-2 border-cyan-500/60 rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-cyan-950 pb-3">
+              <div>
+                <h3 className="font-heading font-black text-lg text-white flex items-center gap-2">
+                  <Upload className="w-5 h-5 text-cyan-400" />
+                  Import Callbook CSV / JSON
+                </h3>
+                <p className="text-xs font-mono text-slate-400 mt-1">
+                  Upload file data user dengan pilihan Organisasi dan Default TG
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="text-slate-500 hover:text-white text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {importError && (
+              <div className="p-3 bg-red-950/70 border border-red-500/50 rounded-xl text-red-300 text-xs font-mono flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{importError}</span>
+              </div>
+            )}
+
+            {/* File Drag/Selection Box */}
+            <div>
+              <label className="block text-xs font-mono text-slate-300 mb-1.5 font-bold">
+                1. Pilih File (JSON atau CSV)
+              </label>
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition-all ${
+                  importFile
+                    ? "border-emerald-500/60 bg-emerald-950/20"
+                    : "border-cyan-900/60 bg-[#05080f] hover:border-cyan-400/60"
+                }`}
+              >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept=".csv,.json"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setImportFile(f);
+                      setImportError(null);
+                    }
+                  }}
+                  className="hidden"
+                />
+                {importFile ? (
+                  <div className="space-y-1">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-900/50 border border-emerald-500/50 rounded-xl text-emerald-300 font-mono text-xs font-bold">
+                      <Check className="w-4 h-4 text-emerald-400" />
+                      {importFile.name}
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      Ukuran: {(importFile.size / 1024).toFixed(1)} KB — Klik untuk ganti file
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <Upload className="w-7 h-7 text-cyan-400 mx-auto mb-1 opacity-80" />
+                    <p className="text-xs font-bold text-slate-200 font-mono">
+                      Klik untuk memilih file CSV / JSON
+                    </p>
+                    <p className="text-[11px] text-slate-500 font-mono">
+                      Mendukung format RadioID.net CSV & JSON list/object
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Target Organization Selector */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-mono text-slate-300 font-bold">
+                  2. Pilih Organisasi / Group Sasaran
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminPinInput("");
+                    setNewOrgName("");
+                    setNewOrgCode("");
+                    setNewOrgDesc("");
+                    setOrgPinError(null);
+                    setShowOrgPinModal(true);
+                  }}
+                  className="text-[11px] text-cyan-400 hover:text-cyan-300 underline font-mono"
+                >
+                  + Tambah Org Baru (PIN)
+                </button>
+              </div>
+              <select
+                value={importOrg}
+                onChange={(e) => setImportOrg(e.target.value)}
+                className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300 text-xs font-mono font-bold focus:border-cyan-400 outline-none"
+              >
+                <option value="AUTO">🌐 Otomatis / Sesuai Kolom di File</option>
+                {organizations.map((org) => (
+                  <option key={org.code} value={org.code}>
+                    {org.name || org.code} ({org.code})
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-500 font-mono">
+                Pilih organisasi jika ingin memasukkan semua kontak dalam file ini ke satu group tertentu.
+              </p>
+            </div>
+
+            {/* Default Talkgroup Selector */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-mono text-slate-300 font-bold">
+                3. Default TalkGroup (TG) Sasaran
+              </label>
+              <div className="grid grid-cols-4 gap-1.5 mb-2">
+                {[
+                  { tg: "510", label: "510 Indo" },
+                  { tg: "5101", label: "5101 Jabar" },
+                  { tg: "5102", label: "5102 Jateng" },
+                  { tg: "5103", label: "5103 Jatim" },
+                  { tg: "5109", label: "5109 RAPI" },
+                  { tg: "5108", label: "5108 CB 11M" },
+                  { tg: "91", label: "91 WW" },
+                  { tg: "9990", label: "9990 Echo" },
+                ].map((item) => (
+                  <button
+                    key={item.tg}
+                    type="button"
+                    onClick={() => setImportTg(item.tg)}
+                    className={`px-2 py-1.5 rounded-lg text-[11px] font-mono font-bold transition-all border ${
+                      importTg === item.tg
+                        ? "bg-cyan-500/20 border-cyan-400 text-cyan-300"
+                        : "bg-[#05080f] border-cyan-900/40 text-slate-400 hover:border-slate-600"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono text-slate-400">TG Custom:</span>
+                <input
+                  type="number"
+                  value={importTg}
+                  onChange={(e) => setImportTg(e.target.value)}
+                  placeholder="Contoh: 510"
+                  className="flex-1 px-3 py-1.5 bg-[#05080f] border border-cyan-900/80 rounded-xl text-amber-300 font-mono font-bold text-xs focus:border-cyan-400 outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2 pt-2 border-t border-cyan-950">
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-mono text-xs font-bold transition-all"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={!importFile || isImporting}
+                onClick={handleExecuteImport}
+                className={`flex-1 py-2.5 rounded-xl font-heading font-black text-xs transition-all flex items-center justify-center gap-2 ${
+                  !importFile || isImporting
+                    ? "bg-cyan-900/40 text-cyan-600 cursor-not-allowed"
+                    : "bg-cyan-400 hover:bg-cyan-300 text-slate-950 shadow-lg shadow-cyan-500/25"
+                }`}
+              >
+                {isImporting ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                    <span>Mengimpor Data...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span>Mulai Impor</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Callbook Modal */}
       {showAddModal && (
@@ -411,6 +632,17 @@ export default function CallbookPage() {
                     className="w-full px-2 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1">Default TalkGroup (TG)</label>
+                <input
+                  type="number"
+                  placeholder="Contoh: 510"
+                  value={newDefaultTg}
+                  onChange={(e) => setNewDefaultTg(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-amber-300 font-mono font-bold focus:border-cyan-400 outline-none"
+                />
               </div>
 
               <div className="flex gap-2 pt-2">
