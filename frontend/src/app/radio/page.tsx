@@ -482,8 +482,8 @@ export default function RadioPocketMode() {
     // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
     if (!audioChunk || !audioChunk.pcm) return;
     if (isMutedRef.current || isTxRef.current) return;
-    // Suppress self-echo audio
-    if (audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
+    // Suppress self-echo audio ONLY if NOT on Echo / Parrot test (TG 9990)
+    if (audioChunk.tg !== 9990 && audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
 
     // Deduplicate identical chunks if triggered by both listener & incomingAudio
     if (lastPlayedChunkRef.current === audioChunk.pcm) return;
