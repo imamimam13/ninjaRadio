@@ -87,6 +87,14 @@ class CallbookService:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_by_callsign(session: AsyncSession, callsign: str) -> Optional[CallbookEntry]:
+        if not callsign:
+            return None
+        stmt = select(CallbookEntry).where(CallbookEntry.callsign == callsign.strip().upper())
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def get_by_id(session: AsyncSession, entry_id: int) -> Optional[CallbookEntry]:
         stmt = select(CallbookEntry).where(CallbookEntry.id == entry_id)
         result = await session.execute(stmt)
