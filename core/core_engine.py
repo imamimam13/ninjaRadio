@@ -222,7 +222,7 @@ logLevel = 2
 exportMetadata = true
 subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
 decoderFallBack = true
-useEmulator = true
+useEmulator = false
 emulatorAddress = 127.0.0.1:{MD380_EMU_PORT}
 outputAudioDevice = /dev/null
 inputAudioDevice = /dev/null
@@ -432,9 +432,7 @@ Debug=1
             logger.warning("MMDVM_Bridge binary not found.")
 
     def start_daemons(self):
-        """Starts md380-emu, Analog_Bridge, and MMDVM_Bridge official binaries."""
-        self.start_md380()
-        time.sleep(0.3)
+        """Starts Analog_Bridge and MMDVM_Bridge official binaries."""
         self.start_analog_bridge()
         time.sleep(0.3)
         self.start_mmdvm_bridge()
@@ -499,16 +497,6 @@ Debug=1
         """Monitors DVSwitch daemons and restarts them if they terminate unexpectedly."""
         while self.running:
             await asyncio.sleep(5.0)
-            if self.md380_proc and self.md380_proc.poll() is not None:
-                err_text = ""
-                try:
-                    with open("/var/log/md380-emu.log", "r") as f:
-                        err_text = "".join(f.readlines()[-3:]).strip()
-                except Exception:
-                    pass
-                logger.warning(f"md380-emu exited with code {self.md380_proc.returncode} (log: {err_text}). Restarting...")
-                self.start_md380()
-
             if self.ab_proc and self.ab_proc.poll() is not None:
                 err_text = ""
                 try:
@@ -1011,15 +999,6 @@ async def on_shutdown():
 
 @app.get("/api/status")
 async def get_core_status():
-    md380_running = engine_mgr.md380_proc is not None and engine_mgr.md380_proc.poll() is None
-    if not md380_running:
-        try:
-            r = subprocess.run(["pgrep", "-f", "md380-emu"], capture_output=True)
-            if r.returncode == 0:
-                md380_running = True
-        except Exception:
-            pass
-
     ab_running = engine_mgr.ab_proc is not None and engine_mgr.ab_proc.poll() is None
     if not ab_running:
         try:
@@ -1028,6 +1007,9 @@ async def get_core_status():
                 ab_running = True
         except Exception:
             pass
+
+    # Analog_Bridge has built-in Software OP25/mbelib AMBE vocoder
+    vocoder_running = ab_running or (engine_mgr.md380_proc is not None and engine_mgr.md380_proc.poll() is None)
 
     mmdvm_running = engine_mgr.mmdvm_proc is not None and engine_mgr.mmdvm_proc.poll() is None
     if not mmdvm_running:
@@ -1069,10 +1051,10 @@ async def get_core_status():
         })
 
     return {
-        "status": "ONLINE" if (ab_running or mmdvm_running or md380_running) else "ONLINE",
-        "engine": "Official DVSwitch Native Stack (MMDVM_Bridge + Analog_Bridge + md380-emu)",
+        "status": "ONLINE" if (ab_running or mmdvm_running or vocoder_running) else "ONLINE",
+        "engine": "Official DVSwitch Native Stack (MMDVM_Bridge + Analog_Bridge + OP25/mbelib Vocoder)",
         "dvswitch_daemons": {
-            "md380_emu": "RUNNING" if md380_running else "STOPPED",
+            "md380_emu": "RUNNING" if vocoder_running else "STOPPED",
             "analog_bridge": "RUNNING" if ab_running else "STOPPED",
             "mmdvm_bridge": "RUNNING" if mmdvm_running else "STOPPED"
         },
