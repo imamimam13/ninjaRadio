@@ -94,95 +94,215 @@ class CallbookService:
         return entry
 
     @staticmethod
-    async def import_batch_data(session: AsyncSession, raw_content: str, filename: str) -> Dict[str, Any]:
+    async def import_batch_data(
+        session: AsyncSession,
+        raw_content: str,
+        filename: str,
+        target_organization: Optional[str] = None,
+        default_tg: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
-        Supports CSV (RadioID format / Community CSV) and JSON array format.
+        Supports CSV (RadioID format / Community CSV) and JSON formats
+        (arrays, wrapped dictionaries, keyed dictionaries), with optional
+        target organization and default talkgroup overrides.
         """
         imported_count = 0
         skipped_count = 0
-        is_json = filename.endswith(".json") or raw_content.strip().startswith("[")
+        trimmed = raw_content.strip()
+        is_json = filename.lower().endswith(".json") or trimmed.startswith("[") or trimmed.startswith("{")
+
+        target_org_clean = target_organization.strip().upper() if target_organization and target_organization.strip().upper() not in ["", "AUTO", "ALL", "NONE"] else None
+
+        if target_org_clean:
+            try:
+                await CallbookService.add_organization(session, code=target_org_clean, name=target_org_clean)
+            except Exception:
+                pass
+
+        def extract_row_fields(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if not isinstance(row, dict):
+                return None
+            clean = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
+            
+            # DMR ID extraction
+            raw_id = (
+                clean.get("dmr_id") or clean.get("radio_id") or clean.get("id") or 
+                clean.get("dmrid") or clean.get("radioid") or clean.get("user_id") or 
+                clean.get("radio_id_id")
+            )
+            if raw_id is None:
+                return None
+            try:
+                dmr_id = int(str(raw_id).strip())
+                if dmr_id <= 0:
+                    return None
+            except (ValueError, TypeError):
+                return None
+
+            # Callsign extraction
+            callsign = str(clean.get("callsign") or clean.get("call") or clean.get("call_sign") or clean.get("user") or "NOCALL").strip().upper()
+
+            # Name extraction
+            first = str(clean.get("first_name") or clean.get("fname") or "").strip()
+            last = str(clean.get("last_name") or clean.get("surname") or "").strip()
+            name = str(clean.get("name") or clean.get("nama") or clean.get("fullname") or "").strip()
+            if not name and (first or last):
+                name = f"{first} {last}".strip()
+            if not name:
+                name = f"Operator {callsign}"
+
+            # Location
+            city = str(clean.get("city") or clean.get("kota") or "").strip()
+            province = str(clean.get("province_state") or clean.get("state") or clean.get("provinsi") or "").strip()
+            country = str(clean.get("country") or clean.get("negara") or "Indonesia").strip()
+
+            # Organization
+            if target_org_clean:
+                org = target_org_clean
+            else:
+                org_raw = clean.get("organization") or clean.get("organisasi") or clean.get("group") or clean.get("org")
+                if org_raw:
+                    org = str(org_raw).strip().upper()
+                else:
+                    org = "ORARI" if callsign.startswith(("YB", "YC", "YD")) else "KOMUNITAS"
+
+            # Default TalkGroup
+            if default_tg is not None and int(default_tg) > 0:
+                tg_val = int(default_tg)
+            else:
+                raw_tg = clean.get("default_tg") or clean.get("tg") or clean.get("talkgroup") or clean.get("target_tg")
+                try:
+                    tg_val = int(str(raw_tg).strip()) if raw_tg else 510
+                except Exception:
+                    tg_val = 510
+
+            org_id = str(clean.get("organization_id") or clean.get("org_id") or clean.get("rapi_id") or clean.get("10_28") or callsign).strip()
+            remarks = str(clean.get("remarks") or clean.get("keterangan") or clean.get("comment") or "").strip()
+
+            return {
+                "dmr_id": dmr_id,
+                "callsign": callsign,
+                "name": name,
+                "city": city,
+                "province_state": province,
+                "country": country,
+                "organization": org,
+                "organization_id": org_id,
+                "remarks": remarks,
+                "default_tg": tg_val,
+            }
 
         if is_json:
             try:
-                data = json.loads(raw_content)
-                for row in data:
-                    dmr_id = row.get("dmr_id") or row.get("radio_id") or row.get("id")
-                    if not dmr_id:
+                data = json.loads(trimmed)
+                raw_rows: List[Any] = []
+                if isinstance(data, list):
+                    raw_rows = data
+                elif isinstance(data, dict):
+                    # Check common container keys
+                    for key in ["users", "data", "callbook", "results", "records", "items", "subscribers", "entries", "contacts", "rows"]:
+                        if key in data and isinstance(data[key], list):
+                            raw_rows = data[key]
+                            break
+                    
+                    if not raw_rows:
+                        # Check if any value is a list of dicts
+                        for k, v in data.items():
+                            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                                raw_rows = v
+                                break
+
+                    if not raw_rows:
+                        # Keyed dictionary (e.g. {"1022057": {"callsign": "BD62BOT", ...}})
+                        for k, v in data.items():
+                            if isinstance(v, dict):
+                                row_dict = dict(v)
+                                if str(k).strip().isdigit() and not any(f in row_dict for f in ["dmr_id", "radio_id", "id", "dmrid", "radioid"]):
+                                    row_dict["dmr_id"] = int(k)
+                                elif not str(k).strip().isdigit() and not any(f in row_dict for f in ["callsign", "call", "call_sign"]):
+                                    row_dict["callsign"] = str(k).strip()
+                                raw_rows.append(row_dict)
+                            elif isinstance(v, (str, int)):
+                                if str(k).strip().isdigit():
+                                    raw_rows.append({"dmr_id": int(k), "callsign": str(v).strip()})
+
+                for row in raw_rows:
+                    parsed = extract_row_fields(row)
+                    if not parsed:
                         skipped_count += 1
                         continue
-                    
-                    existing = await CallbookService.get_by_dmr_id(session, int(dmr_id))
+
+                    existing = await CallbookService.get_by_dmr_id(session, parsed["dmr_id"])
                     if existing:
-                        existing.callsign = row.get("callsign", existing.callsign)
-                        existing.name = row.get("name", existing.name)
-                        existing.organization = row.get("organization", existing.organization)
-                        existing.city = row.get("city", existing.city)
-                        existing.province_state = row.get("province_state", existing.province_state)
-                        existing.remarks = row.get("remarks", existing.remarks)
+                        existing.callsign = parsed["callsign"] or existing.callsign
+                        existing.name = parsed["name"] or existing.name
+                        existing.city = parsed["city"] or existing.city
+                        existing.province_state = parsed["province_state"] or existing.province_state
+                        existing.country = parsed["country"] or existing.country
+                        existing.organization = parsed["organization"] or existing.organization
+                        existing.organization_id = parsed["organization_id"] or existing.organization_id
+                        existing.remarks = parsed["remarks"] or existing.remarks
+                        existing.default_tg = parsed["default_tg"] or existing.default_tg
                     else:
                         entry = CallbookEntry(
-                            dmr_id=int(dmr_id),
-                            callsign=row.get("callsign", "NOCALL").upper(),
-                            name=row.get("name", ""),
-                            city=row.get("city", ""),
-                            province_state=row.get("province_state", ""),
-                            country=row.get("country", "Indonesia"),
-                            organization=row.get("organization", "KOMUNITAS").upper(),
-                            organization_id=row.get("organization_id", ""),
-                            remarks=row.get("remarks", "Imported via JSON")
+                            dmr_id=parsed["dmr_id"],
+                            callsign=parsed["callsign"],
+                            name=parsed["name"],
+                            city=parsed["city"],
+                            province_state=parsed["province_state"],
+                            country=parsed["country"],
+                            organization=parsed["organization"],
+                            organization_id=parsed["organization_id"],
+                            remarks=parsed["remarks"],
+                            default_tg=parsed["default_tg"],
                         )
                         session.add(entry)
                     imported_count += 1
+
                 await session.commit()
             except Exception as e:
-                return {"success": False, "error": str(e), "imported": 0}
+                return {"success": False, "error": f"JSON parse error: {str(e)}", "imported": 0}
+
         else:
             # CSV parsing
             try:
-                reader = csv.DictReader(io.StringIO(raw_content))
+                reader = csv.DictReader(io.StringIO(trimmed))
                 for row in reader:
-                    # Clean keys
-                    clean_row = {k.strip().lower() if k else "": v.strip() if v else "" for k, v in row.items()}
-                    
-                    dmr_id = clean_row.get("radio_id") or clean_row.get("dmr_id") or clean_row.get("id")
-                    if not dmr_id or not dmr_id.isdigit():
+                    parsed = extract_row_fields(row)
+                    if not parsed:
+                        skipped_count += 1
                         continue
-                    
-                    callsign = clean_row.get("callsign") or clean_row.get("call") or "NOCALL"
-                    first_name = clean_row.get("first_name") or clean_row.get("name") or clean_row.get("nama") or ""
-                    last_name = clean_row.get("last_name") or ""
-                    full_name = f"{first_name} {last_name}".strip()
-                    city = clean_row.get("city") or clean_row.get("kota") or ""
-                    state = clean_row.get("state") or clean_row.get("province_state") or clean_row.get("provinsi") or ""
-                    country = clean_row.get("country") or clean_row.get("negara") or "Indonesia"
-                    org = clean_row.get("organization") or clean_row.get("organisasi") or ("ORARI" if callsign.startswith(("YB", "YC", "YD")) else "KOMUNITAS")
-                    remarks = clean_row.get("remarks") or clean_row.get("keterangan") or ""
 
-                    existing = await CallbookService.get_by_dmr_id(session, int(dmr_id))
+                    existing = await CallbookService.get_by_dmr_id(session, parsed["dmr_id"])
                     if existing:
-                        existing.callsign = callsign.upper()
-                        existing.name = full_name or existing.name
-                        existing.city = city or existing.city
-                        existing.province_state = state or existing.province_state
-                        existing.organization = org.upper()
-                        existing.remarks = remarks or existing.remarks
+                        existing.callsign = parsed["callsign"] or existing.callsign
+                        existing.name = parsed["name"] or existing.name
+                        existing.city = parsed["city"] or existing.city
+                        existing.province_state = parsed["province_state"] or existing.province_state
+                        existing.country = parsed["country"] or existing.country
+                        existing.organization = parsed["organization"] or existing.organization
+                        existing.organization_id = parsed["organization_id"] or existing.organization_id
+                        existing.remarks = parsed["remarks"] or existing.remarks
+                        existing.default_tg = parsed["default_tg"] or existing.default_tg
                     else:
                         entry = CallbookEntry(
-                            dmr_id=int(dmr_id),
-                            callsign=callsign.upper(),
-                            name=full_name,
-                            city=city,
-                            province_state=state,
-                            country=country,
-                            organization=org.upper(),
-                            organization_id=callsign.upper(),
-                            remarks=remarks
+                            dmr_id=parsed["dmr_id"],
+                            callsign=parsed["callsign"],
+                            name=parsed["name"],
+                            city=parsed["city"],
+                            province_state=parsed["province_state"],
+                            country=parsed["country"],
+                            organization=parsed["organization"],
+                            organization_id=parsed["organization_id"],
+                            remarks=parsed["remarks"],
+                            default_tg=parsed["default_tg"],
                         )
                         session.add(entry)
                     imported_count += 1
+
                 await session.commit()
             except Exception as e:
-                return {"success": False, "error": str(e), "imported": 0}
+                return {"success": False, "error": f"CSV parse error: {str(e)}", "imported": 0}
 
         return {
             "success": True,

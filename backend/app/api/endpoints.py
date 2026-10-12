@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from datetime import datetime
@@ -139,10 +139,18 @@ async def add_callbook_entry(
 @router.post("/callbook/import")
 async def import_callbook_file(
     file: UploadFile = File(...),
+    organization: Optional[str] = Form(None),
+    default_tg: Optional[int] = Form(None),
     session: AsyncSession = Depends(get_db)
 ):
     content = (await file.read()).decode("utf-8", errors="ignore")
-    result = await CallbookService.import_batch_data(session, content, file.filename)
+    result = await CallbookService.import_batch_data(
+        session,
+        content,
+        file.filename,
+        target_organization=organization,
+        default_tg=default_tg
+    )
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to import callbook"))
     return result
