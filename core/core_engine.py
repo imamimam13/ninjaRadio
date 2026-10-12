@@ -159,23 +159,25 @@ class DVSwitchCoreManager:
 
         # Dynamically determine primary TG and TS slot from user peer options
         primary_tg = default_tg
-        primary_slot = 1
+        primary_slot = 2  # Default to Slot 2 for standard Indonesian DMR & HBlink (bridi.my.id)
         m_ts1 = re.search(r'TS1(?:_\d+)?\s*[=:;]\s*(\d+)', raw_tgs, re.IGNORECASE)
         m_ts2 = re.search(r'TS2(?:_\d+)?\s*[=:;]\s*(\d+)', raw_tgs, re.IGNORECASE)
-        if m_ts1:
-            primary_tg = int(m_ts1.group(1))
-            primary_slot = 1
-        elif m_ts2:
+        if m_ts2:
             primary_tg = int(m_ts2.group(1))
             primary_slot = 2
+        elif m_ts1:
+            primary_tg = int(m_ts1.group(1))
+            primary_slot = 1
         elif raw_tgs.strip().isdigit():
             primary_tg = int(raw_tgs.strip())
-            primary_slot = 1
+            # For DMR servers like bridi.my.id, TG 1025 is primarily on TS2
+            primary_slot = 2
 
-        if raw_tgs:
-            options_line = f"Options={raw_tgs}" if "TS" in raw_tgs.upper() else f"Options=TS1_1={raw_tgs};"
+        if raw_tgs and "TS" in raw_tgs.upper():
+            options_line = f"Options={raw_tgs}"
         else:
-            options_line = f"Options=TS1_1={primary_tg};"
+            # Dual-slot subscription: Ensures HBlink4 forwards traffic whether sent on TS1 or TS2
+            options_line = f"Options=TS1_1={primary_tg};TS2_1={primary_tg};"
 
         # Smart DMR ID and Repeater ID handling:
         # DMR RF/voice protocol strictly uses 24-bit source addressing (<= 16777215 / 7 digits max).
@@ -265,7 +267,7 @@ usrpGain = 1.00
 address = 127.0.0.1
 txPort = {AB_AMBE_RX_PORT}
 rxPort = {AB_AMBE_TX_PORT}
-slot = 0
+slot = {primary_slot}
 exportTG = 0
 hangTimerInFrames = 0
 talkerAlias = %callsign %location %description
@@ -532,9 +534,11 @@ Debug=1
         """
         logger.info("📡 Started DVSwitch DMR metadata monitor.")
         ab_log_path = "/var/log/Analog_Bridge.log"
-        ab_pattern = re.compile(r"Begin TX:\s+src=(\d+)\s+rpt=\d+\s+dst=(\d+)\s+slot=(\d+)\s+cc=\d+\s+call=(\S+)")
-        mmdvm_start_pat = re.compile(r"DMR Slot (\d+),\s+(?:received network voice header|received network late entry) from (\d+) to TG (\d+)")
-        mmdvm_end_pat = re.compile(r"DMR Slot (\d+),\s+(?:received network end of voice transmission|network watchdog has expired)")
+        # Support standard Analog_Bridge log lines: Begin TX: src=... rpt=... dst=... slot=... cc=... call=...
+        ab_pattern = re.compile(r"Begin TX:\s+src=(\d+)\s+rpt=\d+\s+dst=(\d+)\s+slot=(\d+)(?:\s+cc=\d+)?(?:\s+call=(\S+))?", re.IGNORECASE)
+        # MMDVM_Bridge logs: from <callsign_or_id> to TG <tg>
+        mmdvm_start_pat = re.compile(r"DMR Slot (\d+),\s+(?:received network voice header|received network late entry) from\s+([A-Za-z0-9/_-]+)\s+to TG\s+(\d+)", re.IGNORECASE)
+        mmdvm_end_pat = re.compile(r"DMR Slot (\d+),\s+(?:received network end of voice transmission|network watchdog has expired)", re.IGNORECASE)
 
         ab_file = None
         mmdvm_file = None
@@ -554,8 +558,9 @@ Debug=1
                         if m:
                             src = int(m.group(1))
                             dst = int(m.group(2))
-                            slot = int(m.group(3)) + 1
-                            call = m.group(4).strip()
+                            raw_slot = int(m.group(3))
+                            slot = 1 if raw_slot <= 1 else 2
+                            call = m.group(4).strip() if (m.lastindex and m.lastindex >= 4 and m.group(4)) else f"ID-{src}"
                             if src > 0 and dst > 0:
                                 self.current_rx_src = src
                                 self.current_rx_tg = dst
@@ -589,23 +594,30 @@ Debug=1
                         sm = mmdvm_start_pat.search(mline)
                         if sm:
                             slot = int(sm.group(1))
-                            src = int(sm.group(2))
+                            raw_src = sm.group(2).strip()
                             dst = int(sm.group(3))
+                            if raw_src.isdigit():
+                                src = int(raw_src)
+                                call = f"ID-{src}"
+                            else:
+                                call = raw_src
+                                digits_only = re.sub(r'\D', '', raw_src)
+                                src = int(digits_only) if digits_only else abs(hash(call)) % 10000000
+
                             if src > 0 and dst > 0:
                                 self.current_rx_src = src
                                 self.current_rx_tg = dst
                                 self.current_rx_slot = slot
-                                if not self.current_rx_call:
-                                    self.current_rx_call = f"ID-{src}"
+                                self.current_rx_call = call
                                 self.current_rx_time = time.time()
                                 self.current_rx_active = True
-                                logger.info(f"🎙️ MMDVM Call Header: ID={src} -> TG={dst} (Slot {slot})")
+                                logger.info(f"🎙️ MMDVM Call Header: {call} ({src}) -> TG={dst} (Slot {slot})")
 
                         em = mmdvm_end_pat.search(mline)
                         if em:
                             if self.current_rx_active:
                                 self.current_rx_active = False
-                                logger.info(f"⏹️ MMDVM Call Ended: ID {self.current_rx_src} -> TG {self.current_rx_tg}")
+                                logger.info(f"⏹️ MMDVM Call Ended: {self.current_rx_call} ({self.current_rx_src}) -> TG {self.current_rx_tg}")
                                 if self.current_rx_tg > 0 and self.current_rx_src > 0:
                                     term_event = {
                                         "network": f"DMR Master ({self.active_peer_host})",
@@ -658,7 +670,12 @@ Debug=1
                 data, _ = await loop.sock_recvfrom(self.ab_pcm_sock, 2048)
                 if len(data) >= 32 and data.startswith(b"USRP"):
                     self.rx_packet_count += 1
-                    magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
+                    # DVSwitch USRP Protocol:
+                    # 0..4: b'USRP', 4..8: seq, 8..12: mem, 12..16: key_flag (1=keyed, 0=unkey),
+                    # 16..20: talkgroup, 20..24: usrp_type (0=VOICE, 2=TEXT/METADATA), 24..32: mpxid, res
+                    magic, seq, mem, key_flag, talkgroup = struct.unpack(">4sIIII", data[:20])
+                    usrp_type, = struct.unpack("<I", data[20:24])
+                    mpxid, res = struct.unpack(">II", data[24:32])
                     pcm_payload = data[32:]
 
                     # Forward to Mumble bridge (UDP 12346)
@@ -670,11 +687,29 @@ Debug=1
                     # Forward to any connected external USRP clients
                     self.broadcast_to_usrp_clients(data)
 
-                    # Fallback to configured primary TG and legitimate ID if not present in USRP header
-                    primary_tg = int(self.config.get("primary_tg", 510))
-                    active_src = self.current_rx_src if self.current_rx_src > 0 else (dmr_id if dmr_id > 0 else 5100000)
-                    active_tg = self.current_rx_tg if self.current_rx_tg > 0 else (tg if tg > 0 else primary_tg)
-                    active_slot = self.current_rx_slot if self.current_rx_slot > 0 else (slot if slot > 0 else 1)
+                    # Handle USRP_TYPE_TEXT (2) metadata packets exported by Analog_Bridge
+                    if usrp_type == 2 and len(pcm_payload) > 0:
+                        try:
+                            meta_str = pcm_payload.decode("ascii", errors="ignore").strip()
+                            logger.info(f"📋 USRP Text Metadata: {meta_str}")
+                            m_call = re.search(r'(?:call|callsign)\s*[:=]\s*([A-Za-z0-9/_-]+)', meta_str, re.IGNORECASE)
+                            m_id = re.search(r'(?:id|dmr_id|src)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
+                            m_tg = re.search(r'(?:tg|talkgroup|dst)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
+                            if m_call:
+                                self.current_rx_call = m_call.group(1)
+                            if m_id:
+                                self.current_rx_src = int(m_id.group(1))
+                            if m_tg:
+                                self.current_rx_tg = int(m_tg.group(1))
+                        except Exception:
+                            pass
+                        continue  # Do not pass text metadata packet as audio stream
+
+                    # Fallback to legitimate DMR ID & primary TG (never use packet_type 33554432)
+                    primary_tg = int(self.config.get("primary_tg", 1025))
+                    active_tg = self.current_rx_tg if self.current_rx_tg > 0 else (talkgroup if (0 < talkgroup < 16777215) else primary_tg)
+                    active_slot = self.current_rx_slot if self.current_rx_slot > 0 else 2
+                    active_src = self.current_rx_src if self.current_rx_src > 0 else (getattr(self, "current_operator_dmr_id", 0) or 1022057)
                     active_call = self.current_rx_call or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
 
                     # Refresh active timestamp while receiving audio packets
