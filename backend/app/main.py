@@ -112,6 +112,13 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
                         elif not is_tx:
                             await notify_core_stop_tx()
+                    elif msg_type == "PTT_HEARTBEAT":
+                        try:
+                            import httpx
+                            async with httpx.AsyncClient(timeout=0.5) as client:
+                                await client.post("http://core:5000/api/tx/heartbeat")
+                        except Exception:
+                            pass
                 except Exception:
                     pass
     except WebSocketDisconnect:

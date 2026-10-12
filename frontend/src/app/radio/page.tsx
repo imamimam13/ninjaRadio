@@ -570,6 +570,7 @@ export default function RadioPocketMode() {
   const txMuteGainRef = useRef<GainNode | null>(null);
   const txMicStreamRef = useRef<MediaStream | null>(null);
   const txAudioCtxRef = useRef<AudioContext | null>(null);
+  const txHeartbeatIntervalRef = useRef<any>(null);
 
   const startLiveMicrophoneStream = async (tgNum: number) => {
     try {
@@ -626,12 +627,17 @@ export default function RadioPocketMode() {
       };
 
       source.connect(processor);
-      // Mute local output so microphone audio does not play into own speakers while transmitting
-      const muteGain = ctx.createGain();
-      muteGain.gain.value = 0;
-      txMuteGainRef.current = muteGain;
-      processor.connect(muteGain);
-      muteGain.connect(ctx.destination);
+      // Route through MediaStreamDestination to keep Chromium audio thread actively running
+      try {
+        const streamDest = ctx.createMediaStreamDestination();
+        processor.connect(streamDest);
+      } catch {
+        const muteGain = ctx.createGain();
+        muteGain.gain.value = 0.00001;
+        txMuteGainRef.current = muteGain;
+        processor.connect(muteGain);
+        muteGain.connect(ctx.destination);
+      }
     } catch (err) {
       console.warn("Could not start Web TX microphone stream:", err);
     }
@@ -686,6 +692,19 @@ export default function RadioPocketMode() {
       // Immediately flag TX active for mic audio processor
       isTxRef.current = true;
 
+      // Start periodic PTT keep-alive heartbeat to prevent server timeout
+      if (txHeartbeatIntervalRef.current) clearInterval(txHeartbeatIntervalRef.current);
+      txHeartbeatIntervalRef.current = setInterval(() => {
+        if (!isTxRef.current) return;
+        sendJson({
+          type: "PTT_HEARTBEAT",
+          tg: targetTgNum,
+          slot: currentTimeSlot,
+          callsign: activeProfile.callsign,
+          dmr_id: activeProfile.dmrId,
+        });
+      }, 250);
+
       // Start real microphone audio streaming through USRP & DMR network
       startLiveMicrophoneStream(targetTgNum);
 
@@ -726,6 +745,12 @@ export default function RadioPocketMode() {
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
 
       isTxRef.current = false;
+
+      // Stop periodic PTT keep-alive heartbeat
+      if (txHeartbeatIntervalRef.current) {
+        clearInterval(txHeartbeatIntervalRef.current);
+        txHeartbeatIntervalRef.current = null;
+      }
 
       // Stop real microphone audio streaming
       stopLiveMicrophoneStream();
