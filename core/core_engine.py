@@ -275,7 +275,7 @@ logLevel = 2
 exportMetadata = true
 subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
 decoderFallBack = true
-useEmulator = false
+useEmulator = true
 emulatorAddress = 127.0.0.1:{MD380_EMU_PORT}
 outputAudioDevice = /dev/null
 inputAudioDevice = /dev/null
@@ -485,7 +485,9 @@ Debug=1
             logger.warning("MMDVM_Bridge binary not found.")
 
     def start_daemons(self):
-        """Starts Analog_Bridge and MMDVM_Bridge official binaries."""
+        """Starts md380-emu, Analog_Bridge, and MMDVM_Bridge official binaries."""
+        self.start_md380()
+        time.sleep(0.3)
         self.start_analog_bridge()
         time.sleep(0.3)
         self.start_mmdvm_bridge()
@@ -559,6 +561,10 @@ Debug=1
                     pass
                 logger.warning(f"Analog_Bridge exited with code {self.ab_proc.returncode} (log: {err_text}). Restarting...")
                 self.start_analog_bridge()
+
+            if self.md380_proc and self.md380_proc.poll() is not None:
+                logger.warning(f"md380-emu exited with code {self.md380_proc.returncode}. Restarting...")
+                self.start_md380()
 
             if self.mmdvm_proc and self.mmdvm_proc.poll() is not None:
                 err_text = ""

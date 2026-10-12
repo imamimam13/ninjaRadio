@@ -771,23 +771,7 @@ export default function RadioPocketMode() {
         }),
       }).catch(() => {});
 
-      // Record microphone for TG 9990 Echo / Parrot test
-      if (targetTgNum === 9990) {
-        try {
-          recordedAudioChunksRef.current = [];
-          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const recorder = new MediaRecorder(stream);
-            recorder.ondataavailable = (e) => {
-              if (e.data && e.data.size > 0) recordedAudioChunksRef.current.push(e.data);
-            };
-            recorder.start(100);
-            mediaRecorderRef.current = recorder;
-          }
-        } catch (err) {
-          console.warn("Mic permission for Echo test:", err);
-        }
-      }
+      // TG 9990 transmits directly through DMR network to server Parrot
     },
     onTransmitEnd: () => {
       ensureAudioUnlocked();
@@ -829,29 +813,7 @@ export default function RadioPocketMode() {
         }),
       }).catch(() => {});
 
-      // Replay recorded voice on TG 9990 Echo test after 1.2s
-      if (targetTgNum === 9990 && mediaRecorderRef.current) {
-        const recorder = mediaRecorderRef.current;
-        if (recorder.state !== "inactive") {
-          recorder.onstop = () => {
-            const blob = new Blob(recordedAudioChunksRef.current, { type: "audio/webm" });
-            if (blob.size > 300) {
-              const url = URL.createObjectURL(blob);
-              setTimeout(() => {
-                setIsEchoPlaying(true);
-                const audio = new Audio(url);
-                audio.play().catch(() => {});
-                audio.onended = () => {
-                  setIsEchoPlaying(false);
-                  beepPlayer?.playRogerBeep();
-                };
-              }, 1200);
-            }
-          };
-          recorder.stop();
-          recorder.stream.getTracks().forEach((t) => t.stop());
-        }
-      }
+      // Real DMR Server Parrot Echo will return from network and play via Web Audio RX
     },
   });
 
