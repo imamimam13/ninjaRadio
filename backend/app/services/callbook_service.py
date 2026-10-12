@@ -87,6 +87,83 @@ class CallbookService:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_by_id(session: AsyncSession, entry_id: int) -> Optional[CallbookEntry]:
+        stmt = select(CallbookEntry).where(CallbookEntry.id == entry_id)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def update_entry(session: AsyncSession, entry_id: int, data: CallbookCreate) -> Optional[CallbookEntry]:
+        entry = await CallbookService.get_by_id(session, entry_id)
+        if not entry:
+            return None
+        
+        entry.dmr_id = data.dmr_id
+        entry.callsign = data.callsign.upper()
+        entry.name = data.name
+        entry.city = data.city or ""
+        entry.province_state = data.province_state or ""
+        entry.country = data.country or "Indonesia"
+        entry.organization = data.organization.upper() if data.organization else "KOMUNITAS"
+        entry.organization_id = data.organization_id or data.callsign.upper()
+        entry.remarks = data.remarks or ""
+        entry.default_tg = data.default_tg if data.default_tg else 510
+
+        await session.commit()
+        await session.refresh(entry)
+        await CallbookService.sync_subscribers_csv(session)
+        return entry
+
+    @staticmethod
+    async def delete_entry(session: AsyncSession, entry_id: int) -> bool:
+        entry = await CallbookService.get_by_id(session, entry_id)
+        if not entry:
+            return False
+        await session.delete(entry)
+        await session.commit()
+        await CallbookService.sync_subscribers_csv(session)
+        return True
+
+    @staticmethod
+    async def batch_update(
+        session: AsyncSession,
+        target_org: Optional[str] = None,
+        target_tg: Optional[int] = None,
+        filter_org: Optional[str] = None,
+        callsign_prefix: Optional[str] = None,
+        ids: Optional[List[int]] = None
+    ) -> Dict[str, Any]:
+        stmt = select(CallbookEntry)
+        if ids and len(ids) > 0:
+            stmt = stmt.where(CallbookEntry.id.in_(ids))
+        if filter_org and filter_org.upper() != "ALL":
+            stmt = stmt.where(CallbookEntry.organization == filter_org.upper())
+        if callsign_prefix:
+            stmt = stmt.where(CallbookEntry.callsign.startswith(callsign_prefix.upper()))
+
+        result = await session.execute(stmt)
+        entries = result.scalars().all()
+        updated_count = 0
+
+        target_org_clean = target_org.strip().upper() if target_org else None
+        if target_org_clean:
+            try:
+                await CallbookService.add_organization(session, code=target_org_clean, name=target_org_clean)
+            except Exception:
+                pass
+
+        for entry in entries:
+            if target_org_clean:
+                entry.organization = target_org_clean
+            if target_tg is not None and int(target_tg) > 0:
+                entry.default_tg = int(target_tg)
+            updated_count += 1
+
+        await session.commit()
+        await CallbookService.sync_subscribers_csv(session)
+        return {"success": True, "updated_count": updated_count}
+
+    @staticmethod
     async def sync_subscribers_csv(session: AsyncSession):
         """
         Synchronizes all registered Callbook entries into /app/data/subscriber_ids.csv

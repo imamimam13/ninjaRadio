@@ -78,6 +78,12 @@ async def init_db():
             await conn.execute(text("ALTER TABLE callbook ADD COLUMN default_tg INTEGER DEFAULT 510"))
         except Exception:
             pass
+        # Automatically update any existing BD callsigns from KOMUNITAS to BRIDI
+        try:
+            from sqlalchemy import text
+            await conn.execute(text("UPDATE callbook SET organization = 'BRIDI' WHERE callsign LIKE 'BD%' AND organization = 'KOMUNITAS'"))
+        except Exception:
+            pass
 
 async def get_db():
     async with async_session_maker() as session:
