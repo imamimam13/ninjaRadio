@@ -27,6 +27,8 @@ export const DEFAULT_MONITOR_PROFILE: UserProfile = {
   networkTag: "Hanya Monitor (TX Terkunci)",
   isMonitorOnly: true,
   defaultTg: 510,
+};
+
 export const DEFAULT_OPERATOR_PROFILE: UserProfile = {
   id: "prof_bd62aa",
   category: "Amatir",
