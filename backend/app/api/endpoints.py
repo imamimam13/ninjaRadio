@@ -411,11 +411,15 @@ async def run_stream_watchdog():
 @router.post("/internal/dmr_event")
 async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depends(get_db)):
     """Receives live DMR RF/network frames forwarded from Core Engine."""
-    src_id = event.get("src_id", 0)
-    dst_tg = event.get("dst_tg", 510)
-    slot = event.get("slot", 1)
+    src_id = int(event.get("src_id", 0))
+    dst_tg = int(event.get("dst_tg", 0))
+    slot = int(event.get("slot", 1))
     network = event.get("network", "DMR-Network")
     is_tx = event.get("is_tx", False)
+
+    # Ignore invalid TG 0 or Radio ID 0 to prevent phantom RX display
+    if src_id <= 0 or dst_tg <= 0:
+        return {"status": "IGNORED", "reason": "Invalid TG or Radio ID (0)"}
 
     # Determine data_type: 0=Header, 1=Voice Burst, 2=Terminator, 3=Data
     data_type = event.get("data_type")
@@ -425,8 +429,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     # Consistent session key for this active transmission on this slot
     stream_key = f"{src_id}_{dst_tg}_{slot}"
 
-    # Resolve callsign from database or fallback to Radio ID
-    callsign = f"ID-{src_id}"
+    # Resolve callsign from database or fallback to event/Radio ID
+    custom_call = event.get("callsign")
+    callsign = custom_call if custom_call else f"ID-{src_id}"
     name = f"DMR Operator {src_id}"
     category = "Amatir"
 

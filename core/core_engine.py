@@ -86,6 +86,14 @@ class DVSwitchCoreManager:
         self.rx_packet_count = 0
         self.tx_packet_count = 0
 
+        # Live DMR metadata tracked from Analog_Bridge & MMDVM_Bridge
+        self.current_rx_src = 0
+        self.current_rx_tg = 0
+        self.current_rx_slot = 1
+        self.current_rx_call = ""
+        self.current_rx_time = 0.0
+        self.current_rx_active = False
+
     def load_config(self) -> Dict:
         if os.path.exists(CONFIG_PATH):
             try:
@@ -185,7 +193,7 @@ logLevel = 2
 exportMetadata = true
 subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
 decoderFallBack = true
-useEmulator = true
+useEmulator = false
 emulatorAddress = 127.0.0.1:{MD380_EMU_PORT}
 outputAudioDevice = /dev/null
 inputAudioDevice = /dev/null
@@ -438,6 +446,9 @@ Debug=1
         # 3. Process Watchdog
         asyncio.create_task(self.run_process_watchdog())
 
+        # 4. DMR Metadata Monitor
+        asyncio.create_task(self.run_dvswitch_metadata_monitor())
+
     async def run_process_watchdog(self):
         """Monitors DVSwitch daemons and restarts them if they terminate unexpectedly."""
         while self.running:
@@ -465,12 +476,133 @@ Debug=1
             if self.mmdvm_proc and self.mmdvm_proc.poll() is not None:
                 err_text = ""
                 try:
-                    with open("/var/log/MMDVM_Bridge.log", "r") as f:
+                    with open("/var/log/dvswitch/MMDVM_Bridge.log", "r") as f:
                         err_text = "".join(f.readlines()[-3:]).strip()
                 except Exception:
                     pass
                 logger.warning(f"MMDVM_Bridge exited with code {self.mmdvm_proc.returncode} (log: {err_text}). Restarting...")
                 self.start_mmdvm_bridge()
+
+    async def run_dvswitch_metadata_monitor(self):
+        """
+        Monitors Analog_Bridge and MMDVM_Bridge logs in real-time
+        to track the active DMR talker's callsign, DMR ID, talkgroup, and timeslot.
+        """
+        logger.info("📡 Started DVSwitch DMR metadata monitor.")
+        ab_log_path = "/var/log/Analog_Bridge.log"
+        ab_pattern = re.compile(r"Begin TX:\s+src=(\d+)\s+rpt=\d+\s+dst=(\d+)\s+slot=(\d+)\s+cc=\d+\s+call=(\S+)")
+        mmdvm_start_pat = re.compile(r"DMR Slot (\d+),\s+(?:received network voice header|received network late entry) from (\d+) to TG (\d+)")
+        mmdvm_end_pat = re.compile(r"DMR Slot (\d+),\s+(?:received network end of voice transmission|network watchdog has expired)")
+
+        ab_file = None
+        mmdvm_file = None
+        current_mmdvm_path = ""
+
+        while self.running:
+            try:
+                # 1. Analog_Bridge log follower
+                if not ab_file:
+                    if os.path.exists(ab_log_path):
+                        ab_file = open(ab_log_path, "r", encoding="utf-8", errors="ignore")
+                        ab_file.seek(0, os.SEEK_END)
+                else:
+                    lines = ab_file.readlines()
+                    for line in lines:
+                        m = ab_pattern.search(line)
+                        if m:
+                            src = int(m.group(1))
+                            dst = int(m.group(2))
+                            slot = int(m.group(3)) + 1
+                            call = m.group(4).strip()
+                            if src > 0 and dst > 0:
+                                self.current_rx_src = src
+                                self.current_rx_tg = dst
+                                self.current_rx_slot = slot
+                                self.current_rx_call = call
+                                self.current_rx_time = time.time()
+                                self.current_rx_active = True
+                                logger.info(f"🎙️ DMR Active Call: Call={call} ID={src} -> TG={dst} (Slot {slot})")
+
+                # 2. MMDVM_Bridge log follower
+                today_str = time.strftime("%Y-%m-%d")
+                expected_mmdvm_path = f"/var/log/dvswitch/MMDVM_Bridge-{today_str}.log"
+                if not os.path.exists(expected_mmdvm_path):
+                    expected_mmdvm_path = "/var/log/dvswitch/MMDVM_Bridge.log"
+
+                if expected_mmdvm_path != current_mmdvm_path:
+                    if mmdvm_file:
+                        try:
+                            mmdvm_file.close()
+                        except Exception:
+                            pass
+                        mmdvm_file = None
+                    if os.path.exists(expected_mmdvm_path):
+                        mmdvm_file = open(expected_mmdvm_path, "r", encoding="utf-8", errors="ignore")
+                        mmdvm_file.seek(0, os.SEEK_END)
+                        current_mmdvm_path = expected_mmdvm_path
+
+                if mmdvm_file:
+                    mlines = mmdvm_file.readlines()
+                    for mline in mlines:
+                        sm = mmdvm_start_pat.search(mline)
+                        if sm:
+                            slot = int(sm.group(1))
+                            src = int(sm.group(2))
+                            dst = int(sm.group(3))
+                            if src > 0 and dst > 0:
+                                self.current_rx_src = src
+                                self.current_rx_tg = dst
+                                self.current_rx_slot = slot
+                                if not self.current_rx_call:
+                                    self.current_rx_call = f"ID-{src}"
+                                self.current_rx_time = time.time()
+                                self.current_rx_active = True
+                                logger.info(f"🎙️ MMDVM Call Header: ID={src} -> TG={dst} (Slot {slot})")
+
+                        em = mmdvm_end_pat.search(mline)
+                        if em:
+                            if self.current_rx_active:
+                                self.current_rx_active = False
+                                logger.info(f"⏹️ MMDVM Call Ended: ID {self.current_rx_src} -> TG {self.current_rx_tg}")
+                                if self.current_rx_tg > 0 and self.current_rx_src > 0:
+                                    term_event = {
+                                        "network": f"DMR Master ({self.active_peer_host})",
+                                        "src_id": self.current_rx_src,
+                                        "dst_tg": self.current_rx_tg,
+                                        "slot": self.current_rx_slot,
+                                        "callsign": self.current_rx_call,
+                                        "data_type": 2,
+                                        "is_tx": False
+                                    }
+                                    asyncio.create_task(self.dispatch_event_to_backend(term_event))
+                                self.current_rx_tg = 0
+                                self.current_rx_src = 0
+                                self.current_rx_call = ""
+
+                # 3. Timeout watchdog: If transmission has been quiet for > 2.0s, mark inactive
+                if self.current_rx_active and (time.time() - self.current_rx_time > 2.0):
+                    self.current_rx_active = False
+                    logger.info(f"⏹️ DMR Call Timeout: ID {self.current_rx_src} -> TG {self.current_rx_tg}")
+                    if self.current_rx_tg > 0 and self.current_rx_src > 0:
+                        term_event = {
+                            "network": f"DMR Master ({self.active_peer_host})",
+                            "src_id": self.current_rx_src,
+                            "dst_tg": self.current_rx_tg,
+                            "slot": self.current_rx_slot,
+                            "callsign": self.current_rx_call,
+                            "data_type": 2,
+                            "is_tx": False
+                        }
+                        asyncio.create_task(self.dispatch_event_to_backend(term_event))
+                    self.current_rx_tg = 0
+                    self.current_rx_src = 0
+                    self.current_rx_call = ""
+
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                if self.running:
+                    logger.debug(f"metadata_monitor note: {e}")
+                await asyncio.sleep(0.5)
 
     async def run_ab_pcm_rx_loop(self):
         """
@@ -496,13 +628,29 @@ Debug=1
                     # Forward to any connected external USRP clients
                     self.broadcast_to_usrp_clients(data)
 
+                    # Only process legitimate voice frames if active transmission is present
+                    # Ignore packets if TG <= 0 or Radio ID <= 0 to prevent phantom TG 0
+                    active_src = self.current_rx_src if self.current_rx_src > 0 else dmr_id
+                    active_tg = self.current_rx_tg if self.current_rx_tg > 0 else tg
+                    active_slot = self.current_rx_slot if self.current_rx_slot > 0 else (slot if slot > 0 else 1)
+                    active_call = self.current_rx_call
+
+                    if active_src <= 0 or active_tg <= 0:
+                        # Drop frames with no valid TG or Caller ID
+                        continue
+
+                    # Refresh active timestamp while receiving audio packets
+                    self.current_rx_time = time.time()
+                    self.current_rx_active = True
+
                     # Dispatch event to backend API for Web Audio player
                     if key_flag == 1 and len(pcm_payload) >= 320:
                         traffic_event = {
                             "network": f"DMR Master ({self.active_peer_host})",
-                            "src_id": dmr_id,
-                            "dst_tg": tg,
-                            "slot": slot,
+                            "src_id": active_src,
+                            "dst_tg": active_tg,
+                            "slot": active_slot,
+                            "callsign": active_call,
                             "payload": pcm_payload,
                             "data_type": 1,
                             "is_tx": False
@@ -512,13 +660,18 @@ Debug=1
                         # Voice Terminator
                         traffic_event = {
                             "network": f"DMR Master ({self.active_peer_host})",
-                            "src_id": dmr_id,
-                            "dst_tg": tg,
-                            "slot": slot,
+                            "src_id": active_src,
+                            "dst_tg": active_tg,
+                            "slot": active_slot,
+                            "callsign": active_call,
                             "data_type": 2,
                             "is_tx": False
                         }
                         asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+                        self.current_rx_active = False
+                        self.current_rx_tg = 0
+                        self.current_rx_src = 0
+                        self.current_rx_call = ""
             except Exception as e:
                 if self.running:
                     logger.debug(f"ab_pcm_rx_loop note: {e}")
