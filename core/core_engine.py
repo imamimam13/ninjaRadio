@@ -794,13 +794,15 @@ Debug=1
         except Exception as e:
             logger.debug(f"tune_remote error: {e}")
 
-    async def start_carrier_tx(self, tg: int, slot: int):
+    async def start_carrier_tx(self, tg: int, slot: int, dmr_id: int = None, callsign: str = None):
         """Maintains active DMR transmission carrier by continuously delivering 20ms frames."""
+        if dmr_id and dmr_id > 0:
+            self.update_active_operator(dmr_id, callsign or "OPERATOR")
         self.is_transmitting = True
         self.tune_remote(tg, slot)
         await asyncio.sleep(0.06)
         seq = 100
-        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot})")
+        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot}) by ID {getattr(self, 'current_operator_dmr_id', 'Default')}")
         while self.is_transmitting and self.running:
             # If browser/client microphone stream paused or between bursts (>50ms), send comfort silence frame
             if time.time() - self.last_audio_tx_time > 0.05:
@@ -811,6 +813,72 @@ Debug=1
                 except Exception:
                     pass
             await asyncio.sleep(0.02)
+
+    def restart_analog_bridge(self):
+        """Restarts only Analog_Bridge to apply new gatewayDmrId without dropping MMDVM_Bridge connection."""
+        if self.ab_proc:
+            try:
+                self.ab_proc.terminate()
+                self.ab_proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    self.ab_proc.kill()
+                except Exception:
+                    pass
+        try:
+            subprocess.run(["pkill", "-9", "-f", "Analog_Bridge"], capture_output=True)
+        except Exception:
+            pass
+        self.ab_proc = None
+        time.sleep(0.05)
+        self.start_analog_bridge()
+
+    def update_active_operator(self, dmr_id: int, callsign: str):
+        """Dynamically updates Analog_Bridge gatewayDmrId and subscriber CSV to match active operator profile."""
+        if not dmr_id or dmr_id <= 0:
+            return
+        
+        # Format clean 24-bit DMR ID (<= 16777215 / max 7 digits)
+        clean_radio_id = int(str(dmr_id)[:7]) if len(str(dmr_id)) > 7 else dmr_id
+        clean_radio_id = clean_radio_id & 0xFFFFFF
+
+        if getattr(self, "current_operator_dmr_id", None) == clean_radio_id:
+            return
+
+        logger.info(f"👤 Switching active operator profile: ID={clean_radio_id}, Callsign={callsign}")
+        self.current_operator_dmr_id = clean_radio_id
+        self.current_operator_callsign = callsign
+
+        # 1. Update subscriber CSV
+        try:
+            with open("/var/lib/dvswitch/subscriber_ids.csv", "w", encoding="utf-8") as sf:
+                sf.write(f"{clean_radio_id},{callsign},{callsign},NinjaRadio,ID,0\n")
+        except Exception:
+            pass
+
+        # 2. Update Analog_Bridge.ini
+        ab_path = "/app/data/Analog_Bridge.ini"
+        if os.path.exists(ab_path):
+            try:
+                with open(ab_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                import re
+                new_content = re.sub(r"gatewayDmrId\s*=\s*\d+", f"gatewayDmrId = {clean_radio_id}", content)
+                with open(ab_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                
+                for dest in ["/opt/Analog_Bridge/Analog_Bridge.ini", "/etc/Analog_Bridge.ini"]:
+                    try:
+                        with open(dest, "w", encoding="utf-8") as f:
+                            f.write(new_content)
+                    except Exception:
+                        pass
+                
+                self.restart_analog_bridge()
+                logger.info(f"✓ Analog_Bridge reloaded with operator gatewayDmrId={clean_radio_id} ({callsign})")
+            except Exception as e:
+                logger.error(f"Failed to update Analog_Bridge gatewayDmrId: {e}")
 
     def stop_carrier_tx(self):
         """Releases DMR PTT transmission."""
@@ -942,9 +1010,18 @@ async def reload_configuration():
         "active_master": f"{engine_mgr.active_peer_host}:{engine_mgr.active_peer_port}"
     }
 
+@app.post("/api/operator")
+async def set_active_operator(payload: dict):
+    dmr_id = int(payload.get("dmr_id", 0))
+    callsign = str(payload.get("callsign", "N1NJA")).strip()
+    if dmr_id > 0:
+        engine_mgr.update_active_operator(dmr_id, callsign)
+        return {"status": "SUCCESS", "dmr_id": dmr_id, "callsign": callsign}
+    return {"status": "IGNORED", "detail": "Invalid dmr_id"}
+
 @app.post("/api/tx")
 async def ptt_transmit(payload: dict):
-    callsign = payload.get("callsign", "N1NJA")
+    callsign = str(payload.get("callsign", "N1NJA")).strip()
     dmr_id = int(payload.get("dmr_id", 5109999))
     tg = int(payload.get("tg", 1025))
     slot = int(payload.get("slot", 2))
@@ -952,10 +1029,12 @@ async def ptt_transmit(payload: dict):
 
     try:
         if is_tx:
+            if dmr_id > 0:
+                engine_mgr.update_active_operator(dmr_id, callsign)
             if engine_mgr.tx_task and not engine_mgr.tx_task.done():
                 engine_mgr.tx_task.cancel()
-            engine_mgr.tx_task = asyncio.create_task(engine_mgr.start_carrier_tx(tg, slot))
-            return {"status": "TX_STARTED", "tg": tg, "slot": slot}
+            engine_mgr.tx_task = asyncio.create_task(engine_mgr.start_carrier_tx(tg, slot, dmr_id, callsign))
+            return {"status": "TX_STARTED", "tg": tg, "slot": slot, "dmr_id": dmr_id, "callsign": callsign}
         else:
             if engine_mgr.tx_task and not engine_mgr.tx_task.done():
                 engine_mgr.tx_task.cancel()
