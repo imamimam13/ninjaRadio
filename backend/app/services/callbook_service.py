@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from typing import List, Optional, Dict, Any
+import os
 import csv
 import json
 import io
@@ -86,11 +87,56 @@ class CallbookService:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def sync_subscribers_csv(session: AsyncSession):
+        """
+        Synchronizes all registered Callbook entries into /app/data/subscriber_ids.csv
+        and /var/lib/dvswitch/subscriber_ids.csv for DVSwitch & MMDVM subscriber lookup.
+        """
+        try:
+            stmt = select(CallbookEntry)
+            result = await session.execute(stmt)
+            entries = result.scalars().all()
+
+            lines = [
+                "; DMR ID,Callsign,Name,City,State,Country",
+                "5109999,N1NJA,NinjaRadio Master,Jakarta,ID,0"
+            ]
+            for e in entries:
+                clean_id = e.dmr_id & 0xFFFFFF if e.dmr_id else 0
+                if clean_id > 0 and clean_id != 5109999:
+                    c_call = (e.callsign or "NOCALL").replace(",", " ").strip().upper()
+                    c_name = (e.name or c_call).replace(",", " ").strip()
+                    c_city = (e.city or "Indonesia").replace(",", " ").strip()
+                    c_org = (e.organization or "ID").replace(",", " ").strip().upper()
+                    lines.append(f"{clean_id},{c_call},{c_name},{c_city},{c_org},0")
+
+            csv_text = "\n".join(lines) + "\n"
+
+            for path in ["/app/data/subscriber_ids.csv", "/var/lib/dvswitch/subscriber_ids.csv"]:
+                try:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(csv_text)
+                except Exception:
+                    pass
+
+            # Notify Core Engine to refresh subscriber lookup cache
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=1.0) as client:
+                    await client.post("http://core:5000/api/subscribers/reload")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    @staticmethod
     async def create_entry(session: AsyncSession, data: CallbookCreate) -> CallbookEntry:
         entry = CallbookEntry(**data.model_dump())
         session.add(entry)
         await session.commit()
         await session.refresh(entry)
+        await CallbookService.sync_subscribers_csv(session)
         return entry
 
     @staticmethod
@@ -303,6 +349,9 @@ class CallbookService:
                 await session.commit()
             except Exception as e:
                 return {"success": False, "error": f"CSV parse error: {str(e)}", "imported": 0}
+
+        if imported_count > 0:
+            await CallbookService.sync_subscribers_csv(session)
 
         return {
             "success": True,

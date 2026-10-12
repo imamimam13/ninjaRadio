@@ -196,9 +196,16 @@ class DVSwitchCoreManager:
         os.makedirs("/var/log/dvswitch", exist_ok=True)
         os.makedirs("/var/lib/dvswitch", exist_ok=True)
 
-        # Ensure subscriber CSV exists
+        # Ensure subscriber CSV exists from shared app data or default
         sub_csv = "/var/lib/dvswitch/subscriber_ids.csv"
-        if not os.path.exists(sub_csv) or os.path.getsize(sub_csv) == 0:
+        app_sub_csv = "/app/data/subscriber_ids.csv"
+        if os.path.exists(app_sub_csv) and os.path.getsize(app_sub_csv) > 0:
+            try:
+                import shutil
+                shutil.copyfile(app_sub_csv, sub_csv)
+            except Exception:
+                pass
+        elif not os.path.exists(sub_csv) or os.path.getsize(sub_csv) == 0:
             try:
                 with open(sub_csv, "w", encoding="utf-8") as sf:
                     sf.write(f"{radio_id},{callsign},{callsign},NinjaRadio,ID,0\n")
@@ -850,10 +857,18 @@ Debug=1
         self.current_operator_dmr_id = clean_radio_id
         self.current_operator_callsign = callsign
 
-        # 1. Update subscriber CSV
+        # 1. Update subscriber CSV (preserve all imported callbook subscribers)
         try:
-            with open("/var/lib/dvswitch/subscriber_ids.csv", "w", encoding="utf-8") as sf:
-                sf.write(f"{clean_radio_id},{callsign},{callsign},NinjaRadio,ID,0\n")
+            sub_path = "/var/lib/dvswitch/subscriber_ids.csv"
+            existing_lines = []
+            if os.path.exists(sub_path):
+                with open(sub_path, "r", encoding="utf-8") as rf:
+                    existing_lines = [l.strip() for l in rf.readlines() if l.strip()]
+
+            filtered = [l for l in existing_lines if not l.startswith(f"{clean_radio_id},") and not l.startswith(";")]
+            new_lines = [f"{clean_radio_id},{callsign},{callsign},NinjaRadio,ID,0"] + filtered
+            with open(sub_path, "w", encoding="utf-8") as sf:
+                sf.write("\n".join(new_lines) + "\n")
         except Exception:
             pass
 
@@ -1019,6 +1034,22 @@ async def set_active_operator(payload: dict):
         engine_mgr.update_active_operator(dmr_id, callsign)
         return {"status": "SUCCESS", "dmr_id": dmr_id, "callsign": callsign}
     return {"status": "IGNORED", "detail": "Invalid dmr_id"}
+
+@app.post("/api/subscribers/reload")
+async def reload_subscribers():
+    """Syncs /app/data/subscriber_ids.csv to /var/lib/dvswitch/subscriber_ids.csv."""
+    try:
+        import shutil
+        src = "/app/data/subscriber_ids.csv"
+        dst = "/var/lib/dvswitch/subscriber_ids.csv"
+        if os.path.exists(src):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+            logger.info("✓ Synchronized subscriber_ids.csv from /app/data/ to /var/lib/dvswitch/")
+            return {"status": "SUCCESS"}
+    except Exception as e:
+        return {"status": "ERROR", "detail": str(e)}
+    return {"status": "NOT_FOUND"}
 
 @app.post("/api/tx")
 async def ptt_transmit(payload: dict):
