@@ -111,4 +111,17 @@ class PttTransmitRequest(BaseModel):
 class PinVerifyRequest(BaseModel):
     pin: str
 
+class OrganizationCreateRequest(BaseModel):
+    pin: str
+    name: str
+    code: Optional[str] = None
+    description: Optional[str] = ""
+
+class OrganizationResponse(BaseModel):
+    id: int
+    name: str
+    code: str
+    description: Optional[str] = ""
+    is_default: Optional[bool] = False
+
 

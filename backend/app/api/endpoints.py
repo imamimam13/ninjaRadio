@@ -11,7 +11,8 @@ from backend.app.models.schemas import (
     QsoLogResponse, QsoLogCreate,
     CallbookResponse, CallbookCreate,
     BridgeRouteResponse, BridgeRouteCreate,
-    ServerStatus, LastHeardItem, PttTransmitRequest, PinVerifyRequest
+    ServerStatus, LastHeardItem, PttTransmitRequest, PinVerifyRequest,
+    OrganizationCreateRequest, OrganizationResponse
 )
 from backend.app.services.logbook_service import LogbookService
 from backend.app.services.callbook_service import CallbookService
@@ -145,6 +146,33 @@ async def import_callbook_file(
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to import callbook"))
     return result
+
+# ----------------- Organizations Registry -----------------
+
+@router.get("/organizations")
+async def get_organizations(session: AsyncSession = Depends(get_db)):
+    """Returns all registered radio organizations."""
+    return await CallbookService.get_all_organizations(session)
+
+@router.post("/organizations")
+async def create_organization(
+    payload: OrganizationCreateRequest,
+    session: AsyncSession = Depends(get_db)
+):
+    """Creates a new radio organization, verified with Admin PIN."""
+    import os
+    admin_pin = str(os.getenv("ADMIN_PIN") or getattr(settings, "ADMIN_PIN", "1234")).strip()
+    if str(payload.pin).strip() != admin_pin:
+        raise HTTPException(status_code=403, detail="PIN Admin salah! Akses ditolak.")
+
+    name = payload.name.strip()
+    code = (payload.code or name).strip().upper()
+    desc = payload.description.strip() if payload.description else ""
+    if not name:
+        raise HTTPException(status_code=400, detail="Nama organisasi tidak boleh kosong.")
+
+    org = await CallbookService.add_organization(session, code=code, name=name, description=desc)
+    return {"status": "SUCCESS", "organization": org}
 
 # ----------------- Matrix Talkgroup Router -----------------
 

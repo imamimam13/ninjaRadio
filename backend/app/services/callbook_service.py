@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Any
 import csv
 import json
 import io
-from backend.app.core.database import CallbookEntry
+from backend.app.core.database import CallbookEntry, Organization
 from backend.app.models.schemas import CallbookCreate
 
 INITIAL_CALLBOOK_DATA = []
@@ -19,6 +19,44 @@ class CallbookService:
                 entry = CallbookEntry(**item)
                 session.add(entry)
             await session.commit()
+
+    @staticmethod
+    async def seed_initial_organizations(session: AsyncSession):
+        stmt = select(Organization).limit(1)
+        result = await session.execute(stmt)
+        if not result.scalar_one_or_none():
+            defaults = [
+                {"code": "ORARI", "name": "ORARI", "description": "Organisasi Amatir Radio Indonesia"},
+                {"code": "RAPI", "name": "RAPI", "description": "Radio Antar Penduduk Indonesia"},
+                {"code": "CB-11M", "name": "CB 11M", "description": "Citizen Band 11 Meter Indonesia"},
+                {"code": "KOMUNITAS", "name": "Komunitas / SAR", "description": "Relawan, SAR, & Radio Komunitas"},
+            ]
+            for item in defaults:
+                session.add(Organization(**item))
+            await session.commit()
+
+    @staticmethod
+    async def get_all_organizations(session: AsyncSession) -> List[Organization]:
+        await CallbookService.seed_initial_organizations(session)
+        stmt = select(Organization).order_by(Organization.id)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def add_organization(session: AsyncSession, code: str, name: str, description: str = "") -> Organization:
+        await CallbookService.seed_initial_organizations(session)
+        code_clean = code.strip().upper()
+        name_clean = name.strip()
+        stmt = select(Organization).where(or_(Organization.code == code_clean, Organization.name == name_clean))
+        result = await session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if existing:
+            return existing
+        org = Organization(code=code_clean, name=name_clean, description=description)
+        session.add(org)
+        await session.commit()
+        await session.refresh(org)
+        return org
 
     @staticmethod
     async def search_callbook(session: AsyncSession, query: str, organization: Optional[str] = None) -> List[CallbookEntry]:

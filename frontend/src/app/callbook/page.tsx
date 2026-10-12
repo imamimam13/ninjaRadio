@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
-import { Users, Search, Plus, MapPin, Building, ShieldCheck, Radio, Upload, Download, Check, AlertCircle } from "lucide-react";
+import { Users, Search, Plus, MapPin, Building, ShieldCheck, Radio, Upload, Download, Check, AlertCircle, Lock } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
 
 interface CallbookItem {
@@ -19,6 +19,13 @@ interface CallbookItem {
   remarks: string;
 }
 
+interface OrgItem {
+  id?: number;
+  code: string;
+  name: string;
+  description?: string;
+}
+
 export default function CallbookPage() {
   const { isConnected } = useLiveMonitor();
   const [entries, setEntries] = useState<CallbookItem[]>([]);
@@ -28,6 +35,21 @@ export default function CallbookPage() {
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Organizations registry state
+  const [organizations, setOrganizations] = useState<OrgItem[]>([
+    { code: "ORARI", name: "ORARI" },
+    { code: "RAPI", name: "RAPI" },
+    { code: "CB-11M", name: "CB 11M" },
+    { code: "KOMUNITAS", name: "Komunitas / SAR" },
+  ]);
+  const [showOrgPinModal, setShowOrgPinModal] = useState(false);
+  const [adminPinInput, setAdminPinInput] = useState("");
+  const [newOrgName, setNewOrgName] = useState("");
+  const [newOrgCode, setNewOrgCode] = useState("");
+  const [newOrgDesc, setNewOrgDesc] = useState("");
+  const [orgPinError, setOrgPinError] = useState<string | null>(null);
+  const [isSubmittingOrg, setIsSubmittingOrg] = useState(false);
+
   // New Entry
   const [newDmrId, setNewDmrId] = useState(5104001);
   const [newCallsign, setNewCallsign] = useState("");
@@ -35,6 +57,17 @@ export default function CallbookPage() {
   const [newCity, setNewCity] = useState("");
   const [newOrg, setNewOrg] = useState("ORARI");
   const [newOrgId, setNewOrgId] = useState("");
+
+  const fetchOrganizations = () => {
+    fetch("/api/organizations")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setOrganizations(data);
+        }
+      })
+      .catch(() => {});
+  };
 
   const fetchCallbook = () => {
     let url = `/api/callbook?`;
@@ -48,8 +81,51 @@ export default function CallbookPage() {
   };
 
   useEffect(() => {
+    fetchOrganizations();
+  }, []);
+
+  useEffect(() => {
     fetchCallbook();
   }, [searchTerm, orgFilter]);
+
+  const handleCreateOrgWithPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminPinInput || !newOrgName) return;
+    setIsSubmittingOrg(true);
+    setOrgPinError(null);
+
+    try {
+      const res = await fetch("/api/organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pin: adminPinInput,
+          name: newOrgName,
+          code: newOrgCode || newOrgName.toUpperCase().replace(/\s+/g, "_"),
+          description: newOrgDesc,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        beepPlayer?.playTalkGrant();
+        setShowOrgPinModal(false);
+        const createdOrg = data.organization;
+        const newCode = createdOrg.code;
+        setNewOrg(newCode);
+        fetchOrganizations();
+        setImportStatus(`✓ Organisasi "${createdOrg.name}" berhasil ditambahkan oleh Admin!`);
+        setTimeout(() => setImportStatus(null), 4000);
+      } else {
+        beepPlayer?.playRogerBeep();
+        setOrgPinError(data.detail || "Gagal menambahkan organisasi. Cek PIN Admin.");
+      }
+    } catch {
+      setOrgPinError("Terjadi kesalahan jaringan.");
+    } finally {
+      setIsSubmittingOrg(false);
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -187,10 +263,11 @@ export default function CallbookPage() {
               className="px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-cyan-300 font-mono"
             >
               <option value="ALL">Semua Organisasi</option>
-              <option value="ORARI">ORARI (Amatir)</option>
-              <option value="RAPI">RAPI (KRAP)</option>
-              <option value="CB-11M">CB 11M</option>
-              <option value="KOMUNITAS">Komunitas / SAR</option>
+              {organizations.map((org) => (
+                <option key={org.code} value={org.code}>
+                  {org.name || org.code}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -295,16 +372,33 @@ export default function CallbookPage() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-slate-400 mb-1">Organisasi</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-400">Organisasi</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminPinInput("");
+                        setNewOrgName("");
+                        setNewOrgCode("");
+                        setNewOrgDesc("");
+                        setOrgPinError(null);
+                        setShowOrgPinModal(true);
+                      }}
+                      className="text-[11px] text-cyan-400 hover:text-cyan-300 underline font-mono flex items-center gap-0.5"
+                    >
+                      + Tambah (PIN)
+                    </button>
+                  </div>
                   <select
                     value={newOrg}
                     onChange={(e) => setNewOrg(e.target.value)}
                     className="w-full px-2 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300"
                   >
-                    <option value="ORARI">ORARI</option>
-                    <option value="RAPI">RAPI</option>
-                    <option value="CB-11M">CB 11M</option>
-                    <option value="KOMUNITAS">Komunitas / SAR</option>
+                    {organizations.map((org) => (
+                      <option key={org.code} value={org.code}>
+                        {org.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -332,6 +426,102 @@ export default function CallbookPage() {
                   className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 rounded-xl font-heading font-black shadow-md"
                 >
                   Simpan ID
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Tambah Organisasi Admin PIN */}
+      {showOrgPinModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-[#0b101b] border border-cyan-500/40 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
+            <h3 className="text-lg font-heading font-black text-white mb-1 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+              Tambah Organisasi Baru
+            </h3>
+            <p className="text-xs text-slate-400 mb-4">
+              Khusus Admin. Masukkan PIN Admin untuk mendaftarkan organisasi radio baru ke sistem.
+            </p>
+
+            {orgPinError && (
+              <div className="mb-4 p-2.5 rounded-xl bg-red-950/60 border border-red-500/40 text-red-300 text-xs">
+                ⚠️ {orgPinError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateOrgWithPin} className="space-y-3.5 text-sm">
+              <div>
+                <label className="block text-slate-400 text-xs mb-1 font-mono">
+                  PIN Admin <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  placeholder="Masukkan PIN Admin (default: 1234)"
+                  value={adminPinInput}
+                  onChange={(e) => setAdminPinInput(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white font-mono tracking-widest focus:border-cyan-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-xs mb-1">
+                  Nama Organisasi <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: SENKOM, POLRI, TNI, PMR"
+                  value={newOrgName}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setNewOrgName(val);
+                    setNewOrgCode(val.toUpperCase().replace(/\s+/g, "_"));
+                  }}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white focus:border-cyan-400 outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-400 text-xs mb-1 font-mono">Kode Singkat</label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: SENKOM"
+                    value={newOrgCode}
+                    onChange={(e) => setNewOrgCode(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white font-mono uppercase focus:border-cyan-400 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 text-xs mb-1">Keterangan (Opsional)</label>
+                  <input
+                    type="text"
+                    placeholder="Mitra Kamtibmas dll"
+                    value={newOrgDesc}
+                    onChange={(e) => setNewOrgDesc(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white focus:border-cyan-400 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowOrgPinModal(false)}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingOrg}
+                  className="flex-1 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-heading font-black rounded-xl shadow-lg transition disabled:opacity-50"
+                >
+                  {isSubmittingOrg ? "Memverifikasi..." : "Simpan Organisasi"}
                 </button>
               </div>
             </form>
