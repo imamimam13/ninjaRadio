@@ -154,17 +154,27 @@ class DVSwitchCoreManager:
 [GENERAL]
 logLevel = 2
 fileLogLevel = 2
-pcmFormat = 0
-exportAMBE = 0
+exportMetadata = true
+subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
+decoderFallBack = false
 useEmulator = true
 emulatorAddress = 127.0.0.1:{MD380_EMU_PORT}
-subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
+outputAudioDevice = /dev/null
+inputAudioDevice = /dev/null
+useMicrophone = false
+useVox = false
 
 [AMBE_AUDIO]
 address = 127.0.0.1
 txPort = {AB_AMBE_TX_PORT}
 rxPort = {AB_AMBE_RX_PORT}
 ambeMode = DMR
+minTxTimeMS = 2500
+gatewayDmrId = {dmr_id}
+repeaterID = {dmr_id}01
+txTg = {default_tg}
+txTs = 1
+colorCode = {color_code}
 minGain = 0.8
 maxGain = 2.0
 
@@ -174,15 +184,6 @@ txPort = {AB_USRP_TX_PORT}
 rxPort = {AB_USRP_RX_PORT}
 usrpAudio = AUDIO_USE_PCM
 aslAudio = AUDIO_USE_PCM
-
-[DMR]
-address = 127.0.0.1
-txPort = {AB_AMBE_RX_PORT}
-rxPort = {AB_AMBE_TX_PORT}
-slot = 1
-tg = {default_tg}
-call = {callsign}
-id = {dmr_id}
 """
         with open("/app/data/Analog_Bridge.ini", "w", encoding="utf-8") as f:
             f.write(ab_content)
@@ -287,19 +288,45 @@ Send = {AB_AMBE_RX_PORT}
             logger.warning("md380-emu binary not found.")
 
     def start_analog_bridge(self):
-        """Starts Analog_Bridge native binary."""
+        """Starts Analog_Bridge daemon using qemu-arm-static if needed."""
         ab_bin = find_binary("Analog_Bridge")
-        if ab_bin:
-            try:
-                ini_file = "/app/data/Analog_Bridge.ini"
-                ab_cwd = "/opt/Analog_Bridge" if os.path.isdir("/opt/Analog_Bridge") else "/app/data"
-                log_f = open("/var/log/Analog_Bridge.log", "a")
-                self.ab_proc = subprocess.Popen([ab_bin, ini_file], cwd=ab_cwd, stdout=log_f, stderr=log_f)
-                logger.info(f"✓ Started Analog_Bridge daemon ({ab_bin}) with {ini_file}")
-            except Exception as e:
-                logger.error(f"Failed to start Analog_Bridge: {e}")
-        else:
+        if not ab_bin:
             logger.warning("Analog_Bridge binary not found.")
+            return
+
+        qemu_bin = None
+        for qp in ["/opt/md380-emu/qemu-arm-static", "/usr/bin/qemu-arm-static", "/usr/local/bin/qemu-arm-static"]:
+            if os.path.exists(qp) and os.access(qp, os.X_OK):
+                qemu_bin = qp
+                break
+
+        ini_file = "/app/data/Analog_Bridge.ini"
+        ab_cwd = "/opt/Analog_Bridge" if os.path.isdir("/opt/Analog_Bridge") else "/app/data"
+        log_f = open("/var/log/Analog_Bridge.log", "a")
+
+        is_arm = False
+        try:
+            with open(ab_bin, "rb") as bf:
+                hdr = bf.read(20)
+                if len(hdr) >= 20 and hdr[4] == 1 and (hdr[18] == 40 or hdr[18] == 0x28):  # EM_ARM
+                    is_arm = True
+        except Exception:
+            pass
+
+        cmd = [qemu_bin, ab_bin, ini_file] if (is_arm and qemu_bin) else [ab_bin, ini_file]
+
+        try:
+            self.ab_proc = subprocess.Popen(cmd, cwd=ab_cwd, stdout=log_f, stderr=log_f)
+            logger.info(f"✓ Started Analog_Bridge daemon ({' '.join(cmd)}) with {ini_file}")
+        except OSError as oe:
+            if oe.errno == 8 and qemu_bin: # Exec format error
+                cmd = [qemu_bin, ab_bin, ini_file]
+                self.ab_proc = subprocess.Popen(cmd, cwd=ab_cwd, stdout=log_f, stderr=log_f)
+                logger.info(f"✓ Started Analog_Bridge via qemu ({' '.join(cmd)}) with {ini_file}")
+            else:
+                logger.error(f"Failed to start Analog_Bridge: {oe}")
+        except Exception as e:
+            logger.error(f"Failed to start Analog_Bridge: {e}")
 
     def start_mmdvm_bridge(self):
         """Starts MMDVM_Bridge native binary."""
