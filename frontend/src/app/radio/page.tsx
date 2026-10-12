@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { useLiveMonitor } from "@/hooks/useLiveMonitor";
+import { useLiveMonitor, registerAudioRxListener, AudioRxData } from "@/hooks/useLiveMonitor";
 import { usePhysicalPTT } from "@/hooks/usePhysicalPTT";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ProfileSwitcher, UserProfile, DEFAULT_MONITOR_PROFILE } from "@/components/ProfileSwitcher";
@@ -389,59 +389,79 @@ export default function RadioPocketMode() {
     };
   }, []);
 
+  const isMutedRef = useRef(isMuted);
   useEffect(() => {
-    // Half-duplex lockout: Do not play incoming audio while user is transmitting
-    if (!incomingAudio || !incomingAudio.pcm || isMuted || isTransmitting) return;
-    // Suppress self-echo audio
-    if (incomingAudio.src_id && incomingAudio.src_id === activeProfile.dmrId) return;
-    try {
-      if (!rxAudioCtxRef.current) {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        rxAudioCtxRef.current = new AudioCtx();
-      }
-      const ctx = rxAudioCtxRef.current;
-      if (ctx.state === "suspended") {
-        ctx.resume().catch(() => {});
-      }
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
 
-      const binaryStr = atob(incomingAudio.pcm);
-      const len = binaryStr.length;
-      const safeLen = len - (len % 2);
-      if (safeLen < 2) return;
-      const bytes = new Uint8Array(safeLen);
-      for (let i = 0; i < safeLen; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-      const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
-      let maxAmp = 0;
-      for (let i = 0; i < int16.length; i++) {
-        const abs = Math.abs(int16[i]);
-        if (abs > maxAmp) maxAmp = abs;
-      }
-      if (maxAmp < 80) return; // Drop silence frames, completely eliminates 16.6Hz buffer start/stop clicking
+  const isTransmittingRef = useRef(isTransmitting);
+  useEffect(() => {
+    isTransmittingRef.current = isTransmitting;
+  }, [isTransmitting]);
 
-      const float32 = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) {
-        float32[i] = int16[i] / 32768.0;
+  const activeProfileRef = useRef(activeProfile);
+  useEffect(() => {
+    activeProfileRef.current = activeProfile;
+  }, [activeProfile]);
+
+  useEffect(() => {
+    const unsubscribe = registerAudioRxListener((audioChunk: AudioRxData) => {
+      // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
+      if (!audioChunk || !audioChunk.pcm) return;
+      if (isMutedRef.current || isTransmittingRef.current) return;
+      // Suppress self-echo audio
+      if (audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
+
+      try {
+        if (!rxAudioCtxRef.current) {
+          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+          rxAudioCtxRef.current = new AudioCtx();
+        }
+        const ctx = rxAudioCtxRef.current;
+        if (ctx.state === "suspended") {
+          ctx.resume().catch(() => {});
+        }
+
+        const binaryStr = atob(audioChunk.pcm);
+        const len = binaryStr.length;
+        const safeLen = len - (len % 2);
+        if (safeLen < 2) return;
+
+        const bytes = new Uint8Array(safeLen);
+        for (let i = 0; i < safeLen; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
+
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+          float32[i] = int16[i] / 32768.0;
+        }
+
+        const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
+        audioBuffer.copyToChannel(float32, 0);
+
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+
+        const now = ctx.currentTime;
+        // Jitter buffer scheduling: if timeline fell behind or gap > 200ms, start with an 80ms cushion
+        if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
+          rxNextTimeRef.current = now + 0.08;
+        }
+
+        source.start(rxNextTimeRef.current);
+        rxNextTimeRef.current += audioBuffer.duration;
+      } catch (e) {
+        console.warn("Audio playback error:", e);
       }
+    });
 
-      const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
-      audioBuffer.copyToChannel(float32, 0);
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-
-      const now = ctx.currentTime;
-      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
-        rxNextTimeRef.current = now;
-      }
-      source.start(rxNextTimeRef.current);
-      rxNextTimeRef.current += audioBuffer.duration;
-    } catch (e) {
-      console.warn("Audio playback note:", e);
-    }
-  }, [incomingAudio, isMuted]);
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // Live TX Microphone Streamer to USRP / DMR Network
   const txProcessorRef = useRef<ScriptProcessorNode | null>(null);

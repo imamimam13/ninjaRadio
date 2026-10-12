@@ -36,18 +36,30 @@ export interface ActiveTransmission {
   started_at: string;
 }
 
+export type AudioRxData = {
+  src_id: number;
+  callsign: string;
+  tg: number;
+  slot: number;
+  pcm: string;
+};
+
+export type AudioRxListener = (audio: AudioRxData) => void;
+const audioListeners = new Set<AudioRxListener>();
+
+export function registerAudioRxListener(listener: AudioRxListener) {
+  audioListeners.add(listener);
+  return () => {
+    audioListeners.delete(listener);
+  };
+}
+
 export function useLiveMonitor() {
   const [lastHeard, setLastHeard] = useState<LastHeardEntry[]>([]);
   const [activeTx, setActiveTx] = useState<ActiveTransmission | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const [incomingAudio, setIncomingAudio] = useState<{
-    src_id: number;
-    callsign: string;
-    tg: number;
-    slot: number;
-    pcm: string;
-  } | null>(null);
+  const [incomingAudio, setIncomingAudio] = useState<AudioRxData | null>(null);
 
   const sendJson = (data: any): boolean => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -83,7 +95,13 @@ export function useLiveMonitor() {
             } else if (message.type === "LAST_HEARD_UPDATE") {
               setLastHeard((prev) => [message.data, ...prev.slice(0, 49)]);
             } else if (message.type === "AUDIO_RX") {
-              setIncomingAudio(message.data || message);
+              const data = (message.data || message) as AudioRxData;
+              audioListeners.forEach((listener) => {
+                try {
+                  listener(data);
+                } catch {}
+              });
+              setIncomingAudio(data);
             }
           } catch {
             // parse error
