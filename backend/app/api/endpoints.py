@@ -474,9 +474,11 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     # Voice Header or active bursts (data_type 0, 1, or 3)
     if data_type in [0, 1, 3]:
         now = time.time()
+        is_new_stream = stream_key not in ACTIVE_STREAMS
         cached = ACTIVE_STREAMS.get(stream_key)
         start_time = cached.get("start_time", now) if cached else now
         started_at = cached.get("started_at", datetime.utcnow().strftime("%H:%M:%S")) if cached else datetime.utcnow().strftime("%H:%M:%S")
+        last_broadcast = cached.get("last_broadcast", 0.0) if cached else 0.0
 
         tx_data = {
             "id": f"tx_rf_{stream_key}",
@@ -492,39 +494,25 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
             "ber": "0.1%",
             "started_at": started_at,
             "start_time": start_time,
-            "last_active": now
+            "last_active": now,
+            "last_broadcast": last_broadcast
         }
         ACTIVE_STREAMS[stream_key] = tx_data
-        await manager.update_tx_state(tx_data)
+
+        # Throttle TX_STATE_CHANGE to avoid flooding WebSockets 50x per sec (prevents React re-render lag)
+        if is_new_stream or (now - last_broadcast > 0.5):
+            tx_data["last_broadcast"] = now
+            await manager.update_tx_state(tx_data)
 
         # Broadcast live audio chunk to web clients if payload present and NOT outgoing TX
         payload_b64 = event.get("payload_b64")
         if payload_b64 and not is_tx:
             try:
                 import base64
-                import struct
-                import math
                 raw_payload = base64.b64decode(payload_b64)
                 if len(raw_payload) >= 320:
                     even_len = len(raw_payload) - (len(raw_payload) % 2)
-                    int16_samples = struct.unpack(f"<{even_len//2}h", raw_payload[:even_len])
-                    max_amp = max(abs(s) for s in int16_samples)
-                    if max_amp > 80:
-                        pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
-                    else:
-                        pcm_b64_to_send = None
-                elif len(raw_payload) >= 2 and len(raw_payload) != 33:
-                    even_len = len(raw_payload) - (len(raw_payload) % 2)
-                    int16_samples = struct.unpack(f"<{even_len//2}h", raw_payload[:even_len])
-                    max_amp = max(abs(s) for s in int16_samples)
-                    if max_amp > 80:
-                        pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
-                    else:
-                        pcm_b64_to_send = None
-                else:
-                    pcm_b64_to_send = None
-
-                if pcm_b64_to_send:
+                    pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
                     await manager.broadcast({
                         "type": "AUDIO_RX",
                         "data": {
