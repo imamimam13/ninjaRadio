@@ -770,6 +770,7 @@ Debug=1
         """Maintains active DMR transmission carrier by continuously delivering 20ms frames."""
         self.is_transmitting = True
         self.tune_remote(tg, slot)
+        await asyncio.sleep(0.06)
         seq = 100
         logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot})")
         while self.is_transmitting and self.running:
