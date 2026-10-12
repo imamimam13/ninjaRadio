@@ -289,7 +289,7 @@ export default function RadioPocketMode() {
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          if (parsed && parsed.callsign !== "N1NJA" && parsed.id !== "prof_default") {
+          if (parsed && parsed.callsign !== "N1NJA" && parsed.id !== "prof_default" && parsed.callsign !== "BD62AA") {
             initialProf = parsed;
             setActiveProfile(parsed);
           }

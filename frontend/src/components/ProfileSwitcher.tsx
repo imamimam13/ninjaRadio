@@ -30,11 +30,11 @@ export const DEFAULT_MONITOR_PROFILE: UserProfile = {
 };
 
 export const DEFAULT_OPERATOR_PROFILE: UserProfile = {
-  id: "prof_bd62aa",
+  id: "prof_bd62bot",
   category: "Amatir",
-  callsign: "BD62AA",
-  displayName: "ALI AKBAR",
-  dmrId: 1022001,
+  callsign: "BD62BOT",
+  displayName: "NinjaRadio Operator",
+  dmrId: 1022057,
   allowedTalkgroups: [1025, 510, 5101, 5102, 5103, 9990, 91],
   badgeColor: "bg-emerald-500 text-slate-950",
   networkTag: "BRIDI DMR Master",
@@ -79,16 +79,16 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
-            // Purge hardcoded N1NJA from storage
+            // Purge hardcoded N1NJA and legacy test BD62AA from storage
             const cleaned = parsed.filter(
-              (p: UserProfile) => p.callsign !== "N1NJA" && p.id !== "prof_default"
+              (p: UserProfile) => p.callsign !== "N1NJA" && p.id !== "prof_default" && p.callsign !== "BD62AA" && p.id !== "prof_bd62aa"
             );
             if (cleaned.length > 0) {
-              const hasBd62aa = cleaned.some((p: UserProfile) => p.callsign === "BD62AA");
-              const fullList = hasBd62aa ? [DEFAULT_MONITOR_PROFILE, ...cleaned] : [DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE, ...cleaned];
+              const hasBd62bot = cleaned.some((p: UserProfile) => p.callsign === "BD62BOT");
+              const fullList = hasBd62bot ? [DEFAULT_MONITOR_PROFILE, ...cleaned] : [DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE, ...cleaned];
               setProfiles(fullList);
-              if (activeProfile.callsign === "N1NJA") {
-                onProfileChange(cleaned[0] || DEFAULT_OPERATOR_PROFILE);
+              if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA") {
+                onProfileChange(DEFAULT_OPERATOR_PROFILE);
               }
               return;
             }
@@ -96,7 +96,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
         } catch {}
       }
       setProfiles([DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE]);
-      if (activeProfile.callsign === "N1NJA") {
+      if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA") {
         onProfileChange(DEFAULT_OPERATOR_PROFILE);
       }
     }

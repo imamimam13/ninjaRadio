@@ -29,6 +29,49 @@ MD380_EMU_PORT = 2470     # md380-emu vocoder daemon port
 AB_AMBE_RX_PORT = 31100   # Analog_Bridge receives AMBE from MMDVM_Bridge on 31100
 AB_AMBE_TX_PORT = 31103   # Analog_Bridge sends AMBE to MMDVM_Bridge on 31103
 
+# ----------------- Official DVSwitch USRP protocol (as used by pyUC / Analog_Bridge 1.6.x) -----------------
+# Header: b"USRP" + >iiiiiii (seq, memory, keyup, talkgroup, type, mpxid, reserved)
+# The `type` field is written as (TYPE << 24) big-endian, i.e. bytes TYPE,0,0,0 on the wire.
+# Fields talkgroup/mpxid/reserved MUST be 0 — Analog_Bridge drops frames whose type is not VOICE/TEXT.
+USRP_TYPE_VOICE = 0
+USRP_TYPE_TEXT = 2
+TLV_TAG_SET_INFO = 0x08   # payload: src(3) rpt(4) tg(3) ts(1) cc(1) callsign\0
+
+
+def build_usrp_frame(seq: int, keyup: int, usrp_type: int = USRP_TYPE_VOICE, payload: bytes = b"") -> bytes:
+    return b"USRP" + struct.pack(">iiiiiii", seq & 0x7FFFFFFF, 0, 1 if keyup else 0, 0, usrp_type << 24, 0, 0) + payload
+
+
+def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, callsign: str) -> bytes:
+    call = (callsign or str(src_id)).encode("ascii", errors="ignore")[:16]
+    body = (
+        (src_id & 0xFFFFFF).to_bytes(3, "big")
+        + (rpt_id & 0xFFFFFFFF).to_bytes(4, "big")
+        + (tg & 0xFFFFFF).to_bytes(3, "big")
+        + bytes([slot & 0xFF, cc & 0xFF])
+        + call + b"\x00"
+    )
+    return bytes([TLV_TAG_SET_INFO, len(body)]) + body
+
+
+def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
+    """Decodes a binary TLV SET_INFO metadata frame emitted by Analog_Bridge (never decode it as ASCII)."""
+    if len(payload) < 14 or payload[0] != TLV_TAG_SET_INFO:
+        return None
+    length = payload[1]
+    body = payload[2:2 + length]
+    if len(body) < 12:
+        return None
+    callsign = body[12:].split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
+    return {
+        "src": int.from_bytes(body[0:3], "big"),
+        "rpt": int.from_bytes(body[3:7], "big"),
+        "tg": int.from_bytes(body[7:10], "big"),
+        "slot": body[10],
+        "cc": body[11],
+        "callsign": callsign,
+    }
+
 DEFAULT_CONFIG = {
     "server_callsign": os.getenv("SERVER_CALLSIGN", "N1NJA"),
     "server_dmr_id": int(os.getenv("SERVER_DMR_ID", 5109999)),
@@ -99,6 +142,16 @@ class DVSwitchCoreManager:
         self.last_audio_tx_time = 0.0
         self.last_ptt_heartbeat_time = 0.0
         self.tx_task: Optional[asyncio.Task] = None
+
+        # Spec-compliant Analog_Bridge TX state (identity is carried per call via TLV SET_INFO — no daemon restarts)
+        self.ab_tx_seq = 0
+        self.tx_identity_sent = False
+        self.current_operator_dmr_id = 0
+        self.current_operator_callsign = ""
+        self.current_tx_tg = 0
+        self.current_tx_slot = 2
+        self.current_tx_dmr_id = 0
+        self.last_rx_src = 0
 
     def load_config(self) -> Dict:
         if os.path.exists(CONFIG_PATH):
@@ -680,26 +733,37 @@ Debug=1
                     # Handle USRP_TYPE_TEXT (2) metadata packets exported by Analog_Bridge
                     if usrp_type == 2 and len(pcm_payload) > 0:
                         try:
-                            meta_str = pcm_payload.decode("ascii", errors="ignore").strip()
-                            logger.info(f"📋 USRP Text Metadata: {meta_str}")
-                            m_call = re.search(r'(?:call|callsign)\s*[:=]\s*([A-Za-z0-9/_-]+)', meta_str, re.IGNORECASE)
-                            m_id = re.search(r'(?:id|dmr_id|src)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
-                            m_tg = re.search(r'(?:tg|talkgroup|dst)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
-                            if m_call:
-                                self.current_rx_call = m_call.group(1)
-                            if m_id:
-                                self.current_rx_src = int(m_id.group(1))
-                            if m_tg:
-                                self.current_rx_tg = int(m_tg.group(1))
-                        except Exception:
-                            pass
+                            # 1. Official binary TLV SET_INFO frame (tag 0x08)
+                            tlv_info = parse_set_info_tlv(pcm_payload)
+                            if tlv_info:
+                                self.current_rx_src = tlv_info["src"]
+                                self.current_rx_tg = tlv_info["tg"]
+                                self.current_rx_slot = tlv_info["slot"]
+                                self.current_rx_call = tlv_info["callsign"] or f"ID-{tlv_info['src']}"
+                                self.last_rx_src = tlv_info["src"]
+                                logger.info(f"📋 USRP TLV SET_INFO: Call={self.current_rx_call} ID={self.current_rx_src} TG={self.current_rx_tg} (Slot {self.current_rx_slot})")
+                            else:
+                                meta_str = pcm_payload.decode("ascii", errors="ignore").strip()
+                                logger.info(f"📋 USRP Text Metadata: {meta_str}")
+                                m_call = re.search(r'(?:call|callsign)\s*[:=]\s*([A-Za-z0-9/_-]+)', meta_str, re.IGNORECASE)
+                                m_id = re.search(r'(?:id|dmr_id|src)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
+                                m_tg = re.search(r'(?:tg|talkgroup|dst)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
+                                if m_call:
+                                    self.current_rx_call = m_call.group(1)
+                                if m_id:
+                                    self.current_rx_src = int(m_id.group(1))
+                                    self.last_rx_src = self.current_rx_src
+                                if m_tg:
+                                    self.current_rx_tg = int(m_tg.group(1))
+                        except Exception as e:
+                            logger.debug(f"Metadata parse note: {e}")
                         continue  # Do not pass text metadata packet as audio stream
 
-                    # Fallback to legitimate DMR ID & primary TG (never use packet_type 33554432)
+                    # Resolve incoming talker info (never use operator's own identity as RX talker)
                     primary_tg = int(self.config.get("primary_tg", 1025))
                     active_tg = self.current_rx_tg if self.current_rx_tg > 0 else (talkgroup if (0 < talkgroup < 16777215) else primary_tg)
                     active_slot = self.current_rx_slot if self.current_rx_slot > 0 else 2
-                    active_src = self.current_rx_src if self.current_rx_src > 0 else (getattr(self, "current_operator_dmr_id", 0) or 1022057)
+                    active_src = self.current_rx_src if self.current_rx_src > 0 else self.last_rx_src
                     active_call = self.current_rx_call or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
 
                     # Refresh active timestamp while receiving audio packets
@@ -740,6 +804,19 @@ Debug=1
                     logger.debug(f"ab_pcm_rx_loop note: {e}")
                     await asyncio.sleep(0.01)
 
+    def send_set_info_to_ab(self, src: int, callsign: str, tg: int, slot: int):
+        """Sends official DVSwitch TLV SET_INFO frame to Analog_Bridge before audio frames."""
+        try:
+            rpt_id = int(self.config.get("server_dmr_id", 102205798))
+            cc = int(self.config.get("color_code", 1))
+            tlv = build_set_info_tlv(src, rpt_id, tg, slot, cc, callsign)
+            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+            pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv)
+            self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+            logger.info(f"📋 Sent TLV SET_INFO to Analog_Bridge: {callsign} ({src}) -> TG {tg} Slot {slot}")
+        except Exception as e:
+            logger.debug(f"Failed to send SET_INFO: {e}")
+
     async def run_usrp_ingress_loop(self):
         """
         Receives USRP frames from Web App PTT, Mumble Bridge, or DVSwitch Mobile,
@@ -761,8 +838,20 @@ Debug=1
                     if key_flag == 0:
                         self.stop_carrier_tx(tg, slot, dmr_id)
                     elif len(pcm_payload) > 0:
-                        target_dmr_id = dmr_id if dmr_id > 0 else getattr(self, "current_operator_dmr_id", 0)
-                        std_pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, key_flag, tg, target_dmr_id, slot, 0) + pcm_payload
+                        target_dmr_id = dmr_id if dmr_id > 0 else (self.current_operator_dmr_id or 1022057)
+                        target_call = self.current_operator_callsign or "BD62BOT"
+                        target_tg = tg if tg > 0 else int(self.config.get("primary_tg", 1025))
+                        target_slot = slot if slot in [1, 2] else 2
+
+                        if not self.tx_identity_sent:
+                            self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
+                            self.tx_identity_sent = True
+                            self.current_tx_tg = target_tg
+                            self.current_tx_slot = target_slot
+                            self.current_tx_dmr_id = target_dmr_id
+
+                        self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                        std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, pcm_payload)
                         try:
                             self.bridge_sock.sendto(std_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
                         except Exception as e:
@@ -829,26 +918,27 @@ Debug=1
 
     async def start_carrier_tx(self, tg: int, slot: int, dmr_id: int = None, callsign: str = None):
         """Maintains active DMR transmission carrier while client streams audio, with strict PTT heartbeat and TOT watchdog."""
-        if dmr_id and dmr_id > 0:
-            self.arm_operator_identity(dmr_id, callsign or "OPERATOR", allow_restart=True)
+        target_dmr_id = dmr_id if (dmr_id and dmr_id > 0) else (self.current_operator_dmr_id or 1022057)
+        target_call = callsign or self.current_operator_callsign or "BD62BOT"
         self.is_transmitting = True
         self.current_tx_tg = tg
         self.current_tx_slot = slot
-        target_dmr_id = getattr(self, "current_operator_dmr_id", dmr_id or 5109999)
         self.current_tx_dmr_id = target_dmr_id
+
+        # Send SET_INFO immediately to inform Analog_Bridge of talker identity
+        self.send_set_info_to_ab(target_dmr_id, target_call, tg, slot)
+        self.tx_identity_sent = True
+
         now = time.time()
         self.last_audio_tx_time = now
         self.last_ptt_heartbeat_time = now
-        self.tune_remote(tg, slot)
-        await asyncio.sleep(0.04)
-        seq = 100
         start_time = now
-        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot}) by ID {target_dmr_id}")
+        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot}) by ID {target_dmr_id} ({target_call})")
 
         try:
             while self.is_transmitting and self.running:
                 now = time.time()
-                # 1. Safety Time-Out-Timer (TOT: 90s) to prevent any network jamming
+                # 1. Safety Time-Out-Timer (TOT: 90s)
                 if now - start_time > 90.0:
                     logger.warning("⚠️ TX Time-Out-Timer (TOT 90s) reached! Auto-unkeying.")
                     break
@@ -860,8 +950,8 @@ Debug=1
 
                 # 3. Inter-burst fill: Send comfort silence during speech micro-gaps (> 50ms) to keep DMR carrier open
                 if now - self.last_audio_tx_time > 0.05:
-                    seq = (seq + 1) % 65536
-                    pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 1, tg, target_dmr_id, slot, 0) + (b"\x00" * 320)
+                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                    pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, b"\x00" * 320)
                     try:
                         self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
                     except Exception:
@@ -871,7 +961,7 @@ Debug=1
             self.stop_carrier_tx(tg, slot, target_dmr_id)
 
     def restart_analog_bridge(self):
-        """Restarts only Analog_Bridge to apply new gatewayDmrId without dropping MMDVM_Bridge connection."""
+        """Restarts only Analog_Bridge if requested."""
         if self.ab_proc:
             try:
                 self.ab_proc.terminate()
@@ -890,33 +980,17 @@ Debug=1
         self.start_analog_bridge()
 
     def arm_operator_identity(self, dmr_id: int, callsign: str, allow_restart: bool = False):
-        """Pre-arms active operator profile in subscriber CSV and Analog_Bridge."""
+        """Pre-arms active operator profile in subscriber CSV and memory without interrupting running daemons."""
         if not dmr_id or dmr_id <= 0:
             return
         
-        # Format clean 24-bit DMR ID (<= 16777215 / max 7 digits)
         clean_radio_id = int(str(dmr_id)[:7]) if len(str(dmr_id)) > 7 else dmr_id
         clean_radio_id = clean_radio_id & 0xFFFFFF
 
-        # Check current gatewayDmrId in Analog_Bridge.ini
-        current_ini_gw = None
-        ab_path = "/app/data/Analog_Bridge.ini"
-        if os.path.exists(ab_path):
-            try:
-                with open(ab_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    import re
-                    m = re.search(r"gatewayDmrId\s*=\s*(\d+)", content)
-                    if m:
-                        current_ini_gw = int(m.group(1))
-            except Exception:
-                pass
-
-        needs_restart = (current_ini_gw != clean_radio_id)
         self.current_operator_dmr_id = clean_radio_id
         self.current_operator_callsign = callsign
 
-        # 1. Update subscriber CSV (preserve all imported callbook subscribers)
+        # Update subscriber CSV (preserve all imported callbook subscribers)
         try:
             sub_path = "/var/lib/dvswitch/subscriber_ids.csv"
             existing_lines = []
@@ -930,53 +1004,30 @@ Debug=1
                 sf.write("\n".join(new_lines) + "\n")
         except Exception:
             pass
-
-        # 2. Update Analog_Bridge.ini (and restart if idle and (allow_restart or needs_restart))
-        if (allow_restart or needs_restart) and not self.is_transmitting:
-            if os.path.exists(ab_path):
-                try:
-                    with open(ab_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    import re
-                    new_content = re.sub(r"gatewayDmrId\s*=\s*\d+", f"gatewayDmrId = {clean_radio_id}", content)
-                    with open(ab_path, "w", encoding="utf-8") as f:
-                        f.write(new_content)
-                    
-                    for dest in ["/opt/Analog_Bridge/Analog_Bridge.ini", "/etc/Analog_Bridge.ini"]:
-                        try:
-                            with open(dest, "w", encoding="utf-8") as f:
-                                f.write(new_content)
-                        except Exception:
-                            pass
-                    
-                    self.restart_analog_bridge()
-                    logger.info(f"✓ Pre-armed Analog_Bridge with operator gatewayDmrId={clean_radio_id} ({callsign})")
-                except Exception as e:
-                    logger.error(f"Failed to pre-arm Analog_Bridge: {e}")
+        logger.info(f"✓ Armed operator identity {callsign} ({clean_radio_id})")
 
     def update_active_operator(self, dmr_id: int, callsign: str):
-        """Backwards compatible alias for arm_operator_identity with allow_restart=True."""
-        self.arm_operator_identity(dmr_id, callsign, allow_restart=True)
+        """Backwards compatible alias for arm_operator_identity."""
+        self.arm_operator_identity(dmr_id, callsign, allow_restart=False)
 
     def stop_carrier_tx(self, tg: int = None, slot: int = None, dmr_id: int = None):
-        """Releases DMR PTT transmission and sends multiple unkey frames with explicit TG/slot/ID."""
-        if not self.is_transmitting:
+        """Releases DMR PTT transmission and sends multiple unkey frames using official DVSwitch USRP format."""
+        if not self.is_transmitting and not self.tx_identity_sent:
             return
         self.is_transmitting = False
+        self.tx_identity_sent = False
         target_tg = tg or getattr(self, "current_tx_tg", 0)
         target_slot = slot or getattr(self, "current_tx_slot", 2)
         target_dmr_id = dmr_id or getattr(self, "current_tx_dmr_id", 0)
         logger.info(f"⏹️ PTT Carrier Released for TG {target_tg} Slot {target_slot} (ID {target_dmr_id}).")
-        seq = 200
-        for _ in range(5):
-            seq = (seq + 1) % 65536
-            unkey_pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 0, target_tg, target_dmr_id, target_slot, 0) + (b"\x00" * 320)
+        for _ in range(3):
+            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+            unkey_pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
             try:
                 self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
             except Exception:
                 pass
-            time.sleep(0.01)
+            time.sleep(0.02)
 
     async def shutdown(self):
         self.running = False
