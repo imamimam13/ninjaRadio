@@ -58,6 +58,15 @@ class BridgeRoute(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     bidirectional: Mapped[bool] = mapped_column(Boolean, default=True)
 
+class Organization(Base):
+    __tablename__ = "organizations"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    description: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

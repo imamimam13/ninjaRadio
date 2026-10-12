@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with async_session_maker() as session:
         await CallbookService.seed_initial_callbook(session)
+        await CallbookService.seed_initial_organizations(session)
         await LogbookService.seed_initial_qso(session)
         await BridgeService.seed_initial_routes(session)
     
