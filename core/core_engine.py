@@ -830,7 +830,7 @@ Debug=1
     async def start_carrier_tx(self, tg: int, slot: int, dmr_id: int = None, callsign: str = None):
         """Maintains active DMR transmission carrier while client streams audio, with strict PTT heartbeat and TOT watchdog."""
         if dmr_id and dmr_id > 0:
-            self.arm_operator_identity(dmr_id, callsign or "OPERATOR", allow_restart=False)
+            self.arm_operator_identity(dmr_id, callsign or "OPERATOR", allow_restart=True)
         self.is_transmitting = True
         self.current_tx_tg = tg
         self.current_tx_slot = slot
@@ -898,6 +898,21 @@ Debug=1
         clean_radio_id = int(str(dmr_id)[:7]) if len(str(dmr_id)) > 7 else dmr_id
         clean_radio_id = clean_radio_id & 0xFFFFFF
 
+        # Check current gatewayDmrId in Analog_Bridge.ini
+        current_ini_gw = None
+        ab_path = "/app/data/Analog_Bridge.ini"
+        if os.path.exists(ab_path):
+            try:
+                with open(ab_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    import re
+                    m = re.search(r"gatewayDmrId\s*=\s*(\d+)", content)
+                    if m:
+                        current_ini_gw = int(m.group(1))
+            except Exception:
+                pass
+
+        needs_restart = (current_ini_gw != clean_radio_id)
         self.current_operator_dmr_id = clean_radio_id
         self.current_operator_callsign = callsign
 
@@ -916,9 +931,8 @@ Debug=1
         except Exception:
             pass
 
-        # 2. Update Analog_Bridge.ini (and restart ONLY if idle and allow_restart=True)
-        if allow_restart and not self.is_transmitting:
-            ab_path = "/app/data/Analog_Bridge.ini"
+        # 2. Update Analog_Bridge.ini (and restart if idle and (allow_restart or needs_restart))
+        if (allow_restart or needs_restart) and not self.is_transmitting:
             if os.path.exists(ab_path):
                 try:
                     with open(ab_path, "r", encoding="utf-8") as f:

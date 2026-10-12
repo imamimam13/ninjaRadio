@@ -27,9 +27,19 @@ export const DEFAULT_MONITOR_PROFILE: UserProfile = {
   networkTag: "Hanya Monitor (TX Terkunci)",
   isMonitorOnly: true,
   defaultTg: 510,
+export const DEFAULT_OPERATOR_PROFILE: UserProfile = {
+  id: "prof_bd62aa",
+  category: "Amatir",
+  callsign: "BD62AA",
+  displayName: "ALI AKBAR",
+  dmrId: 1022001,
+  allowedTalkgroups: [1025, 510, 5101, 5102, 5103, 9990, 91],
+  badgeColor: "bg-emerald-500 text-slate-950",
+  networkTag: "BRIDI DMR Master",
+  defaultTg: 1025,
 };
 
-const DEFAULT_PROFILES: UserProfile[] = [DEFAULT_MONITOR_PROFILE];
+const DEFAULT_PROFILES: UserProfile[] = [DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE];
 
 interface ProfileSwitcherProps {
   activeProfile: UserProfile;
@@ -72,19 +82,20 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
               (p: UserProfile) => p.callsign !== "N1NJA" && p.id !== "prof_default"
             );
             if (cleaned.length > 0) {
-              setProfiles([DEFAULT_MONITOR_PROFILE, ...cleaned]);
-              // If active was N1NJA, switch to monitor or first cleaned
+              const hasBd62aa = cleaned.some((p: UserProfile) => p.callsign === "BD62AA");
+              const fullList = hasBd62aa ? [DEFAULT_MONITOR_PROFILE, ...cleaned] : [DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE, ...cleaned];
+              setProfiles(fullList);
               if (activeProfile.callsign === "N1NJA") {
-                onProfileChange(cleaned[0] || DEFAULT_MONITOR_PROFILE);
+                onProfileChange(cleaned[0] || DEFAULT_OPERATOR_PROFILE);
               }
               return;
             }
           }
         } catch {}
       }
-      setProfiles([DEFAULT_MONITOR_PROFILE]);
+      setProfiles([DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE]);
       if (activeProfile.callsign === "N1NJA") {
-        onProfileChange(DEFAULT_MONITOR_PROFILE);
+        onProfileChange(DEFAULT_OPERATOR_PROFILE);
       }
     }
   }, []);
