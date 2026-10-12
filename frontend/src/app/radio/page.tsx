@@ -418,15 +418,15 @@ export default function RadioPocketMode() {
 
         // 3. Clear voice gain
         const gainNode = ctx.createGain();
-        gainNode.gain.value = 1.6;
+        gainNode.gain.value = 1.0;
 
         // 4. Dynamics Compressor: prevents digital clipping & distortion on loud voice peaks
         const comp = ctx.createDynamicsCompressor();
-        comp.threshold.value = -12;
-        comp.knee.value = 6;
-        comp.ratio.value = 4;
-        comp.attack.value = 0.003;
-        comp.release.value = 0.15;
+        comp.threshold.value = -16;
+        comp.knee.value = 10;
+        comp.ratio.value = 3;
+        comp.attack.value = 0.01;
+        comp.release.value = 0.20;
 
         // Pipeline: source -> hpf -> lpf -> gainNode -> comp -> destination
         hpf.connect(lpf);
@@ -485,10 +485,6 @@ export default function RadioPocketMode() {
     // Suppress self-echo audio ONLY if NOT on Echo / Parrot test (TG 9990)
     if (audioChunk.tg !== 9990 && audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
 
-    // Deduplicate identical chunks if triggered by both listener & incomingAudio
-    if (lastPlayedChunkRef.current === audioChunk.pcm) return;
-    lastPlayedChunkRef.current = audioChunk.pcm;
-
     try {
       ensureAudioUnlocked();
       const ctx = rxAudioCtxRef.current;
@@ -512,12 +508,20 @@ export default function RadioPocketMode() {
             float32[i] = int16[i] / 32768.0;
           }
 
-          // Micro cosine envelope (4 samples fade-in & fade-out) to eliminate chunk boundary pops ("klutuk-klutuk")
-          const fadeLen = Math.min(6, Math.floor(float32.length / 4));
-          for (let i = 0; i < fadeLen; i++) {
-            const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
-            float32[i] *= factor;
-            float32[float32.length - 1 - i] *= factor;
+          const now = ctx.currentTime;
+          const isBurstStart = !rxNextTimeRef.current || rxNextTimeRef.current < now;
+
+          if (isBurstStart) {
+            // 100ms cushion bridges DMR 60ms TDMA slot gaps seamlessly without buffer starvation
+            rxNextTimeRef.current = now + 0.10;
+            // Smoothly ramp up first 4 samples (0.5ms) ONLY on initial burst onset to eliminate cold-start speaker pop
+            const fadeLen = Math.min(4, float32.length);
+            for (let i = 0; i < fadeLen; i++) {
+              float32[i] *= (i / fadeLen);
+            }
+          } else if (rxNextTimeRef.current > now + 0.35) {
+            // Clock drift recovery: bring buffer back to stable 100ms cushion
+            rxNextTimeRef.current = now + 0.10;
           }
 
           const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
@@ -531,13 +535,6 @@ export default function RadioPocketMode() {
             source.connect(rxGainNodeRef.current);
           } else {
             source.connect(ctx.destination);
-          }
-
-          const now = ctx.currentTime;
-          // DMR 3-frame TDMA bursts arrive in 60-80ms cycles.
-          // Use 150ms cushion so TDMA inter-burst gaps (>70ms) never under-run and cause clicks.
-          if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.45) {
-            rxNextTimeRef.current = now + 0.15;
           }
 
           source.start(rxNextTimeRef.current);
@@ -580,12 +577,6 @@ export default function RadioPocketMode() {
     };
   }, []);
 
-  useEffect(() => {
-    if (incomingAudio) {
-      playAudioChunk(incomingAudio);
-    }
-  }, [incomingAudio]);
-
   // Live TX Microphone Streamer to USRP / DMR Network
   // Persistent refs prevent Chromium/V8 Garbage Collector from killing the audio pipeline after 2 seconds
   const txProcessorRef = useRef<ScriptProcessorNode | null>(null);
@@ -594,9 +585,11 @@ export default function RadioPocketMode() {
   const txMicStreamRef = useRef<MediaStream | null>(null);
   const txAudioCtxRef = useRef<AudioContext | null>(null);
   const txHeartbeatIntervalRef = useRef<any>(null);
+  const txAccumulatorRef = useRef<number[]>([]);
 
   const startLiveMicrophoneStream = async (tgNum: number) => {
     try {
+      txAccumulatorRef.current = [];
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -614,39 +607,71 @@ export default function RadioPocketMode() {
       const source = ctx.createMediaStreamSource(stream);
       txSourceNodeRef.current = source;
 
+      // 1. High-pass filter (200 Hz): Eliminates microphone plosives, breath thumps, and DC bias
+      const hpf = ctx.createBiquadFilter();
+      hpf.type = "highpass";
+      hpf.frequency.value = 200;
+      hpf.Q.value = 0.707;
+
+      // 2. Low-pass anti-aliasing filter (3400 Hz): Cuts frequencies above Nyquist before 8kHz downsampling
+      const lpf = ctx.createBiquadFilter();
+      lpf.type = "lowpass";
+      lpf.frequency.value = 3400;
+      lpf.Q.value = 0.707;
+
+      source.connect(hpf);
+      hpf.connect(lpf);
+
       const bufferSize = 2048;
       const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
       txProcessorRef.current = processor;
+      lpf.connect(processor);
 
       processor.onaudioprocess = (e) => {
         if (!isTxRef.current) return;
         const inputData = e.inputBuffer.getChannelData(0);
         const sampleRateRatio = ctx.sampleRate / 8000;
         const targetLen = Math.floor(inputData.length / sampleRateRatio);
-        const pcm16 = new Int16Array(targetLen);
 
+        // High-fidelity linear interpolation resampler (eliminates robotic quantization artifacts)
+        const newSamples: number[] = new Array(targetLen);
         for (let i = 0; i < targetLen; i++) {
-          const origIdx = Math.floor(i * sampleRateRatio);
-          const s = Math.max(-1, Math.min(1, inputData[origIdx]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          const origPos = i * sampleRateRatio;
+          const idx0 = Math.floor(origPos);
+          const idx1 = Math.min(idx0 + 1, inputData.length - 1);
+          const frac = origPos - idx0;
+          const s = inputData[idx0] * (1 - frac) + inputData[idx1] * frac;
+          newSamples[i] = Math.max(-1, Math.min(1, s));
         }
 
-        const uint8 = new Uint8Array(pcm16.buffer);
-        let binary = "";
-        for (let i = 0; i < uint8.byteLength; i++) {
-          binary += String.fromCharCode(uint8[i]);
-        }
-        const b64 = btoa(binary);
+        // Accumulate samples and dispatch ONLY exact 160-sample (20ms / 320-byte) frames
+        txAccumulatorRef.current.push(...newSamples);
 
-        sendJson({
-          type: "AUDIO_TX",
-          pcm: b64,
-          is_tx: true,
-          tg: tgNum,
-          slot: currentTimeSlot,
-          callsign: activeProfile.callsign,
-          dmr_id: activeProfile.dmrId,
-        });
+        while (txAccumulatorRef.current.length >= 160) {
+          const frame = txAccumulatorRef.current.splice(0, 160);
+          const pcm16 = new Int16Array(160);
+          for (let i = 0; i < 160; i++) {
+            const s = frame[i];
+            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
+
+          const uint8 = new Uint8Array(pcm16.buffer);
+          let binary = "";
+          for (let i = 0; i < uint8.byteLength; i++) {
+            binary += String.fromCharCode(uint8[i]);
+          }
+          const b64 = btoa(binary);
+
+          sendJson({
+            type: "AUDIO_TX",
+            pcm: b64,
+            is_tx: true,
+            tg: tgNum,
+            slot: currentTimeSlot,
+            callsign: activeProfile.callsign,
+            dmr_id: activeProfile.dmrId,
+          });
+        }
       };
 
       source.connect(processor);
@@ -667,6 +692,7 @@ export default function RadioPocketMode() {
   };
 
   const stopLiveMicrophoneStream = () => {
+    txAccumulatorRef.current = [];
     if (txProcessorRef.current) {
       try { txProcessorRef.current.disconnect(); } catch {}
       txProcessorRef.current = null;

@@ -1027,7 +1027,6 @@ Debug=1
                 self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
             except Exception:
                 pass
-            time.sleep(0.02)
 
     async def shutdown(self):
         self.running = False
