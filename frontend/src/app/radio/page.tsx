@@ -394,11 +394,6 @@ export default function RadioPocketMode() {
     isMutedRef.current = isMuted;
   }, [isMuted]);
 
-  const isTransmittingRef = useRef(isTransmitting);
-  useEffect(() => {
-    isTransmittingRef.current = isTransmitting;
-  }, [isTransmitting]);
-
   const activeProfileRef = useRef(activeProfile);
   useEffect(() => {
     activeProfileRef.current = activeProfile;
@@ -408,7 +403,7 @@ export default function RadioPocketMode() {
     const unsubscribe = registerAudioRxListener((audioChunk: AudioRxData) => {
       // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
       if (!audioChunk || !audioChunk.pcm) return;
-      if (isMutedRef.current || isTransmittingRef.current) return;
+      if (isMutedRef.current || isTxRef.current) return;
       // Suppress self-echo audio
       if (audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
 
