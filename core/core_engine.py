@@ -221,7 +221,7 @@ logLevel = 2
 exportMetadata = true
 subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
 decoderFallBack = true
-useEmulator = true
+useEmulator = false
 emulatorAddress = 127.0.0.1:{MD380_EMU_PORT}
 outputAudioDevice = /dev/null
 inputAudioDevice = /dev/null
@@ -430,9 +430,7 @@ Debug=1
             logger.warning("MMDVM_Bridge binary not found.")
 
     def start_daemons(self):
-        """Starts md380-emu, Analog_Bridge, and MMDVM_Bridge official binaries."""
-        self.start_md380()
-        time.sleep(0.3)
+        """Starts Analog_Bridge and MMDVM_Bridge official binaries."""
         self.start_analog_bridge()
         time.sleep(0.3)
         self.start_mmdvm_bridge()
@@ -497,16 +495,6 @@ Debug=1
         """Monitors DVSwitch daemons and restarts them if they terminate unexpectedly."""
         while self.running:
             await asyncio.sleep(5.0)
-            if self.md380_proc and self.md380_proc.poll() is not None:
-                err_text = ""
-                try:
-                    with open("/var/log/md380-emu.log", "r") as f:
-                        err_text = "".join(f.readlines()[-3:]).strip()
-                except Exception:
-                    pass
-                logger.warning(f"md380-emu exited with code {self.md380_proc.returncode} (log: {err_text}). Restarting...")
-                self.start_md380()
-
             if self.ab_proc and self.ab_proc.poll() is not None:
                 err_text = ""
                 try:
@@ -765,10 +753,11 @@ Debug=1
                     self.registered_usrp_clients[addr] = time.time()
                     self.last_audio_tx_time = time.time()
 
-                    # Standardize USRP packet header: [USRP][seq][0][key_flag][0][0][0][0] + PCM
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                     pcm_payload = data[32:]
-                    if len(pcm_payload) > 0:
+                    if key_flag == 0:
+                        self.stop_carrier_tx(tg, slot, dmr_id)
+                    elif len(pcm_payload) > 0:
                         std_pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, key_flag, 0, 0, 0, 0) + pcm_payload
                         try:
                             self.bridge_sock.sendto(std_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
@@ -835,25 +824,45 @@ Debug=1
             logger.debug(f"tune_remote error: {e}")
 
     async def start_carrier_tx(self, tg: int, slot: int, dmr_id: int = None, callsign: str = None):
-        """Maintains active DMR transmission carrier by continuously delivering 20ms frames."""
+        """Maintains active DMR transmission carrier while client streams audio, with strict inactivity and TOT watchdog."""
         if dmr_id and dmr_id > 0:
             self.update_active_operator(dmr_id, callsign or "OPERATOR")
         self.is_transmitting = True
+        self.current_tx_tg = tg
+        self.current_tx_slot = slot
+        target_dmr_id = getattr(self, "current_operator_dmr_id", dmr_id or 5109999)
+        self.current_tx_dmr_id = target_dmr_id
+        self.last_audio_tx_time = time.time()
         self.tune_remote(tg, slot)
         await asyncio.sleep(0.06)
         seq = 100
-        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot}) by ID {getattr(self, 'current_operator_dmr_id', 'Default')}")
-        while self.is_transmitting and self.running:
-            # If browser/client microphone stream paused or between bursts (>50ms), send comfort silence frame
-            if time.time() - self.last_audio_tx_time > 0.05:
-                seq = (seq + 1) % 65536
-                target_dmr_id = getattr(self, "current_operator_dmr_id", dmr_id or 5109999)
-                pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 1, tg, target_dmr_id, slot, 0) + (b"\x00" * 320)
-                try:
-                    self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
-                except Exception:
-                    pass
-            await asyncio.sleep(0.02)
+        start_time = time.time()
+        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot}) by ID {target_dmr_id}")
+
+        try:
+            while self.is_transmitting and self.running:
+                now = time.time()
+                # 1. Safety Time-Out-Timer (TOT: 90s) to prevent any network jamming
+                if now - start_time > 90.0:
+                    logger.warning("⚠️ TX Time-Out-Timer (TOT 90s) reached! Auto-unkeying.")
+                    break
+
+                # 2. Inactivity Watchdog: If client stopped sending audio frames for > 0.8s, auto-release PTT
+                if now - self.last_audio_tx_time > 0.8:
+                    logger.info("⏹️ Web Mic stream idle (>0.8s). Auto-releasing PTT carrier.")
+                    break
+
+                # 3. Inter-burst fill: Only send comfort silence during active speech micro-gaps (< 400ms)
+                if now - self.last_audio_tx_time > 0.05:
+                    seq = (seq + 1) % 65536
+                    pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 1, tg, target_dmr_id, slot, 0) + (b"\x00" * 320)
+                    try:
+                        self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.02)
+        finally:
+            self.stop_carrier_tx(tg, slot, target_dmr_id)
 
     def restart_analog_bridge(self):
         """Restarts only Analog_Bridge to apply new gatewayDmrId without dropping MMDVM_Bridge connection."""
@@ -929,16 +938,24 @@ Debug=1
             except Exception as e:
                 logger.error(f"Failed to update Analog_Bridge gatewayDmrId: {e}")
 
-    def stop_carrier_tx(self):
-        """Releases DMR PTT transmission."""
+    def stop_carrier_tx(self, tg: int = None, slot: int = None, dmr_id: int = None):
+        """Releases DMR PTT transmission and sends multiple unkey frames with explicit TG/slot/ID."""
+        if not self.is_transmitting:
+            return
         self.is_transmitting = False
-        logger.info("⏹️ PTT Carrier Released.")
+        target_tg = tg or getattr(self, "current_tx_tg", 0)
+        target_slot = slot or getattr(self, "current_tx_slot", 2)
+        target_dmr_id = dmr_id or getattr(self, "current_tx_dmr_id", 0)
+        logger.info(f"⏹️ PTT Carrier Released for TG {target_tg} Slot {target_slot} (ID {target_dmr_id}).")
         seq = 200
-        unkey_pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 0, 0, 0, 0, 0) + (b"\x00" * 320)
-        try:
-            self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
-        except Exception:
-            pass
+        for _ in range(3):
+            seq = (seq + 1) % 65536
+            unkey_pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 0, target_tg, target_dmr_id, target_slot, 0) + (b"\x00" * 320)
+            try:
+                self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+            except Exception:
+                pass
+            time.sleep(0.01)
 
     async def shutdown(self):
         self.running = False
@@ -1103,7 +1120,7 @@ async def ptt_transmit(payload: dict):
         else:
             if engine_mgr.tx_task and not engine_mgr.tx_task.done():
                 engine_mgr.tx_task.cancel()
-            engine_mgr.stop_carrier_tx()
+            engine_mgr.stop_carrier_tx(tg, slot, dmr_id)
             return {"status": "TX_STOPPED"}
     except Exception as e:
         return {"status": "ERROR", "detail": str(e)}
