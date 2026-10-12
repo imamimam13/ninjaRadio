@@ -330,6 +330,13 @@ Debug=1
 
     def start_md380(self):
         """Starts md380-emu vocoder daemon using qemu-arm-static if on x86_64."""
+        # Ensure any stale md380-emu instances are terminated so UDP port 2470 is free
+        try:
+            subprocess.run(["pkill", "-9", "-f", "md380-emu"], capture_output=True)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
         md380_bin = find_binary("md380-emu")
         qemu_bin = None
         for qp in ["/opt/md380-emu/qemu-arm-static", "/usr/bin/qemu-arm-static", "/usr/local/bin/qemu-arm-static"]:
@@ -420,18 +427,25 @@ Debug=1
         self.start_mmdvm_bridge()
 
     def stop_bridge_daemons(self):
-        """Stops Analog_Bridge and MMDVM_Bridge processes for reconfiguration."""
-        for name, proc in [("MMDVM_Bridge", self.mmdvm_proc), ("Analog_Bridge", self.ab_proc)]:
+        """Stops md380-emu, Analog_Bridge, and MMDVM_Bridge processes for reconfiguration."""
+        for name, proc in [("MMDVM_Bridge", self.mmdvm_proc), ("Analog_Bridge", self.ab_proc), ("md380-emu", self.md380_proc)]:
             if proc:
                 try:
                     proc.terminate()
-                    proc.wait(timeout=2.0)
+                    proc.wait(timeout=1.5)
                 except Exception:
                     try:
                         proc.kill()
                     except Exception:
                         pass
                 logger.info(f"Stopped {name} daemon.")
+        try:
+            subprocess.run(["pkill", "-9", "-f", "md380-emu"], capture_output=True)
+            subprocess.run(["pkill", "-9", "-f", "Analog_Bridge"], capture_output=True)
+            subprocess.run(["pkill", "-9", "-f", "MMDVM_Bridge"], capture_output=True)
+        except Exception:
+            pass
+        self.md380_proc = None
         self.mmdvm_proc = None
         self.ab_proc = None
 
@@ -845,8 +859,31 @@ async def on_shutdown():
 @app.get("/api/status")
 async def get_core_status():
     md380_running = engine_mgr.md380_proc is not None and engine_mgr.md380_proc.poll() is None
+    if not md380_running:
+        try:
+            r = subprocess.run(["pgrep", "-f", "md380-emu"], capture_output=True)
+            if r.returncode == 0:
+                md380_running = True
+        except Exception:
+            pass
+
     ab_running = engine_mgr.ab_proc is not None and engine_mgr.ab_proc.poll() is None
+    if not ab_running:
+        try:
+            r = subprocess.run(["pgrep", "-f", "Analog_Bridge"], capture_output=True)
+            if r.returncode == 0:
+                ab_running = True
+        except Exception:
+            pass
+
     mmdvm_running = engine_mgr.mmdvm_proc is not None and engine_mgr.mmdvm_proc.poll() is None
+    if not mmdvm_running:
+        try:
+            r = subprocess.run(["pgrep", "-f", "MMDVM_Bridge"], capture_output=True)
+            if r.returncode == 0:
+                mmdvm_running = True
+        except Exception:
+            pass
 
     peers_status = []
     peers = engine_mgr.config.get("peering", [])
