@@ -153,6 +153,47 @@ async def import_callbook_file(
     )
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to import callbook"))
+@router.put("/callbook/{entry_id}", response_model=CallbookResponse)
+async def update_callbook_entry(
+    entry_id: int,
+    data: CallbookCreate,
+    session: AsyncSession = Depends(get_db)
+):
+    entry = await CallbookService.update_entry(session, entry_id, data)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan")
+    return entry
+
+@router.delete("/callbook/{entry_id}")
+async def delete_callbook_entry(
+    entry_id: int,
+    session: AsyncSession = Depends(get_db)
+):
+    ok = await CallbookService.delete_entry(session, entry_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan")
+    return {"status": "SUCCESS"}
+
+@router.post("/callbook/batch-update")
+async def batch_update_callbook(
+    payload: dict,
+    session: AsyncSession = Depends(get_db)
+):
+    """Bulk updates organization and/or default_tg for matching entries."""
+    target_org = payload.get("organization")
+    target_tg = payload.get("default_tg")
+    filter_org = payload.get("filter_org")
+    callsign_prefix = payload.get("callsign_prefix")
+    ids = payload.get("ids")
+
+    result = await CallbookService.batch_update(
+        session,
+        target_org=target_org,
+        target_tg=target_tg,
+        filter_org=filter_org,
+        callsign_prefix=callsign_prefix,
+        ids=ids
+    )
     return result
 
 # ----------------- Organizations Registry -----------------

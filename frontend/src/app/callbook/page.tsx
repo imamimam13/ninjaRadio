@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
-import { Users, Search, Plus, MapPin, Building, ShieldCheck, Radio, Upload, Download, Check, AlertCircle, Lock } from "lucide-react";
+import { Users, Search, Plus, MapPin, Building, ShieldCheck, Radio, Upload, Download, Check, AlertCircle, Lock, Edit2, Trash2, Sliders, Settings2 } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
 
 interface CallbookItem {
@@ -35,6 +35,25 @@ export default function CallbookPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit Modal State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editDmrId, setEditDmrId] = useState(5104001);
+  const [editCallsign, setEditCallsign] = useState("");
+  const [editName, setEditName] = useState("");
+  const [editCity, setEditCity] = useState("");
+  const [editOrg, setEditOrg] = useState("KOMUNITAS");
+  const [editDefaultTg, setEditDefaultTg] = useState(510);
+  const [editRemarks, setEditRemarks] = useState("");
+
+  // Batch Update Modal State
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchTargetOrg, setBatchTargetOrg] = useState("BRIDI");
+  const [batchTargetTg, setBatchTargetTg] = useState("510");
+  const [batchFilterOrg, setBatchFilterOrg] = useState("ALL");
+  const [batchPrefix, setBatchPrefix] = useState("BD");
+  const [isBatchLoading, setIsBatchLoading] = useState(false);
 
   // Import CSV/JSON Modal state
   const [showImportModal, setShowImportModal] = useState(false);
@@ -211,6 +230,100 @@ export default function CallbookPage() {
     }
   };
 
+  const handleOpenEditModal = (entry: CallbookItem) => {
+    setEditId(entry.id);
+    setEditDmrId(entry.dmr_id);
+    setEditCallsign(entry.callsign);
+    setEditName(entry.name);
+    setEditCity(entry.city || "");
+    setEditOrg(entry.organization || "KOMUNITAS");
+    setEditDefaultTg(entry.default_tg || 510);
+    setEditRemarks(entry.remarks || "");
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editId || !editCallsign || !editDmrId) return;
+
+    try {
+      const res = await fetch(`/api/callbook/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dmr_id: Number(editDmrId),
+          callsign: editCallsign.toUpperCase(),
+          name: editName,
+          city: editCity,
+          province_state: "Indonesia",
+          country: "Indonesia",
+          organization: editOrg,
+          organization_id: editCallsign.toUpperCase(),
+          remarks: editRemarks,
+          default_tg: Number(editDefaultTg) || 510,
+        }),
+      });
+
+      if (res.ok) {
+        setShowEditModal(false);
+        fetchCallbook();
+        beepPlayer?.playTalkGrant();
+        setImportStatus(`✓ Berhasil memperbarui data ${editCallsign.toUpperCase()}!`);
+        setTimeout(() => setImportStatus(null), 4000);
+      }
+    } catch {
+      // Error
+    }
+  };
+
+  const handleDeleteEntry = async (id: number, callsign: string) => {
+    if (!confirm(`Hapus pengguna ${callsign} dari Callbook?`)) return;
+
+    try {
+      const res = await fetch(`/api/callbook/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        fetchCallbook();
+        beepPlayer?.playRogerBeep();
+        setImportStatus(`✓ Berhasil menghapus ${callsign}`);
+        setTimeout(() => setImportStatus(null), 4000);
+      }
+    } catch {
+      // Error
+    }
+  };
+
+  const handleExecuteBatchUpdate = async () => {
+    setIsBatchLoading(true);
+    try {
+      const res = await fetch("/api/callbook/batch-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organization: batchTargetOrg,
+          default_tg: Number(batchTargetTg),
+          filter_org: batchFilterOrg === "ALL" ? null : batchFilterOrg,
+          callsign_prefix: batchPrefix || null,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setShowBatchModal(false);
+        fetchCallbook();
+        fetchOrganizations();
+        beepPlayer?.playTalkGrant();
+        setImportStatus(`✓ Berhasil memperbarui masal ${data.updated_count} pengguna ke ${batchTargetOrg} (TG ${batchTargetTg})!`);
+        setTimeout(() => setImportStatus(null), 5000);
+      }
+    } catch {
+      // Error
+    } finally {
+      setIsBatchLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen pb-20 md:pb-8 flex flex-col bg-[#07090e] bg-grid-pattern">
       <Navbar isConnected={isConnected} />
@@ -230,6 +343,14 @@ export default function CallbookPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={() => setShowBatchModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-[#05080f] border border-amber-600/60 hover:border-amber-400 text-amber-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+            >
+              <Sliders className="w-4 h-4 text-amber-400" />
+              <span>Ubah Masal (Batch)</span>
+            </button>
+
             <button
               onClick={() => {
                 setImportFile(null);
@@ -311,19 +432,40 @@ export default function CallbookPage() {
                     {entry.callsign}
                   </h3>
                 </div>
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                    entry.organization === "ORARI"
-                      ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
-                      : entry.organization === "RAPI"
-                      ? "bg-blue-950 text-blue-300 border border-blue-800"
-                      : entry.organization === "CB-11M"
-                      ? "bg-amber-950 text-amber-300 border border-amber-800"
-                      : "bg-emerald-950 text-emerald-300 border border-emerald-800"
-                  }`}
-                >
-                  {entry.organization}
-                </span>
+                <div className="flex flex-col items-end gap-1.5">
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                      entry.organization === "ORARI"
+                        ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
+                        : entry.organization === "RAPI"
+                        ? "bg-blue-950 text-blue-300 border border-blue-800"
+                        : entry.organization === "CB-11M"
+                        ? "bg-amber-950 text-amber-300 border border-amber-800"
+                        : entry.organization === "BRIDI"
+                        ? "bg-purple-950 text-purple-300 border border-purple-800"
+                        : "bg-emerald-950 text-emerald-300 border border-emerald-800"
+                    }`}
+                  >
+                    {entry.organization}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleOpenEditModal(entry)}
+                      title="Edit Data User & TG"
+                      className="p-1 px-1.5 rounded-lg bg-[#05080f] border border-cyan-900/60 text-slate-300 hover:text-cyan-300 hover:border-cyan-500 text-[10px] font-mono flex items-center gap-1 transition-all"
+                    >
+                      <Edit2 className="w-3 h-3 text-cyan-400" />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteEntry(entry.id, entry.callsign)}
+                      title="Hapus Pengguna"
+                      className="p-1 px-1 rounded-lg bg-[#05080f] border border-cyan-900/60 text-slate-400 hover:text-red-400 hover:border-red-500 transition-all"
+                    >
+                      <Trash2 className="w-3 h-3 text-red-400" />
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-1 text-xs">
@@ -757,6 +899,234 @@ export default function CallbookPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Edit Callbook Entry */}
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e1422] border-2 border-cyan-500/60 rounded-3xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-cyan-950 pb-2">
+              <h3 className="font-heading font-black text-base text-white flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-cyan-400" />
+                Edit Data Pengguna Callbook
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowEditModal(false)}
+                className="text-slate-500 hover:text-white font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-3 text-xs font-mono">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-400 mb-1">DMR ID</label>
+                  <input
+                    type="number"
+                    required
+                    value={editDmrId}
+                    onChange={(e) => setEditDmrId(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300 font-mono font-bold focus:border-cyan-400 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Callsign</label>
+                  <input
+                    type="text"
+                    required
+                    value={editCallsign}
+                    onChange={(e) => setEditCallsign(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white font-mono uppercase focus:border-cyan-400 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1">Nama Operator</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white focus:border-cyan-400 outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-400 mb-1">Organisasi</label>
+                  <select
+                    value={editOrg}
+                    onChange={(e) => setEditOrg(e.target.value)}
+                    className="w-full px-2 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300"
+                  >
+                    {organizations.map((org) => (
+                      <option key={org.code} value={org.code}>
+                        {org.name || org.code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Kota / QTH</label>
+                  <input
+                    type="text"
+                    value={editCity}
+                    onChange={(e) => setEditCity(e.target.value)}
+                    className="w-full px-2 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1">Default TalkGroup (TG)</label>
+                <input
+                  type="number"
+                  value={editDefaultTg}
+                  onChange={(e) => setEditDefaultTg(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-amber-300 font-mono font-bold focus:border-cyan-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1">Keterangan / Remarks</label>
+                <input
+                  type="text"
+                  value={editRemarks}
+                  onChange={(e) => setEditRemarks(e.target.value)}
+                  placeholder="Catatan tambahan..."
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-slate-300 focus:border-cyan-400 outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 rounded-xl font-heading font-black shadow-md"
+                >
+                  Simpan Perubahan
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Ubah Masal (Batch Update) */}
+      {showBatchModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e1422] border-2 border-amber-500/60 rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-amber-950/80 pb-3">
+              <div>
+                <h3 className="font-heading font-black text-lg text-white flex items-center gap-2">
+                  <Sliders className="w-5 h-5 text-amber-400" />
+                  Ubah Masal Callbook (Bulk Update)
+                </h3>
+                <p className="text-xs font-mono text-slate-400 mt-1">
+                  Ubah Organisasi dan Default TG untuk sekelompok pengguna secara serentak
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBatchModal(false)}
+                className="text-slate-500 hover:text-white text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs font-mono">
+              <div className="p-3 bg-amber-950/30 border border-amber-600/30 rounded-xl text-amber-200">
+                💡 <strong>Tips:</strong> Anda bisa memindahkan seluruh 55 pengguna (awalan <code>BD</code>) dari <code>KOMUNITAS</code> ke organisasi <code>BRIDI</code> atau TG tertentu sekaligus.
+              </div>
+
+              {/* Filter Sasaran */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">1. Filter Awalan Callsign</label>
+                  <input
+                    type="text"
+                    value={batchPrefix}
+                    onChange={(e) => setBatchPrefix(e.target.value.toUpperCase())}
+                    placeholder="Contoh: BD (atau kosongkan untuk semua)"
+                    className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-white font-mono uppercase focus:border-cyan-400 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">2. Dari Organisasi</label>
+                  <select
+                    value={batchFilterOrg}
+                    onChange={(e) => setBatchFilterOrg(e.target.value)}
+                    className="w-full px-2.5 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300"
+                  >
+                    <option value="ALL">Semua Organisasi</option>
+                    {organizations.map((org) => (
+                      <option key={org.code} value={org.code}>
+                        {org.name || org.code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Target Organisasi Baru */}
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">3. Ubah Menjadi Organisasi</label>
+                <select
+                  value={batchTargetOrg}
+                  onChange={(e) => setBatchTargetOrg(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-amber-600/60 rounded-xl text-amber-300 font-bold focus:border-amber-400 outline-none"
+                >
+                  {organizations.map((org) => (
+                    <option key={org.code} value={org.code}>
+                      {org.name || org.code} ({org.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Target Default TG Baru */}
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">4. Ubah Menjadi Default TG</label>
+                <input
+                  type="number"
+                  value={batchTargetTg}
+                  onChange={(e) => setBatchTargetTg(e.target.value)}
+                  placeholder="Contoh: 510 atau 5109"
+                  className="w-full px-3 py-2 bg-[#05080f] border border-amber-600/60 rounded-xl text-amber-300 font-bold font-mono focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-2 border-t border-cyan-950">
+                <button
+                  type="button"
+                  onClick={() => setShowBatchModal(false)}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-all"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isBatchLoading}
+                  onClick={handleExecuteBatchUpdate}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-heading font-black rounded-xl shadow-lg shadow-amber-500/25 transition-all flex items-center justify-center gap-2"
+                >
+                  {isBatchLoading ? "Memproses..." : "Terapkan Perubahan Masal"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
