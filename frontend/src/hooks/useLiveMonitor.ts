@@ -45,12 +45,21 @@ export type AudioRxData = {
 };
 
 export type AudioRxListener = (audio: AudioRxData) => void;
-const audioListeners = new Set<AudioRxListener>();
+
+function getAudioListeners(): Set<AudioRxListener> {
+  if (typeof window !== "undefined") {
+    if (!(window as any).__ninja_audio_listeners) {
+      (window as any).__ninja_audio_listeners = new Set<AudioRxListener>();
+    }
+    return (window as any).__ninja_audio_listeners;
+  }
+  return new Set();
+}
 
 export function registerAudioRxListener(listener: AudioRxListener) {
-  audioListeners.add(listener);
+  getAudioListeners().add(listener);
   return () => {
-    audioListeners.delete(listener);
+    getAudioListeners().delete(listener);
   };
 }
 
@@ -96,7 +105,7 @@ export function useLiveMonitor() {
               setLastHeard((prev) => [message.data, ...prev.slice(0, 49)]);
             } else if (message.type === "AUDIO_RX") {
               const data = (message.data || message) as AudioRxData;
-              audioListeners.forEach((listener) => {
+              getAudioListeners().forEach((listener) => {
                 try {
                   listener(data);
                 } catch {}
