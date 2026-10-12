@@ -76,13 +76,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     msg_type = msg.get("type")
                     if msg_type == "AUDIO_TX":
                         pcm_b64 = msg.get("pcm")
-                        if pcm_b64:
+                        tg = int(msg.get("tg", 1025))
+                        dmr_id = int(msg.get("dmr_id", 102205798))
+                        slot = int(msg.get("slot", 2))
+                        callsign = str(msg.get("callsign", "WEB-OP"))
+                        is_tx = bool(msg.get("is_tx", True)) if pcm_b64 else False
+                        if pcm_b64 and is_tx:
                             pcm_data = base64.b64decode(pcm_b64)
-                            tg = int(msg.get("tg", 510))
-                            dmr_id = int(msg.get("dmr_id", 5109999))
-                            slot = int(msg.get("slot", 1))
-                            callsign = str(msg.get("callsign", "WEB-OP"))
                             send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
+                        elif not is_tx:
+                            send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=False)
                 except Exception:
                     pass
     except WebSocketDisconnect:

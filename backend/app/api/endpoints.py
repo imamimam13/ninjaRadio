@@ -253,7 +253,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                 if len(chunk) < 320:
                     chunk = chunk.ljust(320, b"\x00")
                 _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
-                header = struct.pack(">4sIIIIIII", b"USRP", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
+                header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, key_flag, 0, 0, 0, 0)
                 packet = header + chunk
                 sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
                 try:
@@ -262,7 +262,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                     pass
         else:
             _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
-            header = struct.pack(">4sIIIIIII", b"USRP", _usrp_packet_seq, 0, key_flag, tg, dmr_id, slot, 0)
+            header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, key_flag, 0, 0, 0, 0)
             packet = header + (b"\x00" * 320)
             sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
             try:
