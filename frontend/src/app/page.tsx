@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
-import { useLiveMonitor } from "@/hooks/useLiveMonitor";
+import { useLiveMonitor, registerAudioRxListener, AudioRxData } from "@/hooks/useLiveMonitor";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { 
   Radio, 
@@ -33,45 +33,32 @@ export default function DashboardPage() {
   const rxInputNodeRef = useRef<AudioNode | null>(null);
   const rxNextTimeRef = useRef<number>(0);
 
-  // Autoplay Policy: Unlock Web AudioContext on first user interaction
-  useEffect(() => {
-    const unlockAudio = () => {
-      if (rxAudioCtxRef.current && rxAudioCtxRef.current.state === "suspended") {
-        rxAudioCtxRef.current.resume().catch(() => {});
-      }
-    };
-    window.addEventListener("click", unlockAudio);
-    window.addEventListener("touchstart", unlockAudio);
-    window.addEventListener("keydown", unlockAudio);
-    return () => {
-      window.removeEventListener("click", unlockAudio);
-      window.removeEventListener("touchstart", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
-    };
-  }, []);
-
-  // Live RX Audio Playback through browser speaker
-  useEffect(() => {
-    if (!incomingAudio || !incomingAudio.pcm || isMuted || (activeTx as any)?.is_tx) return;
+  // Autoplay Policy: Unlock and prepare Web AudioContext on first user gesture
+  const ensureAudioUnlocked = () => {
     try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+
       if (!rxAudioCtxRef.current) {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
         const ctx = new AudioCtx();
 
-        // Bandpass Filter & Dynamics Compressor
-        const hpf = ctx.createBiquadFilter();
-        hpf.type = "highpass";
-        hpf.frequency.value = 250;
-        hpf.Q.value = 0.707;
-
+        // 1. Communications Low-pass filter (3400 Hz) to eliminate vocoder quantization hiss
         const lpf = ctx.createBiquadFilter();
         lpf.type = "lowpass";
         lpf.frequency.value = 3400;
         lpf.Q.value = 0.707;
 
-        const gainNode = ctx.createGain();
-        gainNode.gain.value = 1.6;
+        // 2. High-pass filter (250 Hz) to eliminate DC offset and sub-bass rumble
+        const hpf = ctx.createBiquadFilter();
+        hpf.type = "highpass";
+        hpf.frequency.value = 250;
+        hpf.Q.value = 0.707;
 
+        // 3. Clear voice gain
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = 1.8;
+
+        // 4. Dynamics Compressor: prevents digital clipping & distortion
         const comp = ctx.createDynamicsCompressor();
         comp.threshold.value = -12;
         comp.knee.value = 6;
@@ -79,6 +66,7 @@ export default function DashboardPage() {
         comp.attack.value = 0.003;
         comp.release.value = 0.15;
 
+        // Pipeline: hpf -> lpf -> gainNode -> comp -> destination
         hpf.connect(lpf);
         lpf.connect(gainNode);
         gainNode.connect(comp);
@@ -87,33 +75,75 @@ export default function DashboardPage() {
         rxAudioCtxRef.current = ctx;
         rxInputNodeRef.current = hpf;
       }
+
+      if (rxAudioCtxRef.current.state === "suspended") {
+        rxAudioCtxRef.current.resume().catch(() => {});
+      }
+    } catch (e) {
+      console.warn("Dashboard audio unlock note:", e);
+    }
+  };
+
+  useEffect(() => {
+    const handleGesture = () => {
+      ensureAudioUnlocked();
+    };
+    window.addEventListener("click", handleGesture, { passive: true });
+    window.addEventListener("touchstart", handleGesture, { passive: true });
+    window.addEventListener("pointerdown", handleGesture, { passive: true });
+    window.addEventListener("keydown", handleGesture, { passive: true });
+    return () => {
+      window.removeEventListener("click", handleGesture);
+      window.removeEventListener("touchstart", handleGesture);
+      window.removeEventListener("pointerdown", handleGesture);
+      window.removeEventListener("keydown", handleGesture);
+    };
+  }, []);
+
+  const isMutedRef = useRef(isMuted);
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
+
+  const activeTxRef = useRef(activeTx);
+  useEffect(() => {
+    activeTxRef.current = activeTx;
+  }, [activeTx]);
+
+  const lastChunkRef = useRef<string>("");
+
+  // Real-time Audio Dispatcher (bypasses React state batching to receive 100% of packets)
+  const playAudioChunk = (audioChunk: AudioRxData) => {
+    if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
+    if (lastChunkRef.current === audioChunk.pcm) return;
+    lastChunkRef.current = audioChunk.pcm;
+
+    try {
+      ensureAudioUnlocked();
       const ctx = rxAudioCtxRef.current;
+      if (!ctx) return;
       if (ctx.state === "suspended") {
         ctx.resume().catch(() => {});
+        return;
       }
 
-      const binaryStr = atob(incomingAudio.pcm);
+      const binaryStr = atob(audioChunk.pcm);
       const len = binaryStr.length;
       const safeLen = len - (len % 2);
       if (safeLen < 2) return;
+
       const bytes = new Uint8Array(safeLen);
       for (let i = 0; i < safeLen; i++) {
         bytes[i] = binaryStr.charCodeAt(i);
       }
       const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
-      let maxAmp = 0;
-      for (let i = 0; i < int16.length; i++) {
-        const abs = Math.abs(int16[i]);
-        if (abs > maxAmp) maxAmp = abs;
-      }
-      if (maxAmp < 80) return; // Drop silence frames, completely eliminates 16.6Hz buffer start/stop clicking
 
       const float32 = new Float32Array(int16.length);
       for (let i = 0; i < int16.length; i++) {
         float32[i] = int16[i] / 32768.0;
       }
 
-      // Micro cosine envelope (4-6 samples fade-in & fade-out) to eliminate chunk boundary pops ("klutuk-klutuk")
+      // Micro cosine envelope (4-6 samples fade-in & fade-out) to eliminate chunk boundary pops
       const fadeLen = Math.min(6, Math.floor(float32.length / 4));
       for (let i = 0; i < fadeLen; i++) {
         const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
@@ -133,7 +163,6 @@ export default function DashboardPage() {
       }
 
       const now = ctx.currentTime;
-      // DMR 3-frame bursts arrive in 60-80ms cycles; 120ms cushion prevents buffer underrun clicks
       if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.40) {
         rxNextTimeRef.current = now + 0.12;
       }
@@ -142,7 +171,12 @@ export default function DashboardPage() {
     } catch (e) {
       console.warn("Dashboard audio playback note:", e);
     }
-  }, [incomingAudio, isMuted]);
+  };
+
+  useEffect(() => {
+    const unsub = registerAudioRxListener(playAudioChunk);
+    return () => unsub();
+  }, []);
 
   const [filterMode, setFilterMode] = useState<string>("ALL");
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -234,10 +268,8 @@ export default function DashboardPage() {
                     </span>
                     <button
                       onClick={() => {
+                        ensureAudioUnlocked();
                         setIsMuted(!isMuted);
-                        if (rxAudioCtxRef.current && rxAudioCtxRef.current.state === "suspended") {
-                          rxAudioCtxRef.current.resume();
-                        }
                       }}
                       className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
                         isMuted 
