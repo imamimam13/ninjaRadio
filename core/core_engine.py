@@ -173,8 +173,8 @@ class DVSwitchCoreManager:
         return self.config
 
     def generate_configs(self):
-        """Generates Analog_Bridge.ini and MMDVM_Bridge.ini from live config."""
         cfg = self.config
+        peers = cfg.get("peering", [])
         active_peer = None
         for p in peers:
             if p.get("isActive") is True:
