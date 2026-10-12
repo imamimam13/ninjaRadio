@@ -21,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Add DVSwitch repository for analog-bridge & md380-emu
-RUN curl -fsSL http://dvswitch.org/DVSwitch_Repository/dvswitch-keyring.gpg -o /tmp/dvswitch-key.tmp && \
+RUN echo '#!/bin/sh\nexit 0' > /usr/bin/systemctl && chmod +x /usr/bin/systemctl && \
+    curl -fsSL http://dvswitch.org/DVSwitch_Repository/dvswitch-keyring.gpg -o /tmp/dvswitch-key.tmp && \
     gpg --dearmor < /tmp/dvswitch-key.tmp > /usr/share/keyrings/dvswitch-keyring.gpg && \
     chmod 644 /usr/share/keyrings/dvswitch-keyring.gpg && \
     rm -f /tmp/dvswitch-key.tmp && \
