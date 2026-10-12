@@ -670,16 +670,12 @@ Debug=1
                     # Forward to any connected external USRP clients
                     self.broadcast_to_usrp_clients(data)
 
-                    # Only process legitimate voice frames if active transmission is present
-                    # Ignore packets if TG <= 0 or Radio ID <= 0 to prevent phantom TG 0
-                    active_src = self.current_rx_src if self.current_rx_src > 0 else dmr_id
-                    active_tg = self.current_rx_tg if self.current_rx_tg > 0 else tg
+                    # Fallback to configured primary TG and legitimate ID if not present in USRP header
+                    primary_tg = int(self.config.get("primary_tg", 510))
+                    active_src = self.current_rx_src if self.current_rx_src > 0 else (dmr_id if dmr_id > 0 else 5100000)
+                    active_tg = self.current_rx_tg if self.current_rx_tg > 0 else (tg if tg > 0 else primary_tg)
                     active_slot = self.current_rx_slot if self.current_rx_slot > 0 else (slot if slot > 0 else 1)
-                    active_call = self.current_rx_call
-
-                    if active_src <= 0 or active_tg <= 0:
-                        # Drop frames with no valid TG or Caller ID
-                        continue
+                    active_call = self.current_rx_call or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
 
                     # Refresh active timestamp while receiving audio packets
                     self.current_rx_time = time.time()
