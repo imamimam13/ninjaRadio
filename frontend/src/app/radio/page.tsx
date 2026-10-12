@@ -547,6 +547,9 @@ export default function RadioPocketMode() {
 
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
 
+      // Immediately flag TX active for mic audio processor
+      isTxRef.current = true;
+
       // Start real microphone audio streaming through USRP & DMR network
       startLiveMicrophoneStream(targetTgNum);
 
@@ -585,8 +588,21 @@ export default function RadioPocketMode() {
     onTransmitEnd: () => {
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
 
+      isTxRef.current = false;
+
       // Stop real microphone audio streaming
       stopLiveMicrophoneStream();
+
+      // Send unkey event to WebSocket audio streamer
+      sendJson({
+        type: "AUDIO_TX",
+        pcm: null,
+        is_tx: false,
+        tg: targetTgNum,
+        slot: currentTimeSlot,
+        callsign: activeProfile.callsign,
+        dmr_id: activeProfile.dmrId,
+      });
 
       fetch("/api/ptt/transmit", {
         method: "POST",

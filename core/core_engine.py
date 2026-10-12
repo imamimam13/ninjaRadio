@@ -94,6 +94,11 @@ class DVSwitchCoreManager:
         self.current_rx_time = 0.0
         self.current_rx_active = False
 
+        # Live Web TX Carrier & PTT tracking
+        self.is_transmitting = False
+        self.last_audio_tx_time = 0.0
+        self.tx_task: Optional[asyncio.Task] = None
+
     def load_config(self) -> Dict:
         if os.path.exists(CONFIG_PATH):
             try:
@@ -680,7 +685,7 @@ Debug=1
     async def run_usrp_ingress_loop(self):
         """
         Receives USRP frames from Web App PTT, Mumble Bridge, or DVSwitch Mobile,
-        and forwards to Analog_Bridge (UDP 32000) for AMBE encoding and DMR transmission.
+        normalizes the header to official DVSwitch standard, and forwards to Analog_Bridge (UDP 32000).
         """
         loop = asyncio.get_running_loop()
         logger.info("📱 Started USRP Ingress loop.")
@@ -690,11 +695,17 @@ Debug=1
                 if len(data) >= 32 and data.startswith(b"USRP"):
                     self.tx_packet_count += 1
                     self.registered_usrp_clients[addr] = time.time()
-                    # Forward to Analog_Bridge rxPort (127.0.0.1:32000)
-                    try:
-                        self.bridge_sock.sendto(data, ("127.0.0.1", AB_USRP_RX_PORT))
-                    except Exception as e:
-                        logger.debug(f"Error forwarding USRP to Analog_Bridge: {e}")
+                    self.last_audio_tx_time = time.time()
+
+                    # Standardize USRP packet header: [USRP][seq][0][key_flag][0][0][0][0] + PCM
+                    magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
+                    pcm_payload = data[32:]
+                    if len(pcm_payload) > 0:
+                        std_pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, key_flag, 0, 0, 0, 0) + pcm_payload
+                        try:
+                            self.bridge_sock.sendto(std_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                        except Exception as e:
+                            logger.debug(f"Error forwarding USRP to Analog_Bridge: {e}")
             except Exception as e:
                 if self.running:
                     logger.debug(f"usrp_ingress_loop note: {e}")
@@ -736,6 +747,52 @@ Debug=1
         time.sleep(0.3)
         self.start_daemons()
         logger.info("✓ DVSwitch stack restarted with updated configuration.")
+
+    def tune_remote(self, tg: int, slot: int):
+        """Sends DVSwitch TLV Remote Command to dynamically tune txTg and txTs in Analog_Bridge."""
+        try:
+            # 1. txTg
+            cmd_tg = f"txTg={tg}".encode("ascii")
+            tlv_tg = struct.pack("BB", 5, len(cmd_tg)) + cmd_tg
+            pkt_tg = b"USRP" + struct.pack(">iiiiiii", 1, 0, 0, 0, 4 << 24, 0, 0) + tlv_tg
+            self.bridge_sock.sendto(pkt_tg, ("127.0.0.1", AB_USRP_RX_PORT))
+
+            # 2. txTs
+            cmd_ts = f"txTs={slot}".encode("ascii")
+            tlv_ts = struct.pack("BB", 5, len(cmd_ts)) + cmd_ts
+            pkt_ts = b"USRP" + struct.pack(">iiiiiii", 2, 0, 0, 0, 4 << 24, 0, 0) + tlv_ts
+            self.bridge_sock.sendto(pkt_ts, ("127.0.0.1", AB_USRP_RX_PORT))
+            logger.info(f"🎯 Tuned Analog_Bridge: txTg={tg}, txTs={slot}")
+        except Exception as e:
+            logger.debug(f"tune_remote error: {e}")
+
+    async def start_carrier_tx(self, tg: int, slot: int):
+        """Maintains active DMR transmission carrier by continuously delivering 20ms frames."""
+        self.is_transmitting = True
+        self.tune_remote(tg, slot)
+        seq = 100
+        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot})")
+        while self.is_transmitting and self.running:
+            # If browser/client microphone stream paused or between bursts (>50ms), send comfort silence frame
+            if time.time() - self.last_audio_tx_time > 0.05:
+                seq = (seq + 1) % 65536
+                pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 1, 0, 0, 0, 0) + (b"\x00" * 320)
+                try:
+                    self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                except Exception:
+                    pass
+            await asyncio.sleep(0.02)
+
+    def stop_carrier_tx(self):
+        """Releases DMR PTT transmission."""
+        self.is_transmitting = False
+        logger.info("⏹️ PTT Carrier Released.")
+        seq = 200
+        unkey_pkt = b"USRP" + struct.pack(">iiiiiii", seq, 0, 0, 0, 0, 0, 0) + (b"\x00" * 320)
+        try:
+            self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+        except Exception:
+            pass
 
     async def shutdown(self):
         self.running = False
@@ -837,16 +894,21 @@ async def reload_configuration():
 async def ptt_transmit(payload: dict):
     callsign = payload.get("callsign", "N1NJA")
     dmr_id = int(payload.get("dmr_id", 5109999))
-    tg = int(payload.get("tg", 510))
-    slot = int(payload.get("slot", 1))
+    tg = int(payload.get("tg", 1025))
+    slot = int(payload.get("slot", 2))
     is_tx = bool(payload.get("is_transmitting", True))
 
-    key_flag = 1 if is_tx else 0
-    header = struct.pack(">4sIIIIIII", b"USRP", 1, 0, key_flag, tg, dmr_id, slot, 0)
-    packet = header + (b"\x00" * 320)
     try:
-        engine_mgr.bridge_sock.sendto(packet, ("127.0.0.1", AB_USRP_RX_PORT))
-        return {"status": "TX_DISPATCHED", "sent_to_dvswitch": True}
+        if is_tx:
+            if engine_mgr.tx_task and not engine_mgr.tx_task.done():
+                engine_mgr.tx_task.cancel()
+            engine_mgr.tx_task = asyncio.create_task(engine_mgr.start_carrier_tx(tg, slot))
+            return {"status": "TX_STARTED", "tg": tg, "slot": slot}
+        else:
+            if engine_mgr.tx_task and not engine_mgr.tx_task.done():
+                engine_mgr.tx_task.cancel()
+            engine_mgr.stop_carrier_tx()
+            return {"status": "TX_STOPPED"}
     except Exception as e:
         return {"status": "ERROR", "detail": str(e)}
 
