@@ -880,6 +880,19 @@ export default function SettingsPage() {
                       }`}>
                         {coreStatus?.status === "ONLINE" ? "ONLINE (BERJALAN)" : "OFFLINE / TIDAK TERHUBUNG"}
                       </span>
+                      {coreStatus?.dvswitch_daemons && (
+                        <div className="flex items-center gap-1.5 ml-2">
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border ${coreStatus.dvswitch_daemons.md380_emu === 'RUNNING' ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800' : 'bg-amber-950/80 text-amber-400 border-amber-800'}`}>
+                            {coreStatus.dvswitch_daemons.md380_emu === 'RUNNING' ? '✓ md380-emu' : '⏳ md380-emu'}
+                          </span>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border ${coreStatus.dvswitch_daemons.analog_bridge === 'RUNNING' ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800' : 'bg-amber-950/80 text-amber-400 border-amber-800'}`}>
+                            {coreStatus.dvswitch_daemons.analog_bridge === 'RUNNING' ? '✓ Analog_Bridge' : '⏳ Analog_Bridge'}
+                          </span>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border ${coreStatus.dvswitch_daemons.mmdvm_bridge === 'RUNNING' ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800' : 'bg-amber-950/80 text-amber-400 border-amber-800'}`}>
+                            {coreStatus.dvswitch_daemons.mmdvm_bridge === 'RUNNING' ? '✓ MMDVM_Bridge' : '⏳ MMDVM_Bridge'}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <p className="text-[10px] text-slate-400 mt-0.5">
                       {coreStatus?.status === "ONLINE"
