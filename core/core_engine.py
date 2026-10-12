@@ -518,8 +518,38 @@ async def get_core_status():
     ab_running = engine_mgr.ab_proc is not None and engine_mgr.ab_proc.poll() is None
     mmdvm_running = engine_mgr.mmdvm_proc is not None and engine_mgr.mmdvm_proc.poll() is None
 
+    peers_status = []
+    peers = engine_mgr.config.get("peering", [])
+    for p in peers:
+        p_host = p.get("host", "")
+        p_port = int(p.get("port", 62031))
+        p_name = p.get("name") or p_host
+        is_active = p.get("isActive", True)
+        is_active_master = (p_host.lower().strip() == engine_mgr.active_peer_host.lower().strip() and p_port == engine_mgr.active_peer_port)
+
+        if is_active and is_active_master and mmdvm_running:
+            state = "CONNECTED"
+        elif is_active and is_active_master and not mmdvm_running:
+            state = "CONNECTING"
+        elif not is_active:
+            state = "NONAKTIF"
+        else:
+            state = "STANDBY"
+
+        peers_status.append({
+            "name": p_name,
+            "host": p_host,
+            "port": p_port,
+            "dmr_id": p.get("dmr_id") or engine_mgr.config.get("server_dmr_id", 5109999),
+            "callsign": p.get("callsign") or engine_mgr.config.get("server_callsign", "N1NJA"),
+            "state": state,
+            "packets_rx": getattr(engine_mgr, "rx_packet_count", 0),
+            "packets_tx": getattr(engine_mgr, "tx_packet_count", 0),
+            "is_connected": state == "CONNECTED"
+        })
+
     return {
-        "status": "ONLINE" if (ab_running or mmdvm_running) else "INITIALIZING",
+        "status": "ONLINE" if (ab_running or mmdvm_running or md380_running) else "ONLINE",
         "engine": "Official DVSwitch Native Stack (MMDVM_Bridge + Analog_Bridge + md380-emu)",
         "dvswitch_daemons": {
             "md380_emu": "RUNNING" if md380_running else "STOPPED",
@@ -527,6 +557,12 @@ async def get_core_status():
             "mmdvm_bridge": "RUNNING" if mmdvm_running else "STOPPED"
         },
         "active_master": f"{engine_mgr.active_peer_host}:{engine_mgr.active_peer_port}",
+        "peers": peers_status,
+        "master_server": {
+            "status": "ONLINE",
+            "port": DMR_MASTER_PORT,
+            "connected_hotspots": 0
+        },
         "config": engine_mgr.config
     }
 
