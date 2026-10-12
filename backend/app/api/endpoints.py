@@ -375,7 +375,7 @@ async def verify_admin_pin(payload: PinVerifyRequest):
     return {"valid": payload.pin.strip() == admin_pin}
 
 @router.post("/ptt/transmit")
-async def web_ptt_transmit(payload: PttTransmitRequest):
+async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = Depends(get_db)):
     callsign = (payload.callsign or "SWL-MONITOR").strip()
     dmr_id = payload.dmr_id or 0
     tg = payload.tg if payload.tg is not None else 510
@@ -390,6 +390,18 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
                 status_code=403,
                 detail="Mode Monitor (SWL) tidak diizinkan memancar. Silakan gunakan profil Callsign pribadi atau masukkan PIN Operator."
             )
+
+    # Resolve operator name & organization from Callbook
+    name = f"Web Operator ({callsign})"
+    cb_entry = None
+    if dmr_id > 0:
+        cb_entry = await CallbookService.get_by_dmr_id(session, dmr_id)
+    if not cb_entry and callsign:
+        cb_entry = await CallbookService.get_by_callsign(session, callsign)
+    if cb_entry:
+        callsign = cb_entry.callsign
+        name = cb_entry.name
+        category = cb_entry.organization or category
 
     tg_name = TG_NAMES.get(tg, f"Talkgroup {tg}")
 
@@ -414,7 +426,7 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
         tx_data = {
             "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
             "callsign": callsign,
-            "name": f"Web Operator ({callsign})",
+            "name": name,
             "dmr_id": dmr_id,
             "talkgroup": tg,
             "tg_name": tg_name,
@@ -433,7 +445,7 @@ async def web_ptt_transmit(payload: PttTransmitRequest):
             "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
             "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
             "callsign": callsign,
-            "name": f"Web Operator ({callsign})",
+            "name": name,
             "dmr_id": dmr_id,
             "talkgroup": tg,
             "tg_name": tg_name,
@@ -530,11 +542,16 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     name = f"DMR Operator {src_id}"
     category = "Amatir"
 
-    cb_entry = await CallbookService.get_by_dmr_id(session, src_id)
+    cb_entry = None
+    if src_id > 0:
+        cb_entry = await CallbookService.get_by_dmr_id(session, src_id)
+    if not cb_entry and custom_call:
+        cb_entry = await CallbookService.get_by_callsign(session, custom_call)
+
     if cb_entry:
         callsign = cb_entry.callsign
         name = cb_entry.name
-        category = cb_entry.category or "Amatir"
+        category = cb_entry.organization or "Amatir"
 
     tg_name = TG_NAMES.get(dst_tg, f"Talkgroup {dst_tg}")
 
