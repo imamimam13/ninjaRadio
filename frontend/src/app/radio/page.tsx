@@ -391,6 +391,7 @@ export default function RadioPocketMode() {
   // Live RX Audio Player from DMR Network WebSocket stream
   const rxAudioCtxRef = useRef<AudioContext | null>(null);
   const rxGainNodeRef = useRef<GainNode | null>(null);
+  const rxInputNodeRef = useRef<AudioNode | null>(null);
   const rxNextTimeRef = useRef<number>(0);
   const lastPlayedChunkRef = useRef<string>("");
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
@@ -402,11 +403,40 @@ export default function RadioPocketMode() {
 
       if (!rxAudioCtxRef.current) {
         const ctx = new AudioCtx();
+
+        // 1. Communications Low-pass filter (3400 Hz) to eliminate vocoder quantization hiss/scratch ("kresek-kresek")
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = "lowpass";
+        lpf.frequency.value = 3400;
+        lpf.Q.value = 0.707;
+
+        // 2. High-pass filter (250 Hz) to eliminate DC offset and sub-bass rumble
+        const hpf = ctx.createBiquadFilter();
+        hpf.type = "highpass";
+        hpf.frequency.value = 250;
+        hpf.Q.value = 0.707;
+
+        // 3. Clear voice gain
         const gainNode = ctx.createGain();
-        gainNode.gain.value = 2.0; // Clear, loud voice boost for phone & PC speakers
-        gainNode.connect(ctx.destination);
+        gainNode.gain.value = 1.6;
+
+        // 4. Dynamics Compressor: prevents digital clipping & distortion on loud voice peaks
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -12;
+        comp.knee.value = 6;
+        comp.ratio.value = 4;
+        comp.attack.value = 0.003;
+        comp.release.value = 0.15;
+
+        // Pipeline: source -> hpf -> lpf -> gainNode -> comp -> destination
+        hpf.connect(lpf);
+        lpf.connect(gainNode);
+        gainNode.connect(comp);
+        comp.connect(ctx.destination);
+
         rxAudioCtxRef.current = ctx;
         rxGainNodeRef.current = gainNode;
+        rxInputNodeRef.current = hpf;
       }
 
       if (rxAudioCtxRef.current.state === "suspended") {
@@ -490,7 +520,9 @@ export default function RadioPocketMode() {
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      if (rxGainNodeRef.current) {
+      if (rxInputNodeRef.current) {
+        source.connect(rxInputNodeRef.current);
+      } else if (rxGainNodeRef.current) {
         source.connect(rxGainNodeRef.current);
       } else {
         source.connect(ctx.destination);

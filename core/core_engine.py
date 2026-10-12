@@ -235,7 +235,8 @@ colorCode = {color_code}
 address = 127.0.0.1
 txPort = {AB_USRP_TX_PORT}
 rxPort = {AB_USRP_RX_PORT}
-usrpAudio = AUDIO_UNITY
+usrpAudio = AUDIO_USE_BPF
+tlvAudio = AUDIO_USE_BPF
 """
         with open("/app/data/Analog_Bridge.ini", "w", encoding="utf-8") as f:
             f.write(ab_content)
