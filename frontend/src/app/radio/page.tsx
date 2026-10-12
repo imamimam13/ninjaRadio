@@ -494,66 +494,89 @@ export default function RadioPocketMode() {
       const ctx = rxAudioCtxRef.current;
       if (!ctx) return;
 
+      const play = () => {
+        try {
+          const binaryStr = atob(audioChunk.pcm);
+          const len = binaryStr.length;
+          const safeLen = len - (len % 2);
+          if (safeLen < 2) return;
+
+          const bytes = new Uint8Array(safeLen);
+          for (let i = 0; i < safeLen; i++) {
+            bytes[i] = binaryStr.charCodeAt(i);
+          }
+          const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
+
+          const float32 = new Float32Array(int16.length);
+          for (let i = 0; i < int16.length; i++) {
+            float32[i] = int16[i] / 32768.0;
+          }
+
+          // Micro cosine envelope (4 samples fade-in & fade-out) to eliminate chunk boundary pops ("klutuk-klutuk")
+          const fadeLen = Math.min(6, Math.floor(float32.length / 4));
+          for (let i = 0; i < fadeLen; i++) {
+            const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
+            float32[i] *= factor;
+            float32[float32.length - 1 - i] *= factor;
+          }
+
+          const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
+          audioBuffer.copyToChannel(float32, 0);
+
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          if (rxInputNodeRef.current) {
+            source.connect(rxInputNodeRef.current);
+          } else if (rxGainNodeRef.current) {
+            source.connect(rxGainNodeRef.current);
+          } else {
+            source.connect(ctx.destination);
+          }
+
+          const now = ctx.currentTime;
+          // DMR 3-frame TDMA bursts arrive in 60-80ms cycles.
+          // Use 150ms cushion so TDMA inter-burst gaps (>70ms) never under-run and cause clicks.
+          if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.45) {
+            rxNextTimeRef.current = now + 0.15;
+          }
+
+          source.start(rxNextTimeRef.current);
+          rxNextTimeRef.current += audioBuffer.duration;
+        } catch (e) {
+          console.warn("Audio buffer playback error:", e);
+        }
+      };
+
       if (ctx.state === "suspended") {
-        ctx.resume().then(() => setAudioUnlocked(true)).catch(() => {});
-        return;
-      }
-
-      const binaryStr = atob(audioChunk.pcm);
-      const len = binaryStr.length;
-      const safeLen = len - (len % 2);
-      if (safeLen < 2) return;
-
-      const bytes = new Uint8Array(safeLen);
-      for (let i = 0; i < safeLen; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-      const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
-
-      const float32 = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) {
-        float32[i] = int16[i] / 32768.0;
-      }
-
-      // Micro cosine envelope (4 samples fade-in & fade-out) to eliminate chunk boundary pops ("klutuk-klutuk")
-      const fadeLen = Math.min(6, Math.floor(float32.length / 4));
-      for (let i = 0; i < fadeLen; i++) {
-        const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
-        float32[i] *= factor;
-        float32[float32.length - 1 - i] *= factor;
-      }
-
-      const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
-      audioBuffer.copyToChannel(float32, 0);
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      if (rxInputNodeRef.current) {
-        source.connect(rxInputNodeRef.current);
-      } else if (rxGainNodeRef.current) {
-        source.connect(rxGainNodeRef.current);
+        ctx.resume().then(() => {
+          setAudioUnlocked(true);
+          play();
+        }).catch(() => {});
       } else {
-        source.connect(ctx.destination);
+        play();
       }
-
-      const now = ctx.currentTime;
-      // DMR 3-frame TDMA bursts arrive in 60-80ms cycles.
-      // Use 150ms cushion so TDMA inter-burst gaps (>70ms) never under-run and cause clicks.
-      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.45) {
-        rxNextTimeRef.current = now + 0.15;
-      }
-
-      source.start(rxNextTimeRef.current);
-      rxNextTimeRef.current += audioBuffer.duration;
     } catch (e) {
       console.warn("Audio playback error:", e);
     }
   };
 
   useEffect(() => {
+    const handleFirstInteraction = () => {
+      ensureAudioUnlocked();
+      window.removeEventListener("click", handleFirstInteraction);
+      window.removeEventListener("touchstart", handleFirstInteraction);
+      window.removeEventListener("keydown", handleFirstInteraction);
+    };
+    window.addEventListener("click", handleFirstInteraction);
+    window.addEventListener("touchstart", handleFirstInteraction);
+    window.addEventListener("keydown", handleFirstInteraction);
+
     const unsubscribe = registerAudioRxListener(playAudioChunk);
     return () => {
       unsubscribe();
+      window.removeEventListener("click", handleFirstInteraction);
+      window.removeEventListener("touchstart", handleFirstInteraction);
+      window.removeEventListener("keydown", handleFirstInteraction);
     };
   }, []);
 
