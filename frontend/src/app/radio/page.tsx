@@ -370,22 +370,51 @@ export default function RadioPocketMode() {
 
   // Live RX Audio Player from DMR Network WebSocket stream
   const rxAudioCtxRef = useRef<AudioContext | null>(null);
+  const rxGainNodeRef = useRef<GainNode | null>(null);
   const rxNextTimeRef = useRef<number>(0);
+  const lastPlayedChunkRef = useRef<string>("");
+  const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
 
-  // Autoplay Policy: Unlock Web AudioContext on first user interaction
-  useEffect(() => {
-    const unlockAudio = () => {
-      if (rxAudioCtxRef.current && rxAudioCtxRef.current.state === "suspended") {
-        rxAudioCtxRef.current.resume().catch(() => {});
+  const ensureAudioUnlocked = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+
+      if (!rxAudioCtxRef.current) {
+        const ctx = new AudioCtx();
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = 2.0; // Clear, loud voice boost for phone & PC speakers
+        gainNode.connect(ctx.destination);
+        rxAudioCtxRef.current = ctx;
+        rxGainNodeRef.current = gainNode;
       }
+
+      if (rxAudioCtxRef.current.state === "suspended") {
+        rxAudioCtxRef.current.resume().then(() => {
+          setAudioUnlocked(true);
+        }).catch(() => {});
+      } else if (rxAudioCtxRef.current.state === "running") {
+        setAudioUnlocked(true);
+      }
+    } catch (e) {
+      console.warn("Audio unlock note:", e);
+    }
+  };
+
+  // Autoplay Policy: Unlock Web AudioContext on any user interaction
+  useEffect(() => {
+    const handleGesture = () => {
+      ensureAudioUnlocked();
     };
-    window.addEventListener("click", unlockAudio);
-    window.addEventListener("touchstart", unlockAudio);
-    window.addEventListener("keydown", unlockAudio);
+    window.addEventListener("click", handleGesture, { passive: true });
+    window.addEventListener("touchstart", handleGesture, { passive: true });
+    window.addEventListener("pointerdown", handleGesture, { passive: true });
+    window.addEventListener("keydown", handleGesture, { passive: true });
     return () => {
-      window.removeEventListener("click", unlockAudio);
-      window.removeEventListener("touchstart", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
+      window.removeEventListener("click", handleGesture);
+      window.removeEventListener("touchstart", handleGesture);
+      window.removeEventListener("pointerdown", handleGesture);
+      window.removeEventListener("keydown", handleGesture);
     };
   }, []);
 
@@ -399,64 +428,79 @@ export default function RadioPocketMode() {
     activeProfileRef.current = activeProfile;
   }, [activeProfile]);
 
-  useEffect(() => {
-    const unsubscribe = registerAudioRxListener((audioChunk: AudioRxData) => {
-      // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
-      if (!audioChunk || !audioChunk.pcm) return;
-      if (isMutedRef.current || isTxRef.current) return;
-      // Suppress self-echo audio
-      if (audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
+  const playAudioChunk = (audioChunk: AudioRxData) => {
+    // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
+    if (!audioChunk || !audioChunk.pcm) return;
+    if (isMutedRef.current || isTxRef.current) return;
+    // Suppress self-echo audio
+    if (audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
 
-      try {
-        if (!rxAudioCtxRef.current) {
-          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-          rxAudioCtxRef.current = new AudioCtx();
-        }
-        const ctx = rxAudioCtxRef.current;
-        if (ctx.state === "suspended") {
-          ctx.resume().catch(() => {});
-        }
+    // Deduplicate identical chunks if triggered by both listener & incomingAudio
+    if (lastPlayedChunkRef.current === audioChunk.pcm) return;
+    lastPlayedChunkRef.current = audioChunk.pcm;
 
-        const binaryStr = atob(audioChunk.pcm);
-        const len = binaryStr.length;
-        const safeLen = len - (len % 2);
-        if (safeLen < 2) return;
+    try {
+      ensureAudioUnlocked();
+      const ctx = rxAudioCtxRef.current;
+      if (!ctx) return;
 
-        const bytes = new Uint8Array(safeLen);
-        for (let i = 0; i < safeLen; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
-
-        const float32 = new Float32Array(int16.length);
-        for (let i = 0; i < int16.length; i++) {
-          float32[i] = int16[i] / 32768.0;
-        }
-
-        const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
-        audioBuffer.copyToChannel(float32, 0);
-
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(ctx.destination);
-
-        const now = ctx.currentTime;
-        // Jitter buffer scheduling: if timeline fell behind or gap > 200ms, start with an 80ms cushion
-        if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
-          rxNextTimeRef.current = now + 0.08;
-        }
-
-        source.start(rxNextTimeRef.current);
-        rxNextTimeRef.current += audioBuffer.duration;
-      } catch (e) {
-        console.warn("Audio playback error:", e);
+      if (ctx.state === "suspended") {
+        ctx.resume().then(() => setAudioUnlocked(true)).catch(() => {});
+        return;
       }
-    });
 
+      const binaryStr = atob(audioChunk.pcm);
+      const len = binaryStr.length;
+      const safeLen = len - (len % 2);
+      if (safeLen < 2) return;
+
+      const bytes = new Uint8Array(safeLen);
+      for (let i = 0; i < safeLen; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
+
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768.0;
+      }
+
+      const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
+      audioBuffer.copyToChannel(float32, 0);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      if (rxGainNodeRef.current) {
+        source.connect(rxGainNodeRef.current);
+      } else {
+        source.connect(ctx.destination);
+      }
+
+      const now = ctx.currentTime;
+      // Jitter buffer scheduling: if timeline fell behind or gap > 300ms, start with a 60ms cushion
+      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.35) {
+        rxNextTimeRef.current = now + 0.06;
+      }
+
+      source.start(rxNextTimeRef.current);
+      rxNextTimeRef.current += audioBuffer.duration;
+    } catch (e) {
+      console.warn("Audio playback error:", e);
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribe = registerAudioRxListener(playAudioChunk);
     return () => {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (incomingAudio) {
+      playAudioChunk(incomingAudio);
+    }
+  }, [incomingAudio]);
 
   // Live TX Microphone Streamer to USRP / DMR Network
   const txProcessorRef = useRef<ScriptProcessorNode | null>(null);
@@ -553,6 +597,7 @@ export default function RadioPocketMode() {
     lastKeyPressed,
   } = usePhysicalPTT({
     onTransmitStart: async () => {
+      ensureAudioUnlocked();
       // Anti-abuse: if monitor mode, lock PTT and prompt authentication modal
       if (activeProfile.isMonitorOnly || activeProfile.callsign === "SWL-MONITOR" || activeProfile.dmrId === 0) {
         setShowAuthModal(true);
@@ -601,6 +646,7 @@ export default function RadioPocketMode() {
       }
     },
     onTransmitEnd: () => {
+      ensureAudioUnlocked();
       const targetTgNum = callType === "private" ? Number(privateId) : currentTg.id;
 
       isTxRef.current = false;
@@ -1021,7 +1067,10 @@ export default function RadioPocketMode() {
           </button>
 
           <button
-            onClick={() => setIsMuted(!isMuted)}
+            onClick={() => {
+              ensureAudioUnlocked();
+              setIsMuted(!isMuted);
+            }}
             className="p-1.5 rounded-lg bg-[#0b121e] border border-cyan-900/40 text-slate-300 hover:text-white"
           >
             {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-cyan-400" />}
@@ -1107,6 +1156,22 @@ export default function RadioPocketMode() {
           </div>
         )}
       </div>
+
+      {/* Browser Autoplay Audio Unlock Alert */}
+      {!audioUnlocked && (
+        <button
+          onClick={() => ensureAudioUnlocked()}
+          className="w-full py-2 px-3 my-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 via-cyan-500/20 to-amber-500/20 border border-amber-400/50 flex items-center justify-between text-amber-300 text-xs font-mono animate-pulse hover:bg-amber-500/30 transition shadow-lg"
+        >
+          <div className="flex items-center gap-2">
+            <Volume2 className="w-4 h-4 text-amber-400" />
+            <span>Speaker belum aktif. Ketuk untuk mengaktifkan suara audio</span>
+          </div>
+          <span className="text-[10px] bg-amber-500 text-slate-950 font-bold px-2 py-0.5 rounded-lg">
+            AKTIFKAN
+          </span>
+        </button>
+      )}
 
       {/* ======================================================== */}
       {/* 1.8" RUGGED ZELLO POC RADIO HARDWARE VIEW (128x160 px) */}
