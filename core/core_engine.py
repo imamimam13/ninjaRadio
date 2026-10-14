@@ -126,6 +126,8 @@ class DVSwitchCoreManager:
 
         self.active_peer_host = "Standalone"
         self.active_peer_port = 62031
+        self.standalone_mode = True
+        self._last_tx_block_log = 0.0
         self.rx_packet_count = 0
         self.tx_packet_count = 0
 
@@ -180,8 +182,9 @@ class DVSwitchCoreManager:
             if p.get("isActive") is True:
                 active_peer = p
                 break
-        if not active_peer and peers:
-            active_peer = peers[0]
+        # No active peer => standalone mode (internal master only). Do NOT fall back to
+        # peers[0]: peers switched OFF in the UI must never be connected to.
+        self.standalone_mode = active_peer is None
 
         if active_peer:
             master_host = active_peer.get("host", "127.0.0.1")
