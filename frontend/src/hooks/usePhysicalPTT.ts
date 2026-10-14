@@ -7,13 +7,18 @@ interface UsePhysicalPTTOptions {
   onTransmitStart?: () => void;
   onTransmitEnd?: () => void;
   enabled?: boolean;
+  /** Experimental lockscreen PTT: don't auto-release TX when the page is hidden/blurred. */
+  keepTxInBackground?: boolean;
 }
 
 export function usePhysicalPTT({
   onTransmitStart,
   onTransmitEnd,
   enabled = true,
+  keepTxInBackground = false,
 }: UsePhysicalPTTOptions = {}) {
+  const keepBgRef = useRef(keepTxInBackground);
+  keepBgRef.current = keepTxInBackground;
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [lastKeyPressed, setLastKeyPressed] = useState<string>("");
   // pttKey: "AUTO" (accepts Space, Volume Down/Up, PoC PTT, Headset Hook) or custom key code
@@ -144,12 +149,14 @@ export function usePhysicalPTT({
 
     // Auto-release PTT if tab loses focus, window blurs, or page is navigated away
     const handleSafetyRelease = () => {
+      if (keepBgRef.current) return;
       if (isTxRef.current) {
         stopTx();
       }
     };
 
     const handleVisibilityChange = () => {
+      if (keepBgRef.current) return;
       if (document.hidden && isTxRef.current) {
         stopTx();
       }

@@ -1,4 +1,4 @@
-const CACHE_NAME = "ninjaradio-v4";
+const CACHE_NAME = "ninjaradio-v5";
 const STATIC_ASSETS = [
   "/manifest.json",
   "/icon-192.png",

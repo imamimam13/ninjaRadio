@@ -84,13 +84,27 @@ export function useLiveMonitor() {
     const appName = typeof window !== "undefined" && window.location.pathname.includes("radio") ? "Radio Pocket Web" : "NOC Dashboard";
     const wsUrl = `${protocol}//${host}/ws/live?app=${encodeURIComponent(appName)}`;
 
+    let disposed = false;
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
     function connect() {
+      if (disposed) return;
       try {
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
           setIsConnected(true);
+          // Keep the connection alive through idle/screen-off periods (server ignores unknown types)
+          if (pingTimer) clearInterval(pingTimer);
+          pingTimer = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify({ type: "PING" }));
+              } catch {}
+            }
+          }, 20000);
         };
 
         ws.onmessage = (event) => {
@@ -119,7 +133,13 @@ export function useLiveMonitor() {
 
         ws.onclose = () => {
           setIsConnected(false);
-          setTimeout(connect, 3000); // Auto reconnect
+          if (pingTimer) {
+            clearInterval(pingTimer);
+            pingTimer = null;
+          }
+          if (disposed) return;
+          if (retryTimer) clearTimeout(retryTimer);
+          retryTimer = setTimeout(connect, 3000); // Auto reconnect
         };
 
         ws.onerror = () => {
@@ -130,14 +150,34 @@ export function useLiveMonitor() {
       }
     }
 
+    // Reconnect immediately when the screen turns back on or the network returns
+    const reconnectNow = () => {
+      if (disposed) return;
+      const state = wsRef.current?.readyState;
+      if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      connect();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") reconnectNow();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", reconnectNow);
+
     connect();
 
     return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", reconnectNow);
+      if (pingTimer) clearInterval(pingTimer);
+      if (retryTimer) clearTimeout(retryTimer);
       if (wsRef.current) {
         wsRef.current.close();
       }
     };
   }, []);
+
 
   return {
     lastHeard,
