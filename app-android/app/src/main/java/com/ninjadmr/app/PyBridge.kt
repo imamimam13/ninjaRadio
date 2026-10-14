@@ -56,13 +56,17 @@ object PyBridge {
         return Python.getInstance().getModule("dmr_core")
     }
 
-    fun coreVersion(): String = core().get("__version__").toString()
+    fun coreVersion(): String =
+        core().get("__version__")?.toJava(String::class.java) ?: "unknown"
 
     // -- directory -------------------------------------------------------
 
     private fun jsonListOfMaps(context: Context, module: String, fn: String): List<Map<String, Any>> {
         ensureStarted(context)
-        val raw = Python.getInstance().getModule(module).callAttr(fn).toString()
+        val raw = Python.getInstance()
+            .getModule(module)
+            .callAttr(fn)
+            .toJava(String::class.java) ?: "[]"
         return try {
             val arr = JSONArray(raw)
             (0 until arr.length()).map { i ->
@@ -109,8 +113,19 @@ object PyBridge {
         }
     }
 
+    /**
+     * Sends the session config to Python as JSON.
+     *
+     * A Kotlin [Map] crosses the Chaquopy bridge as an opaque
+     * `java.util.LinkedHashMap`, which Python cannot iterate, so it must be
+     * serialised on this side.
+     */
     fun configure(context: Context, config: Map<String, Any>) {
-        runtime(context).callAttr("configure", config)
+        val json = JSONObject()
+        for ((key, value) in config) {
+            json.put(key, value)
+        }
+        runtime(context).callAttr("configure", json.toString())
     }
 
     fun start(context: Context): Map<String, String> {

@@ -12,6 +12,7 @@ Callbacks are plain Python callables and are always invoked from the session
 thread, so the caller must marshal to its own thread if needed.
 """
 
+import json
 import logging
 import threading
 import time
@@ -34,6 +35,35 @@ DATA_TERMINATOR = 2
 
 # Number of voice bursts per superframe (A..F).
 BURSTS_PER_SUPERFRAME = 6
+
+
+def coerce_config(config) -> dict:
+    """Normalise the host-supplied session config into a plain ``dict``.
+
+    Chaquopy hands a Kotlin ``Map`` across the bridge as an opaque
+    ``java.util.LinkedHashMap``, which Python cannot iterate (``dict(x)`` then
+    raises ``TypeError: 'LinkedHashMap' object is not iterable``).  The host
+    therefore sends JSON; dicts are still accepted so host-side tests keep
+    working.
+    """
+    if config is None:
+        return {}
+    if isinstance(config, dict):
+        return dict(config)
+    if isinstance(config, bytes):
+        config = config.decode("utf-8", "replace")
+    if isinstance(config, str):
+        text = config.strip()
+        if not text:
+            return {}
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise TypeError("config JSON must be an object, got %s" % type(data).__name__)
+        return data
+    raise TypeError(
+        "configure() expects a dict or a JSON object string, got %s"
+        % type(config).__name__
+    )
 
 
 class DmrSession:
@@ -296,9 +326,9 @@ class Runtime:
         self._traffic: deque = deque(maxlen=32)
         self._config: dict = {}
 
-    def configure(self, config: dict) -> None:
+    def configure(self, config) -> None:
         with self._lock:
-            self._config = dict(config)
+            self._config = coerce_config(config)
 
     def start(self) -> dict:
         with self._lock:
