@@ -36,19 +36,40 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest already ships the Android SDK at $ANDROID_SDK_ROOT, so we
+      # do not use android-actions/setup-android (it still runs `sdkmanager tools`,
+      # a package removed from modern cmdline-tools, and fails the job).
+      - name: Locate sdkmanager
+        id: sdkmanager
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "SDK root: ${SDK_ROOT}"
+          SDKMANAGER="$(find "${SDK_ROOT}/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -n1 || true)"
+          if [[ -z "${SDKMANAGER}" && -x "${SDK_ROOT}/tools/bin/sdkmanager" ]]; then
+            SDKMANAGER="${SDK_ROOT}/tools/bin/sdkmanager"
+          fi
+          if [[ -z "${SDKMANAGER}" ]]; then
+            echo "::error::sdkmanager not found under ${SDK_ROOT}"
+            exit 1
+          fi
+          echo "path=${SDKMANAGER}" >> "$GITHUB_OUTPUT"
+          echo "Using ${SDKMANAGER}"
 
       - name: Install SDK packages and NDK
+        shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install \
+          set -euo pipefail
+          SDKMANAGER="${{ steps.sdkmanager.outputs.path }}"
+          yes | "${SDKMANAGER}" --licenses > /dev/null || true
+          "${SDKMANAGER}" --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;26.1.10909125"
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --list_installed | grep -E "ndk|platforms|build-tools" || true
+          yes | "${SDKMANAGER}" --licenses > /dev/null || true
+          "${SDKMANAGER}" --list_installed | grep -E "ndk|platforms;android|build-tools" || true
 
       - name: Build libopendmr.so for Android ABIs
         run: |
