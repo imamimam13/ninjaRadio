@@ -71,15 +71,17 @@ def _candidate_library_paths() -> List[str]:
 
 
 def load_opendmr() -> ctypes.CDLL:
-    last_err: Optional[Exception] = None
+    errors: List[str] = []
     for path in _candidate_library_paths():
         try:
             lib = ctypes.CDLL(path)
             logger.info("Loaded OpenDMR vocoder from %s", path)
             return lib
-        except OSError as exc:  # noqa: PERF203
-            last_err = exc
-    raise OSError(f"could not load libopendmr: {last_err}")
+        except OSError as exc:
+            errors.append(f"{path} -> {exc}")
+    unique = list(dict.fromkeys(errors))
+    detail = "\n".join(unique[:8])
+    raise OSError(f"could not load libopendmr ({len(unique)} attempts):\n{detail}")
 
 
 class OpenDmrVocoder:

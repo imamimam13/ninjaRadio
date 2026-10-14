@@ -45,7 +45,10 @@ android {
 
     packaging {
         jniLibs {
-            useLegacyPackaging = false
+            // Extract .so files to nativeLibraryDir at install time. Chaquopy's
+            // Python dlopen()s libopendmr.so by filesystem path, which only
+            // works when the libraries are actually on disk.
+            useLegacyPackaging = true
         }
     }
 }

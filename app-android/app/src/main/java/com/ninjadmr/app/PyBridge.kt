@@ -19,18 +19,37 @@ object PyBridge {
     private var started = false
 
     @Volatile
+    private var nativeTried = false
+
+    @Volatile
     private var runtime: PyObject? = null
 
     fun ensureStarted(context: Context) {
         if (started) return
         synchronized(this) {
             if (!started) {
+                loadNativeLibs()
                 if (!Python.isStarted()) {
                     Python.start(AndroidPlatform(context.applicationContext))
                 }
                 started = true
                 exposeNativeLibDir(context)
             }
+        }
+    }
+
+    /**
+     * Resolves `libopendmr.so` through the platform loader first, so Python's
+     * later `dlopen("libopendmr.so")` hits the already-loaded soname even when
+     * the library is not extracted to `nativeLibraryDir`.
+     */
+    private fun loadNativeLibs() {
+        if (nativeTried) return
+        nativeTried = true
+        try {
+            System.loadLibrary("opendmr")
+        } catch (_: Throwable) {
+            // Non-fatal: the Python side also searches nativeLibraryDir.
         }
     }
 
