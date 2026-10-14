@@ -241,6 +241,9 @@ class DmrForegroundService : Service() {
             connectionState = status["state"] ?: "starting"
             statusLine = connectionState
             AppLog.add("Session state: $connectionState")
+            status["vocoder"]?.let { voc ->
+                if (voc != "ok" && voc != "not started") AppLog.add("vocoder: $voc")
+            }
         } catch (exc: Exception) {
             AppLog.add("Failed to start Python session: ${exc.message}")
             statusLine = "error: ${exc.message}"
