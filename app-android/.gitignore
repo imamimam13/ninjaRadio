@@ -1,0 +1,17 @@
+# Gradle / Android
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Prebuilt native libs are produced by scripts/build_opendmr_android.sh
+app/src/main/jniLibs/
+
+# Python bytecode (created by host-side checks)
+__pycache__/
+*.pyc
+*.pyo

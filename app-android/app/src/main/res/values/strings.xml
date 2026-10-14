@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">NinjaDMR</string>
+    <string name="service_channel_name">Radio session</string>
+    <string name="ptt_accessibility_description">Kontrol Push-To-Talk NinjaDMR dengan tombol volume.</string>
+    <string name="ptt_accessibility_summary">Tahan Volume Naik untuk mengirim (PTT), lepas untuk berhenti.</string>
+</resources>
