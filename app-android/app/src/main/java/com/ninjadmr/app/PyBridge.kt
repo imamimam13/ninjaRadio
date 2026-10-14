@@ -99,7 +99,10 @@ object PyBridge {
         runtime?.let { return it }
         synchronized(this) {
             runtime?.let { return it }
-            val cls = Python.getInstance().getModule("dmr_core.session").get("Runtime")
+            val cls = Python.getInstance()
+                .getModule("dmr_core.session")
+                .get("Runtime")
+                ?: error("dmr_core.session.Runtime not found")
             val instance = cls.call()
             runtime = instance
             return instance
@@ -121,7 +124,7 @@ object PyBridge {
 
     fun feedTx(context: Context, pcm: ByteArray): Boolean {
         val result = runtime(context).callAttr("feed_tx", pcm)
-        return result.toJava(Boolean::class.java) ?: false
+        return result.toJava(Boolean::class.javaObjectType) ?: false
     }
 
     fun endCall(context: Context) {
@@ -134,7 +137,7 @@ object PyBridge {
 
     fun sendLocation(context: Context, lat: Double, lon: Double): Boolean {
         val result = runtime(context).callAttr("send_location", lat, lon)
-        return result.toJava(Boolean::class.java) ?: false
+        return result.toJava(Boolean::class.javaObjectType) ?: false
     }
 
     /** Returns the next decoded PCM buffer (960 bytes), or null when idle. */
