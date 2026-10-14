@@ -525,10 +525,10 @@ Debug=1
         self.http_session = aiohttp.ClientSession()
         self.load_config()
         self.generate_configs()
-        self.start_daemons()
         self.running = True
 
-        # 0. Start Native DMR HomeBrew Master Server on UDP 62031 for Hotspots (Pi-Star / OpenGD77)
+        # 0. Start Native DMR HomeBrew Master Server on UDP 62031 FIRST
+        # So MMDVM_Bridge and incoming hotspots can connect immediately.
         try:
             hotspot_port = int(self.config.get("hotspot_port", DMR_MASTER_PORT))
             hotspot_pass = str(self.config.get("hotspot_password", "ninjaradio_pass"))
@@ -545,6 +545,9 @@ Debug=1
             logger.info(f"✓ Native DMR Master Server running on UDP port {hotspot_port}")
         except Exception as e:
             logger.error(f"Failed to start DMR Master Server on UDP {DMR_MASTER_PORT}: {e}")
+
+        # Start DVSwitch daemons (md380-emu, Analog_Bridge, MMDVM_Bridge)
+        self.start_daemons()
 
         # 1. Listen on UDP 32001 (where Analog_Bridge emits decoded 8kHz 16-bit PCM)
         try:
@@ -844,6 +847,8 @@ Debug=1
             pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv)
             self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
             logger.info(f"📋 Sent TLV SET_INFO to Analog_Bridge: {callsign} ({src}) -> TG {tg} Slot {slot}")
+            # Also send explicit tune_remote command so Analog_Bridge switches target TG immediately
+            self.tune_remote(tg, slot)
         except Exception as e:
             logger.debug(f"Failed to send SET_INFO: {e}")
 
