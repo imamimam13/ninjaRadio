@@ -381,6 +381,7 @@ Enable=1
 ColorCode={color_code}
 EmbeddedLCOnly=1
 DumpTAData=0
+SelfOnly=0
 
 [DMR Network]
 Enable=1
@@ -939,13 +940,15 @@ Debug=1
             # 1. txTg
             cmd_tg = f"txTg={tg}".encode("ascii")
             tlv_tg = struct.pack("BB", 5, len(cmd_tg)) + cmd_tg
-            pkt_tg = b"USRP" + struct.pack(">iiiiiii", 1, 0, 0, 0, 4 << 24, 0, 0) + tlv_tg
+            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+            pkt_tg = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv_tg)
             self.bridge_sock.sendto(pkt_tg, ("127.0.0.1", AB_USRP_RX_PORT))
 
             # 2. txTs
             cmd_ts = f"txTs={slot}".encode("ascii")
             tlv_ts = struct.pack("BB", 5, len(cmd_ts)) + cmd_ts
-            pkt_ts = b"USRP" + struct.pack(">iiiiiii", 2, 0, 0, 0, 4 << 24, 0, 0) + tlv_ts
+            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+            pkt_ts = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv_ts)
             self.bridge_sock.sendto(pkt_ts, ("127.0.0.1", AB_USRP_RX_PORT))
             logger.info(f"🎯 Tuned Analog_Bridge: txTg={tg}, txTs={slot}")
         except Exception as e:
@@ -1079,7 +1082,7 @@ Debug=1
                 "src_id": self.current_rx_src,
                 "dst_tg": self.current_rx_tg,
                 "slot": self.current_rx_slot,
-                "callsign": f"ID-{self.current_rx_src}",
+                "callsign": traffic.get("callsign") or f"ID-{self.current_rx_src}",
                 "is_tx": False,
                 "data_type": traffic.get("data_type", 1)
             }

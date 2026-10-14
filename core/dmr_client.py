@@ -15,9 +15,11 @@ RPTACK = b"RPTACK"
 RPTK = b"RPTK"
 RPTC = b"RPTC"
 RPTP = b"RPTP"
+RPTPING = b"RPTPING"
 RPTCL = b"RPTCL"
 MSTPING = b"MSTPING"
 MSTP = b"MSTP"
+MSTPONG = b"MSTPONG"
 MSTACK = b"MSTACK"
 MSTNAK = b"MSTNAK"
 DMRD = b"DMRD"
@@ -315,7 +317,7 @@ class HomeBrewClient:
                         logger.info(f"[{self.name}] Retrying RPTL login to {self.target_addr} (attempt {retry_count})...")
                         await self._send_rptl()
                     elif self.state == "CONNECTED":
-                        ping_pkt = RPTP + struct.pack(">I", self.dmr_id)
+                        ping_pkt = RPTPING + struct.pack(">I", self.dmr_id)
                         self.sock.sendto(ping_pkt, self.target_addr)
                         self.packets_tx += 1
                     elif self.state in ["AUTH_FAILED", "RETRYING"]:
@@ -347,10 +349,12 @@ class HomeBrewClient:
             self._set_state("AUTH_FAILED")
 
         # 3. Ping Keepalive responses
-        elif data.startswith(MSTPING) or data.startswith(MSTP) or data.startswith(MSTACK):
+        elif data.startswith(MSTPONG) or data.startswith(MSTP) or data.startswith(MSTACK):
+            self.last_ping_rx = time.time()
+        elif data.startswith(MSTPING):
             self.last_ping_rx = time.time()
             if self.sock and self.target_addr:
-                pong = MSTP + struct.pack(">I", self.dmr_id)
+                pong = RPTPONG + struct.pack(">I", self.dmr_id)
                 self.sock.sendto(pong, self.target_addr)
 
         # 3. DMRD Voice and Data Frames from Network
