@@ -4,6 +4,7 @@ import android.content.Context
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import com.ninjadmr.app.util.AppLog
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -48,8 +49,9 @@ object PyBridge {
         nativeTried = true
         try {
             System.loadLibrary("opendmr")
-        } catch (_: Throwable) {
-            // Non-fatal: the Python side also searches nativeLibraryDir.
+            AppLog.add("lib: System.loadLibrary(opendmr) OK")
+        } catch (t: Throwable) {
+            AppLog.add("lib: System.loadLibrary(opendmr) failed: $t")
         }
     }
 
@@ -58,15 +60,19 @@ object PyBridge {
      * depend on the platform linker's default search path.
      */
     private fun exposeNativeLibDir(context: Context) {
+        val dir = context.applicationInfo?.nativeLibraryDir
+        val file = dir?.let { "$it/libopendmr.so" }
+        val exists = file != null && java.io.File(file).exists()
+        AppLog.add("lib: nativeLibraryDir=$dir fileExists=$exists")
         try {
-            val dir = context.applicationInfo?.nativeLibraryDir
             if (!dir.isNullOrEmpty()) {
                 Python.getInstance()
                     .getModule("dmr_core.vocoder")
                     .callAttr("set_native_lib_dir", dir)
+                AppLog.add("lib: set_native_lib_dir($dir) OK")
             }
-        } catch (_: Exception) {
-            // Non-fatal: bare "libopendmr.so" resolution still applies.
+        } catch (t: Throwable) {
+            AppLog.add("lib: set_native_lib_dir failed: $t")
         }
     }
 
