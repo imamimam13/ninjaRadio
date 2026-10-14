@@ -84,7 +84,33 @@ jobs:
           gradle-version: "8.11.1"
 
       - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon assembleDebug --stacktrace 2>&1 | tee gradle-build.log
+
+      # Surface the failure publicly: annotations are visible on the run page
+      # without signing in, and the job summary is readable anonymously.
+      - name: Report Gradle failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG=gradle-build.log
+          if [[ ! -f "$LOG" ]]; then
+            echo "::error::gradle-build.log not produced"
+            exit 0
+          fi
+          BLOCK="$(grep -n -A 40 'What went wrong' "$LOG" | tail -n 60 || true)"
+          [[ -z "$BLOCK" ]] && BLOCK="$(tail -n 80 "$LOG")"
+          {
+            echo '### Gradle build failed'
+            echo '```'
+            printf '%s\n' "$BLOCK"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ONE_LINE="$(printf '%s' "$BLOCK" | tr '\n' ' ' | cut -c1-700)"
+          echo "::error::${ONE_LINE}"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

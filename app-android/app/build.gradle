@@ -18,17 +18,15 @@ android {
 
         ndk {
             // Python 3.11 supports both 32-bit and 64-bit ABIs.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // Groovy DSL: abiFilters is a vararg method, not listOf(...).
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
-            )
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
@@ -55,7 +53,6 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.11"
-        pip {}
     }
 }
 
