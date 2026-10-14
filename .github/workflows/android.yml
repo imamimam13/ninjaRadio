@@ -103,13 +103,25 @@ jobs:
           fi
           BLOCK="$(grep -n -A 40 'What went wrong' "$LOG" | tail -n 60 || true)"
           [[ -z "$BLOCK" ]] && BLOCK="$(tail -n 80 "$LOG")"
+          # Kotlin/javac diagnostics: "e: file:///..." / "error: ..."
+          DIAG="$(grep -E '^[[:space:]]*(e: |error: |w: .*warning)' "$LOG" | head -n 120 || true)"
+          FAILED="$(grep -E '^> Task .* FAILED' "$LOG" | head -n 40 || true)"
           {
             echo '### Gradle build failed'
+            echo '#### Failed tasks'
+            echo '```'
+            printf '%s\n' "$FAILED"
+            echo '```'
+            echo '#### Compiler diagnostics'
+            echo '```'
+            printf '%s\n' "$DIAG"
+            echo '```'
+            echo '#### What went wrong'
             echo '```'
             printf '%s\n' "$BLOCK"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          ONE_LINE="$(printf '%s' "$BLOCK" | tr '\n' ' ' | cut -c1-700)"
+          ONE_LINE="$(printf '%s\n%s' "$FAILED" "$DIAG" | tr '\n' ' ' | cut -c1-700)"
           echo "::error::${ONE_LINE}"
 
       - name: Upload APK
