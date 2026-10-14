@@ -97,7 +97,16 @@ class DmrSession:
         self.on_status = on_status
         self.on_traffic = on_traffic
 
-        self.vocoder = OpenDmrVocoder()
+        # The vocoder is deliberately non-fatal: connecting to the master is the
+        # primary goal, and audio can only matter once the link is up. A missing
+        # libopendmr must therefore not abort the handshake.
+        self.vocoder: Optional[OpenDmrVocoder] = None
+        self.vocoder_error: Optional[str] = None
+        try:
+            self.vocoder = OpenDmrVocoder()
+        except Exception as exc:
+            self.vocoder_error = str(exc)
+            logger.warning("vocoder unavailable, connecting without audio: %s", exc)
         self.client = None
         self._build_client(subscribed_tgs)
 
@@ -151,8 +160,9 @@ class DmrSession:
     def start(self) -> None:
         if self._running:
             return
-        self.vocoder.reset_decoder()
-        self.vocoder.reset_encoder()
+        if self.vocoder is not None:
+            self.vocoder.reset_decoder()
+            self.vocoder.reset_encoder()
         self._running = True
         self.client.connect()
         self._thread = threading.Thread(target=self._run_loop, name="dmr-session", daemon=True)
@@ -170,7 +180,8 @@ class DmrSession:
 
     def close(self) -> None:
         self.stop()
-        self.vocoder.close()
+        if self.vocoder is not None:
+            self.vocoder.close()
 
     def __enter__(self) -> "DmrSession":
         self.start()
@@ -215,6 +226,8 @@ class DmrSession:
                 if self.protocol == PROTOCOL_HOMEBREW:
                     self.client.send_call_header(self.dmr_id, self.talkgroup, self.slot)
             sequence = self._tx_burst
+        if self.vocoder is None:
+            return False
         burst = self.vocoder.encode_burst(pcm)
         ok = self._send_burst(burst, sequence)
         with self._lock:
@@ -302,6 +315,8 @@ class DmrSession:
         logger.info("[Session] active talkgroup -> %s", self.talkgroup)
 
     def _decode_burst(self, burst: bytes) -> None:
+        if self.vocoder is None:
+            return
         pcm = self.vocoder.decode_burst(burst)
         if pcm and self.on_rx_pcm:
             try:
@@ -425,6 +440,15 @@ class Runtime:
 
     def status(self) -> dict:
         with self._lock:
-            active = self._session is not None
-            return {"state": self._status, "active": active}
+            session = self._session
+            active = session is not None
+            if session is None:
+                vocoder = "not started"
+            elif session.vocoder is not None:
+                vocoder = "ok"
+            else:
+                # First line only: the full path list stays in the exception/log.
+                first = (session.vocoder_error or "unknown").split("\n", 1)[0]
+                vocoder = "unavailable: %s" % first
+            return {"state": self._status, "active": active, "vocoder": vocoder}
 

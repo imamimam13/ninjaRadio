@@ -80,11 +80,12 @@ def load_opendmr() -> ctypes.CDLL:
         except OSError as exc:
             errors.append(f"{path} -> {exc}")
     unique = list(dict.fromkeys(errors))
-    detail = "\n".join(unique[:8])
-    raise OSError(
-        f"could not load libopendmr ({len(unique)} attempts) "
-        f"[native_lib_dir={_native_lib_dir!r} {_describe_native_dir()}]:\n{detail}"
+    head = (
+        f"could not load libopendmr: native_lib_dir={_native_lib_dir!r} "
+        f"{_describe_native_dir()} ({len(unique)} attempts)"
     )
+    detail = "\n".join(unique[:8])
+    raise OSError(f"{head}\n{detail}")
 
 
 def _describe_native_dir() -> str:
