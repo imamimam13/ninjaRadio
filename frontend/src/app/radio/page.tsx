@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLiveMonitor, registerAudioRxListener, AudioRxData } from "@/hooks/useLiveMonitor";
 import { usePhysicalPTT } from "@/hooks/usePhysicalPTT";
+import { useMediaSession } from "@/hooks/useMediaSession";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ProfileSwitcher, UserProfile, DEFAULT_MONITOR_PROFILE } from "@/components/ProfileSwitcher";
 import { beepPlayer } from "@/components/BeepPlayer";
@@ -329,6 +330,92 @@ export default function RadioPocketMode() {
 
   const [isMuted, setIsMuted] = useState(false);
 
+  // ========================================================
+  // PWA LOCKSCREEN / BACKGROUND SUPPORT
+  // ========================================================
+  const [lockscreenPtt, setLockscreenPtt] = useState(false);
+  const lockscreenPttRef = useRef(false);
+  const [wakeLockEnabled, setWakeLockEnabled] = useState(false);
+  const wakeLockRef = useRef<any>(null);
+  const rxAudioElRef = useRef<HTMLAudioElement | null>(null);
+  const armedMicStreamRef = useRef<MediaStream | null>(null);
+  const stopTxRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    lockscreenPttRef.current = lockscreenPtt;
+  }, [lockscreenPtt]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (localStorage.getItem("ninjaradio_lockscreen_ptt") === "1") setLockscreenPtt(true);
+    if (localStorage.getItem("ninjaradio_wakelock") === "1") setWakeLockEnabled(true);
+  }, []);
+
+  const disarmMic = () => {
+    const s = armedMicStreamRef.current;
+    armedMicStreamRef.current = null;
+    if (s && s !== txMicStreamRef.current) {
+      try { s.getTracks().forEach((t) => t.stop()); } catch {}
+    }
+  };
+
+  const toggleLockscreenPtt = async (on: boolean) => {
+    setLockscreenPtt(on);
+    lockscreenPttRef.current = on;
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ninjaradio_lockscreen_ptt", on ? "1" : "0");
+    }
+    if (on) {
+      // Arm the mic now (foreground + user gesture) so it can be re-enabled from the lockscreen.
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        s.getAudioTracks().forEach((t) => { t.enabled = false; });
+        armedMicStreamRef.current = s;
+      } catch (e) {
+        console.warn("Could not arm microphone for lockscreen PTT:", e);
+      }
+    } else {
+      disarmMic();
+    }
+  };
+
+  const toggleWakeLock = (on: boolean) => {
+    setWakeLockEnabled(on);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ninjaradio_wakelock", on ? "1" : "0");
+    }
+  };
+
+  // Screen Wake Lock: re-acquire whenever the page becomes visible again.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !wakeLockEnabled || !("wakeLock" in navigator)) return;
+    let cancelled = false;
+
+    const acquire = async () => {
+      try {
+        if (cancelled || document.visibilityState !== "visible") return;
+        wakeLockRef.current = await (navigator as any).wakeLock.request("screen");
+      } catch {
+        // denied / unsupported
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") acquire();
+    };
+
+    acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      try { wakeLockRef.current?.release(); } catch {}
+      wakeLockRef.current = null;
+    };
+  }, [wakeLockEnabled]);
+
   // VOX (Voice-Operated Exchange / Hands-Free) State
   const [isVoxEnabled, setIsVoxEnabled] = useState(false);
   const [voxThreshold, setVoxThreshold] = useState(-35); // dB threshold
@@ -428,11 +515,35 @@ export default function RadioPocketMode() {
         comp.attack.value = 0.01;
         comp.release.value = 0.20;
 
-        // Pipeline: source -> hpf -> lpf -> gainNode -> comp -> destination
+        // Pipeline: source -> hpf -> lpf -> gainNode -> comp -> (hidden <audio> via MediaStream | destination)
         hpf.connect(lpf);
         lpf.connect(gainNode);
         gainNode.connect(comp);
-        comp.connect(ctx.destination);
+
+        // Chrome Android only shows lockscreen media controls for real media elements,
+        // so output goes through a MediaStream into a hidden <audio>. If that fails,
+        // fall back to the plain AudioContext destination.
+        let routedToElement = false;
+        try {
+          const streamDest = ctx.createMediaStreamDestination();
+          comp.connect(streamDest);
+          const el = document.createElement("audio");
+          el.setAttribute("playsinline", "true");
+          el.style.display = "none";
+          el.srcObject = streamDest.stream;
+          document.body.appendChild(el);
+          rxAudioElRef.current = el;
+          el.play().then(() => {}).catch(() => {
+            try { comp.disconnect(streamDest); } catch {}
+            comp.connect(ctx.destination);
+          });
+          routedToElement = true;
+        } catch {
+          routedToElement = false;
+        }
+        if (!routedToElement) {
+          comp.connect(ctx.destination);
+        }
 
         rxAudioCtxRef.current = ctx;
         rxGainNodeRef.current = gainNode;
@@ -590,19 +701,37 @@ export default function RadioPocketMode() {
   const startLiveMicrophoneStream = async (tgNum: number) => {
     try {
       txAccumulatorRef.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        }
-      });
+      let stream: MediaStream | null = armedMicStreamRef.current;
+      const armedAlive =
+        !!stream && stream.getAudioTracks().length > 0 && stream.getAudioTracks().every((t) => t.readyState === "live");
+      if (stream && armedAlive) {
+        stream.getAudioTracks().forEach((t) => { t.enabled = true; });
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          }
+        });
+        if (lockscreenPttRef.current) armedMicStreamRef.current = stream;
+      }
       txMicStreamRef.current = stream;
+
+      // If the browser mutes the mic (e.g. screen locked), release TX instead of sending silence.
+      stream.getAudioTracks().forEach((t) => {
+        t.onmute = () => {
+          if (isTxRef.current) stopTxRef.current?.();
+        };
+      });
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const ctx = new AudioCtx();
       txAudioCtxRef.current = ctx;
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
 
       const source = ctx.createMediaStreamSource(stream);
       txSourceNodeRef.current = source;
@@ -710,7 +839,14 @@ export default function RadioPocketMode() {
       txAudioCtxRef.current = null;
     }
     if (txMicStreamRef.current) {
-      try { txMicStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+      const s = txMicStreamRef.current;
+      try { s.getTracks().forEach((t) => { t.onmute = null; }); } catch {}
+      if (s === armedMicStreamRef.current && lockscreenPttRef.current) {
+        // Keep the mic armed for lockscreen PTT, just stop capturing audio.
+        try { s.getAudioTracks().forEach((t) => { t.enabled = false; }); } catch {}
+      } else {
+        try { s.getTracks().forEach((t) => t.stop()); } catch {}
+      }
       txMicStreamRef.current = null;
     }
   };
@@ -727,6 +863,7 @@ export default function RadioPocketMode() {
     savePttMode,
     lastKeyPressed,
   } = usePhysicalPTT({
+    keepTxInBackground: lockscreenPtt,
     onTransmitStart: async () => {
       ensureAudioUnlocked();
       // Anti-abuse: if monitor mode, lock PTT and prompt authentication modal
@@ -820,6 +957,26 @@ export default function RadioPocketMode() {
   useEffect(() => {
     isTxRef.current = isTransmitting;
   }, [isTransmitting]);
+
+  stopTxRef.current = stopTx;
+
+  // Lockscreen / notification-shade media controls (Media Session API)
+  useMediaSession({
+    active: audioUnlocked,
+    title: `TG ${currentTg.id} • ${currentTg.name}`,
+    artist: isTransmitting
+      ? `TX: ${activeProfile.callsign}`
+      : activeTx?.callsign
+      ? `RX: ${activeTx.callsign}`
+      : isMuted
+      ? "Muted"
+      : "Standby",
+    muted: isMuted,
+    onToggleMute: () => setIsMuted((m) => !m),
+    lockscreenPttEnabled: lockscreenPtt,
+    onPttToggle: toggleTx,
+  });
+
 
   useEffect(() => {
     if (activeTx?.callsign === "PARROT" && !isEchoPlaying) {
@@ -2639,6 +2796,39 @@ export default function RadioPocketMode() {
                     <div className="text-[10px] opacity-80">Zello PoC / Layar Mini</div>
                   </button>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">4. Lockscreen &amp; Background (PWA):</label>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleWakeLock(!wakeLockEnabled)}
+                    className={`w-full p-2.5 rounded-xl border text-left transition-all ${
+                      wakeLockEnabled
+                        ? "bg-cyan-500 text-slate-950 font-black border-cyan-400 shadow"
+                        : "bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="font-bold">{wakeLockEnabled ? "✅" : "⬜"} Layar Tetap Menyala</div>
+                    <div className="text-[10px] opacity-80">Mencegah koneksi putus karena layar idle (boros baterai)</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleLockscreenPtt(!lockscreenPtt)}
+                    className={`w-full p-2.5 rounded-xl border text-left transition-all ${
+                      lockscreenPtt
+                        ? "bg-amber-400 text-slate-950 font-black border-amber-300 shadow"
+                        : "bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="font-bold">{lockscreenPtt ? "✅" : "⬜"} PTT di Lockscreen (Eksperimental)</div>
+                    <div className="text-[10px] opacity-80">Tombol ⏮ / ⏭ di notifikasi media = PTT tekan-sekali. Mikrofon dibiarkan siaga.</div>
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  *Chrome sering membisukan mikrofon saat layar terkunci. Jika mikrofon dibisukan, TX otomatis berhenti.
+                </p>
               </div>
 
               {/* Live Hardware Key Tester */}
