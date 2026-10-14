@@ -81,7 +81,22 @@ def load_opendmr() -> ctypes.CDLL:
             errors.append(f"{path} -> {exc}")
     unique = list(dict.fromkeys(errors))
     detail = "\n".join(unique[:8])
-    raise OSError(f"could not load libopendmr ({len(unique)} attempts):\n{detail}")
+    raise OSError(
+        f"could not load libopendmr ({len(unique)} attempts) "
+        f"[native_lib_dir={_native_lib_dir!r} {_describe_native_dir()}]:\n{detail}"
+    )
+
+
+def _describe_native_dir() -> str:
+    if not _native_lib_dir:
+        return "(not set)"
+    if not os.path.isdir(_native_lib_dir):
+        return "(directory missing)"
+    try:
+        names = sorted(os.listdir(_native_lib_dir))
+    except OSError as exc:
+        return f"(listdir failed: {exc})"
+    return f"(contains {names[:25]})"
 
 
 class OpenDmrVocoder:
