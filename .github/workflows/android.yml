@@ -12,8 +12,9 @@ on:
       - ".github/workflows/android.yml"
   workflow_dispatch:
 
+# `contents: write` is required to publish the nightly release asset.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -130,3 +131,25 @@ jobs:
           name: app-debug
           path: app-android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # GitHub always wraps artifacts in a zip, which cannot be installed
+      # directly on a phone. Publish the raw .apk as a release asset instead,
+      # so there is a stable one-tap install URL.
+      - name: Publish nightly APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(ls app/build/outputs/apk/debug/*.apk | head -n1)"
+          NAME="$(basename "$APK")"
+          # Replace the whole release so the tag and asset always match main.
+          gh release delete nightly --yes --cleanup-tag > /dev/null 2>&1 || true
+          gh release create nightly "$APK" \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "NinjaDMR nightly" \
+            --notes "Automated debug build of main (${GITHUB_SHA::7}). Not for production use."
+          echo "Direct install link:"
+          echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/${NAME}"
