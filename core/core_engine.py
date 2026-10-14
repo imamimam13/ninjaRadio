@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 import aiohttp
 from fastapi import FastAPI
 import uvicorn
+from dmr_server import HomeBrewMasterServer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NinjaRadio-Core] %(message)s")
 logger = logging.getLogger("NinjaRadio-Core")
@@ -128,6 +129,7 @@ class DVSwitchCoreManager:
         self.active_peer_port = 62031
         self.standalone_mode = True
         self._last_tx_block_log = 0.0
+        self.dmr_master_server: Optional[HomeBrewMasterServer] = None
         self.rx_packet_count = 0
         self.tx_packet_count = 0
 
@@ -525,6 +527,24 @@ Debug=1
         self.generate_configs()
         self.start_daemons()
         self.running = True
+
+        # 0. Start Native DMR HomeBrew Master Server on UDP 62031 for Hotspots (Pi-Star / OpenGD77)
+        try:
+            hotspot_port = int(self.config.get("hotspot_port", DMR_MASTER_PORT))
+            hotspot_pass = str(self.config.get("hotspot_password", "ninjaradio_pass"))
+            server_id = int(self.config.get("server_dmr_id", 5109999))
+            server_call = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
+            self.dmr_master_server = HomeBrewMasterServer(
+                port=hotspot_port,
+                password=hotspot_pass,
+                server_dmr_id=server_id,
+                server_callsign=server_call,
+                on_traffic=self.handle_dmr_master_traffic
+            )
+            await self.dmr_master_server.start()
+            logger.info(f"✓ Native DMR Master Server running on UDP port {hotspot_port}")
+        except Exception as e:
+            logger.error(f"Failed to start DMR Master Server on UDP {DMR_MASTER_PORT}: {e}")
 
         # 1. Listen on UDP 32001 (where Analog_Bridge emits decoded 8kHz 16-bit PCM)
         try:
@@ -1038,8 +1058,37 @@ Debug=1
             except Exception:
                 pass
 
+    def handle_dmr_master_traffic(self, traffic: dict):
+        """Callback from HomeBrewMasterServer when an external hotspot transmits."""
+        try:
+            self.current_rx_src = traffic.get("src_id", 0)
+            self.current_rx_tg = traffic.get("dst_tg", 0)
+            self.current_rx_slot = traffic.get("slot", 2)
+            self.current_rx_time = time.time()
+            self.current_rx_active = True
+            self.rx_packet_count += 1
+
+            # Dispatch traffic notification to backend for live monitor & web clients
+            traffic_event = {
+                "network": traffic.get("network", "Local DMR Master (62031)"),
+                "src_id": self.current_rx_src,
+                "dst_tg": self.current_rx_tg,
+                "slot": self.current_rx_slot,
+                "callsign": f"ID-{self.current_rx_src}",
+                "is_tx": False,
+                "data_type": traffic.get("data_type", 1)
+            }
+            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+        except Exception as e:
+            logger.debug(f"handle_dmr_master_traffic note: {e}")
+
     async def shutdown(self):
         self.running = False
+        if self.dmr_master_server:
+            try:
+                await self.dmr_master_server.stop()
+            except Exception:
+                pass
         self.stop_bridge_daemons()
         if self.md380_proc:
             try:
@@ -1135,9 +1184,18 @@ async def get_core_status():
         "active_master": f"{engine_mgr.active_peer_host}:{engine_mgr.active_peer_port}",
         "peers": peers_status,
         "master_server": {
-            "status": "ONLINE",
+            "status": "ONLINE" if (engine_mgr.dmr_master_server and engine_mgr.dmr_master_server.running) else "OFFLINE",
             "port": DMR_MASTER_PORT,
-            "connected_hotspots": 0
+            "connected_hotspots": len(engine_mgr.dmr_master_server.clients) if engine_mgr.dmr_master_server else 0,
+            "hotspots": [
+                {
+                    "addr": f"{addr[0]}:{addr[1]}",
+                    "callsign": c.get("callsign", "HOTSPOT"),
+                    "dmr_id": c.get("dmr_id", 0),
+                    "state": c.get("state", "UNKNOWN")
+                }
+                for addr, c in (engine_mgr.dmr_master_server.clients.items() if engine_mgr.dmr_master_server else [])
+            ]
         },
         "config": engine_mgr.config
     }
