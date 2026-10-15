@@ -58,6 +58,18 @@ def load_room_mappings():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                # 1. Custom user-defined mumble_rooms from frontend
+                custom_rooms = data.get("mumble_rooms", [])
+                for r in custom_rooms:
+                    ch = r.get("channel")
+                    tg = r.get("tg")
+                    if ch and tg is not None:
+                        try:
+                            mappings[ch.strip()] = int(tg)
+                        except (ValueError, TypeError):
+                            pass
+
+                # 2. Dynamic Peering subscriptions
                 peers = data.get("peering", [])
                 for p in peers:
                     tgs_str = p.get("subscribedTgs", "")
@@ -70,6 +82,24 @@ def load_room_mappings():
             logger.debug(f"Could not parse config.json for rooms: {e}")
 
     return mappings
+
+def config_file_watcher_loop():
+    """Background thread watching /app/data/config.json for dynamic channel changes."""
+    global ROOM_MAPPINGS
+    last_mtime = 0.0
+    while IS_BRIDGING:
+        time.sleep(3.0)
+        if os.path.exists(CONFIG_PATH):
+            try:
+                mtime = os.path.getmtime(CONFIG_PATH)
+                if last_mtime > 0 and mtime > last_mtime:
+                    logger.info("⚡ Detected changes in config.json! Reloading Mumble rooms...")
+                    new_mappings = load_room_mappings()
+                    ROOM_MAPPINGS.update(new_mappings)
+                    ensure_channels_created()
+                last_mtime = mtime
+            except Exception as e:
+                logger.debug(f"config_watcher error: {e}")
 
 def run_usrp_listener(mumble_instance):
     """
@@ -176,6 +206,7 @@ def main():
     usrp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     watchdog = threading.Thread(target=ptt_watchdog_loop, args=(usrp_sock,), daemon=True)
     watchdog.start()
+    threading.Thread(target=config_file_watcher_loop, daemon=True).start()
 
     mumble = None
     try:
