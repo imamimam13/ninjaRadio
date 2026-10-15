@@ -247,8 +247,9 @@ def main():
                 pass
 
         if primary_ch:
-            mumble.users.myself.move_in(primary_ch)
-            logger.info(f"✓ Joined Primary Mumble Channel: {first_ch_name}")
+            ch_id = primary_ch["channel_id"] if (isinstance(primary_ch, dict) or hasattr(primary_ch, "__getitem__")) else getattr(primary_ch, "channel_id", 0)
+            mumble.users.myself.move_in(int(ch_id))
+            logger.info(f"✓ Joined Primary Mumble Channel: {first_ch_name} (ID: {ch_id})")
 
     except Exception as e:
         logger.warning(f"pymumble connection standby / simulated mode: {e}")
