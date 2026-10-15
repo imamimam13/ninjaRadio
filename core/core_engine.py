@@ -91,6 +91,40 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
         pass
     return None
 
+def is_tg_bridged_to_peer(tg: int, peer_name: str = "") -> bool:
+    """
+    Checks SQLite bridge_routes to determine if a talkgroup is actively bridged
+    to a peer DMR network or mode. Local traffic stays local unless bridged.
+    """
+    db_path = "/app/data/ninjaradio.db"
+    if not os.path.exists(db_path):
+        return True
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            if peer_name:
+                p_clean = f"%{peer_name.strip().upper()}%"
+                cursor.execute("""
+                    SELECT id FROM bridge_routes 
+                    WHERE is_active = 1 
+                      AND (source_tg = ? OR target_tg = ?)
+                      AND (UPPER(name) LIKE ? OR UPPER(target_mode) LIKE ?)
+                    LIMIT 1
+                """, (tg, tg, p_clean, p_clean))
+                if cursor.fetchone():
+                    return True
+            cursor.execute("""
+                SELECT id FROM bridge_routes 
+                WHERE is_active = 1 
+                  AND (source_tg = ? OR target_tg = ?)
+                LIMIT 1
+            """, (tg, tg))
+            return cursor.fetchone() is not None
+    except Exception:
+        pass
+    return False
+
 DEFAULT_CONFIG = {
     "server_callsign": os.getenv("SERVER_CALLSIGN", "N1NJA"),
     "server_dmr_id": int(os.getenv("SERVER_DMR_ID", 5109999)),
@@ -356,8 +390,8 @@ txPort = {AB_AMBE_RX_PORT}
 rxPort = {AB_AMBE_TX_PORT}
 Slot = {primary_slot}
 slot = {primary_slot}
-ExportTG = {primary_tg}
-exportTG = {primary_tg}
+ExportTG = 0
+exportTG = 0
 hangTimerInFrames = 0
 talkerAlias = %callsign %location %description
 """
@@ -931,8 +965,6 @@ Send={AB_AMBE_RX_PORT}
             pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv)
             self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
             logger.info(f"📋 Sent TLV SET_INFO to Analog_Bridge: {callsign} ({src}) -> TG {tg} Slot {slot}")
-            # Also send explicit tune_remote command so Analog_Bridge switches target TG immediately
-            self.tune_remote(tg, slot)
         except Exception as e:
             logger.debug(f"Failed to send SET_INFO: {e}")
 
@@ -1054,7 +1086,7 @@ Send={AB_AMBE_RX_PORT}
                         hdr_dmr_id = dmr_id if (1000 < dmr_id < 16777215 and dmr_id != (USRP_TYPE_TEXT << 24)) else 0
 
                         client_meta = self.client_metadata.get(addr, {})
-                        if client_meta:
+                        if client_meta and (not hdr_dmr_id or client_meta.get("src") == hdr_dmr_id):
                             target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or 1022057
                             target_call = client_meta.get("callsign", "DVSWITCH")
                             target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
@@ -1073,7 +1105,7 @@ Send={AB_AMBE_RX_PORT}
                         if self.dmr_master_server:
                             self.dmr_master_server.mark_local_transmission(target_dmr_id)
 
-                        if not self.tx_identity_sent or not self.is_transmitting:
+                        if not self.tx_identity_sent or not self.is_transmitting or self.current_tx_tg != target_tg or self.current_tx_dmr_id != target_dmr_id:
                             self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
                             self.tx_identity_sent = True
                             self.is_transmitting = True
@@ -1294,12 +1326,12 @@ Send={AB_AMBE_RX_PORT}
             self.current_rx_active = True
             self.rx_packet_count += 1
 
-            # Forward raw DMRD packet to matching connected upstream peer clients
+            # Forward raw DMRD packet to matching connected upstream peer clients ONLY if bridged in TG Matrix
             raw_packet = traffic.get("raw_packet")
             if raw_packet and self.peer_clients:
                 for peer_key, client in list(self.peer_clients.items()):
                     if client.state == "CONNECTED":
-                        if not client.subscribed_tgs or (self.current_rx_tg in client.subscribed_tgs):
+                        if is_tg_bridged_to_peer(self.current_rx_tg, client.name):
                             client.send_raw_dmrd(raw_packet)
 
             # Dispatch traffic notification to backend for live monitor & web clients
@@ -1393,12 +1425,16 @@ Send={AB_AMBE_RX_PORT}
             if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id):
                 return
 
-            # 2. Forward DMRD frame to our local DMR Master Server
+            # 2. Check TG Matrix bridging: drop incoming peer traffic if route is not active
+            if not is_tg_bridged_to_peer(dst_tg, network_name):
+                return
+
+            # 3. Forward DMRD frame to our local DMR Master Server
             # so all connected local hotspots and MMDVM_Bridge (Web Audio/Mumble) hear it!
             if self.dmr_master_server and raw_packet:
                 self.dmr_master_server.broadcast_dmrd(raw_packet)
 
-            # 3. Last heard & live traffic event to backend
+            # 4. Last heard & live traffic event to backend
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
             traffic_event = {
                 "network": f"Peer: {network_name}",

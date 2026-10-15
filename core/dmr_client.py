@@ -436,7 +436,12 @@ class HomeBrewClient:
         if not self.sock or not self.target_addr or self.state != "CONNECTED":
             return False
         try:
-            self.sock.sendto(raw_data, self.target_addr)
+            if len(raw_data) >= 15:
+                # Stamp the authenticated client repeater ID (bytes 11..14) so remote Master accepts it
+                tx_pkt = raw_data[:11] + struct.pack(">I", self.dmr_id) + raw_data[15:]
+            else:
+                tx_pkt = raw_data
+            self.sock.sendto(tx_pkt, self.target_addr)
             self.packets_tx += 1
             return True
         except Exception as e:
