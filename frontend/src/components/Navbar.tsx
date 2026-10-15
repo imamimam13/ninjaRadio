@@ -9,12 +9,24 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
   const pathname = usePathname();
 
   const navItems = [
-    { href: "/", label: "NOC DASHBOARD", icon: Activity, tag: "LIVE" },
+    { href: "/", label: "NOC", icon: Activity, tag: "LIVE" },
     { href: "/radio", label: "RADIO POCKET", icon: Radio, highlight: true, tag: "PWA" },
+    { href: "/serverdmr", label: "DMR MASTER", icon: Cpu, tag: "62031" },
+    { href: "/dvswitch", label: "DVSWITCH", icon: Terminal, tag: "32345" },
+    { href: "/mumla", label: "MUMLA", icon: Volume2, tag: "VOIP" },
     { href: "/matrix", label: "TG MATRIX", icon: Network },
     { href: "/logbook", label: "QSO LOG", icon: BookOpen },
     { href: "/callbook", label: "CALLBOOK", icon: Users },
-    { href: "/settings", label: "SYS CONFIG", icon: Settings },
+    { href: "/settings", label: "CONFIG", icon: Settings },
+  ];
+
+  const mobileNavItems = [
+    { href: "/", label: "NOC", icon: Activity },
+    { href: "/radio", label: "RADIO", icon: Radio },
+    { href: "/serverdmr", label: "DMR", icon: Cpu },
+    { href: "/dvswitch", label: "DVSWITCH", icon: Terminal },
+    { href: "/mumla", label: "MUMLA", icon: Volume2 },
+    { href: "/settings", label: "CONFIG", icon: Settings },
   ];
 
   return (
@@ -47,14 +59,14 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
                     DV CORE
                   </span>
                   <span className="text-slate-600">•</span>
-                  <span>DMR / YSF / P25 / ASL / CB / MUMBLE</span>
+                  <span>DMR / DVSWITCH / MUMLA / YSF / P25 / ASL</span>
                 </div>
               </div>
             </Link>
           </div>
 
           {/* Desktop Tactical Navigation Links */}
-          <nav className="hidden md:flex items-center gap-1 bg-[#0b121e]/90 p-1 rounded-xl border border-cyan-900/30">
+          <nav className="hidden xl:flex items-center gap-1 bg-[#0b121e]/90 p-1 rounded-xl border border-cyan-900/30">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
@@ -62,7 +74,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`relative flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold tracking-wider transition-all ${
+                  className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold tracking-wider transition-all ${
                     isActive
                       ? item.highlight
                         ? "bg-gradient-to-r from-cyan-500 to-emerald-400 text-slate-950 shadow-[0_0_15px_rgba(6,182,212,0.4)]"
@@ -77,6 +89,28 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
                       {item.tag}
                     </span>
                   )}
+                </Link>
+              );
+            })}
+          </nav>
+
+          {/* Medium Screens Navigation (Scrollable or subset) */}
+          <nav className="hidden md:flex xl:hidden items-center gap-1 bg-[#0b121e]/90 p-1 rounded-xl border border-cyan-900/30 overflow-x-auto max-w-[500px]">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`relative flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider whitespace-nowrap transition-all ${
+                    isActive
+                      ? "bg-cyan-950/70 text-cyan-300 border border-cyan-700/60"
+                      : "text-slate-400 hover:text-cyan-300"
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{item.label}</span>
                 </Link>
               );
             })}
@@ -111,7 +145,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
       {/* Bottom Floating Nav for Small Screen Devices */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#070b12]/95 backdrop-blur-lg border-t border-cyan-900/40 px-2 py-1.5">
         <nav className="flex items-center justify-around">
-          {navItems.map((item) => {
+          {mobileNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
             return (
@@ -125,7 +159,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
                 }`}
               >
                 <Icon className={`w-4 h-4 mb-0.5 ${isActive ? "text-cyan-400 glow-cyan" : "text-slate-400"}`} />
-                <span className="text-[9px]">{item.label.split(" ")[0]}</span>
+                <span className="text-[9px]">{item.label}</span>
               </Link>
             );
           })}

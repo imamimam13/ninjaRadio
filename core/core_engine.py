@@ -1146,6 +1146,128 @@ Send={AB_AMBE_RX_PORT}
         if self.http_session:
             await self.http_session.close()
 
+    def get_peers_status(self) -> List[dict]:
+        mmdvm_running = self.mmdvm_proc is not None and self.mmdvm_proc.poll() is None
+        if not mmdvm_running:
+            try:
+                r = subprocess.run(["pgrep", "-f", "MMDVM_Bridge"], capture_output=True)
+                if r.returncode == 0:
+                    mmdvm_running = True
+            except Exception:
+                pass
+
+        peers_status = []
+        peers = self.config.get("peering", [])
+        for p in peers:
+            p_host = p.get("host", "")
+            p_port = int(p.get("port", 62031))
+            p_name = p.get("name") or p_host
+            is_active = p.get("isActive", True)
+            is_active_master = (p_host.lower().strip() == self.active_peer_host.lower().strip() and p_port == self.active_peer_port)
+
+            if is_active and is_active_master and mmdvm_running:
+                state = "CONNECTED"
+            elif is_active and is_active_master and not mmdvm_running:
+                state = "CONNECTING"
+            elif not is_active:
+                state = "NONAKTIF"
+            else:
+                state = "STANDBY"
+
+            peers_status.append({
+                "name": p_name,
+                "host": p_host,
+                "port": p_port,
+                "dmr_id": p.get("dmr_id") or self.config.get("server_dmr_id", 5109999),
+                "callsign": p.get("callsign") or self.config.get("server_callsign", "N1NJA"),
+                "state": state,
+                "subscribed_tgs": p.get("subscribedTgs", "510"),
+                "packets_rx": getattr(self, "rx_packet_count", 0),
+                "packets_tx": getattr(self, "tx_packet_count", 0),
+                "is_connected": state == "CONNECTED"
+            })
+        return peers_status
+
+    def get_dvswitch_status(self) -> dict:
+        ab_running = self.ab_proc is not None and self.ab_proc.poll() is None
+        if not ab_running:
+            try:
+                r = subprocess.run(["pgrep", "-f", "Analog_Bridge"], capture_output=True)
+                if r.returncode == 0:
+                    ab_running = True
+            except Exception:
+                pass
+
+        vocoder_running = ab_running or (self.md380_proc is not None and self.md380_proc.poll() is None)
+        mmdvm_running = self.mmdvm_proc is not None and self.mmdvm_proc.poll() is None
+        if not mmdvm_running:
+            try:
+                r = subprocess.run(["pgrep", "-f", "MMDVM_Bridge"], capture_output=True)
+                if r.returncode == 0:
+                    mmdvm_running = True
+            except Exception:
+                pass
+
+        now = time.time()
+        usrp_clients = []
+        for (ip, port), seen in self.registered_usrp_clients.items():
+            usrp_clients.append({
+                "ip": ip,
+                "port": port,
+                "type": "DVSwitch Mobile / USRP Client",
+                "last_seen_seconds_ago": round(now - seen, 1),
+                "is_active": (now - seen) < 120
+            })
+
+        return {
+            "online": ab_running and mmdvm_running,
+            "daemons": {
+                "analog_bridge": {
+                    "name": "Analog_Bridge",
+                    "status": "RUNNING" if ab_running else "STOPPED",
+                    "pid": self.ab_proc.pid if self.ab_proc else None,
+                    "description": "AMBE <-> USRP PCM Transcoder (Software OP25/mbelib)"
+                },
+                "mmdvm_bridge": {
+                    "name": "MMDVM_Bridge",
+                    "status": "RUNNING" if mmdvm_running else "STOPPED",
+                    "pid": self.mmdvm_proc.pid if self.mmdvm_proc else None,
+                    "target_master": f"{self.active_peer_host}:{self.active_peer_port}",
+                    "description": "HomeBrew DMR Network Bridge"
+                },
+                "md380_emu": {
+                    "name": "md380-emu",
+                    "status": "RUNNING" if vocoder_running else "STOPPED",
+                    "port": MD380_EMU_PORT,
+                    "description": "AMBE Vocoder Hardware/Software Emulator"
+                }
+            },
+            "ports": {
+                "ambe_rx": AB_AMBE_RX_PORT,
+                "ambe_tx": AB_AMBE_TX_PORT,
+                "usrp_tx": AB_USRP_TX_PORT,
+                "usrp_rx": AB_USRP_RX_PORT,
+                "usrp_gateway": USRP_AUDIO_PORT
+            },
+            "live_carrier": {
+                "is_transmitting": self.is_transmitting,
+                "operator_callsign": self.current_operator_callsign or self.config.get("server_callsign", "N1NJA"),
+                "operator_dmr_id": self.current_operator_dmr_id or self.config.get("server_dmr_id", 5109999),
+                "tx_tg": self.current_tx_tg or self.config.get("default_tg", 510),
+                "tx_slot": self.current_tx_slot or 2,
+                "rx_active": self.current_rx_active,
+                "rx_callsign": self.current_rx_call,
+                "rx_src": self.current_rx_src,
+                "rx_tg": self.current_rx_tg,
+                "rx_slot": self.current_rx_slot
+            },
+            "connected_usrp_clients": usrp_clients,
+            "packets": {
+                "rx_count": self.rx_packet_count,
+                "tx_count": self.tx_packet_count
+            }
+        }
+
 # ----------------- FastAPI Internal Control Server (Port 5000) -----------------
 app = FastAPI(title="NinjaRadio Core Engine Control API")
 engine_mgr = DVSwitchCoreManager()
@@ -1237,6 +1359,33 @@ async def get_core_status():
         },
         "config": engine_mgr.config
     }
+
+@app.get("/api/serverdmr/status")
+async def get_serverdmr_status():
+    if engine_mgr.dmr_master_server:
+        data = engine_mgr.dmr_master_server.get_server_status()
+    else:
+        data = {
+            "online": False,
+            "port": DMR_MASTER_PORT,
+            "protocol": "HomeBrew / MMDVM Protocol v1",
+            "server_callsign": engine_mgr.config.get("server_callsign", "N1NJA"),
+            "server_dmr_id": engine_mgr.config.get("server_dmr_id", 5109999),
+            "uptime": "0s",
+            "uptime_seconds": 0,
+            "connected_hotspots_count": 0,
+            "total_rx_packets": 0,
+            "total_tx_packets": 0,
+            "active_transmission": None,
+            "hotspots": [],
+            "recent_qsos": []
+        }
+    data["upstream_peers"] = engine_mgr.get_peers_status()
+    return data
+
+@app.get("/api/dvswitch/status")
+async def get_dvswitch_status_endpoint():
+    return engine_mgr.get_dvswitch_status()
 
 @app.post("/api/reload")
 async def reload_configuration():

@@ -49,11 +49,19 @@ class HomeBrewMasterServer:
         self.running = False
         self.server_task: Optional[asyncio.Task] = None
         self.watchdog_task: Optional[asyncio.Task] = None
+        self.started_at = time.time()
+        self.total_rx_packets = 0
+        self.total_tx_packets = 0
 
-        # Connected clients: addr -> dict(dmr_id, callsign, state, last_seen, last_ping_tx)
+        # Connected clients: addr -> dict(dmr_id, callsign, software, state, connected_at, last_seen, last_ping_tx, rx_packets, tx_packets, last_tg, last_slot)
         self.clients: Dict[Tuple[str, int], dict] = {}
         # Pending challenges: addr -> (dmr_id, salt, timestamp)
         self.pending_challenges: Dict[Tuple[str, int], Tuple[int, bytes, float]] = {}
+
+        # Live QSO and Last Heard Tracking
+        self.active_stream: Optional[dict] = None
+        self.recent_qsos: List[dict] = []
+        self.max_recent_qsos = 50
 
     async def start(self):
         self.running = True
@@ -155,12 +163,19 @@ class HomeBrewMasterServer:
 
             # Accept if hash matches OR if password is blank
             if client_hash == expected_hash or not self.password:
+                now = time.time()
                 self.clients[addr] = {
                     "dmr_id": dmr_id,
                     "callsign": "HOTSPOT",
+                    "software": "MMDVMHost",
                     "state": "AUTHENTICATED",
-                    "last_seen": time.time(),
-                    "last_ping_tx": time.time(),
+                    "connected_at": now,
+                    "last_seen": now,
+                    "last_ping_tx": now,
+                    "rx_packets": 0,
+                    "tx_packets": 0,
+                    "last_tg": 0,
+                    "last_slot": 2,
                     "ts1_tgs": [],
                     "ts2_tgs": []
                 }
@@ -177,15 +192,27 @@ class HomeBrewMasterServer:
             dmr_id = struct.unpack(">I", data[4:8])[0]
             config_payload = data[8:]
             callsign = config_payload[:8].decode("utf-8", errors="ignore").strip()
+            software_str = "MMDVMHost"
+            if len(config_payload) > 8:
+                try:
+                    # MMDVMHost typically packs version / radio info
+                    extra = config_payload[8:].decode("ascii", errors="ignore").strip()
+                    if extra:
+                        software_str = extra[:30]
+                except Exception:
+                    pass
 
             if addr not in self.clients:
                 self._update_client_seen(dmr_id, addr)
 
             if addr in self.clients:
-                self.clients[addr]["callsign"] = callsign or self.clients[addr]["callsign"]
+                self.clients[addr]["callsign"] = callsign or self.clients[addr].get("callsign", "HOTSPOT")
+                self.clients[addr]["software"] = software_str
                 self.clients[addr]["state"] = "CONNECTED"
                 self.clients[addr]["last_seen"] = time.time()
-                logger.info(f"[DMR-Master] ✓ Hotspot {callsign} ({dmr_id}) fully CONNECTED from {addr}")
+                if "connected_at" not in self.clients[addr]:
+                    self.clients[addr]["connected_at"] = time.time()
+                logger.info(f"[DMR-Master] ✓ Hotspot {callsign} ({dmr_id}) fully CONNECTED from {addr} [{software_str}]")
 
             # Send RPTACK acknowledgment
             self.sock.sendto(RPTACK, addr)
@@ -247,11 +274,21 @@ class HomeBrewMasterServer:
             stream_id = int.from_bytes(data[16:20], "big")
             payload = data[20:]
 
-            # Update client activity
+            now = time.time()
+            self.total_rx_packets += 1
+
+            # Update client activity & packet counts
             if addr in self.clients:
-                self.clients[addr]["last_seen"] = time.time()
+                self.clients[addr]["last_seen"] = now
+                self.clients[addr]["rx_packets"] = self.clients[addr].get("rx_packets", 0) + 1
+                self.clients[addr]["last_tg"] = dst_tg
+                self.clients[addr]["last_slot"] = slot
             else:
                 self._update_client_seen(src_id, addr)
+                if addr in self.clients:
+                    self.clients[addr]["rx_packets"] = self.clients[addr].get("rx_packets", 0) + 1
+                    self.clients[addr]["last_tg"] = dst_tg
+                    self.clients[addr]["last_slot"] = slot
 
             # Broadcast to other connected hotspots and MMDVM_Bridge
             self.broadcast_dmrd(data, exclude_addr=addr)
@@ -265,6 +302,57 @@ class HomeBrewMasterServer:
                     if c.get("dmr_id") == src_id:
                         sender_call = c.get("callsign")
                         break
+            callsign_str = sender_call or f"ID-{src_id}"
+
+            # Track Active QSO stream & Last Heard list
+            if data_type == 0:  # Voice Header
+                self.active_stream = {
+                    "stream_id": stream_id,
+                    "src_id": src_id,
+                    "callsign": callsign_str,
+                    "dst_tg": dst_tg,
+                    "slot": slot,
+                    "call_type": call_type,
+                    "start_time": now,
+                    "last_packet_time": now,
+                    "packets": 1
+                }
+            elif data_type == 1:  # Voice Burst
+                if self.active_stream and self.active_stream.get("stream_id") == stream_id:
+                    self.active_stream["packets"] = self.active_stream.get("packets", 0) + 1
+                    self.active_stream["last_packet_time"] = now
+                else:
+                    self.active_stream = {
+                        "stream_id": stream_id,
+                        "src_id": src_id,
+                        "callsign": callsign_str,
+                        "dst_tg": dst_tg,
+                        "slot": slot,
+                        "call_type": call_type,
+                        "start_time": now,
+                        "last_packet_time": now,
+                        "packets": 1
+                    }
+            elif data_type == 2:  # Voice Terminator
+                if self.active_stream and self.active_stream.get("stream_id") == stream_id:
+                    duration = round(now - self.active_stream.get("start_time", now), 1)
+                    packets = self.active_stream.get("packets", 1) + 1
+                    qso_entry = {
+                        "timestamp": self.active_stream.get("start_time", now),
+                        "end_time": now,
+                        "callsign": self.active_stream.get("callsign", callsign_str),
+                        "src_id": src_id,
+                        "dst_tg": dst_tg,
+                        "slot": slot,
+                        "call_type": call_type,
+                        "duration": max(duration, 0.4),
+                        "packets": packets,
+                        "loss": "0.0%"
+                    }
+                    self.recent_qsos.insert(0, qso_entry)
+                    if len(self.recent_qsos) > self.max_recent_qsos:
+                        self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
+                    self.active_stream = None
 
             # Fire callback to core engine
             if self.on_traffic:
@@ -274,14 +362,14 @@ class HomeBrewMasterServer:
                     "src_id": src_id,
                     "dst_tg": dst_tg,
                     "slot": slot,
-                    "callsign": sender_call or f"ID-{src_id}",
+                    "callsign": callsign_str,
                     "call_type": call_type,
                     "data_type": data_type,
                     "sequence": sequence,
                     "stream_id": stream_id,
                     "payload": payload,
                     "raw_packet": data,
-                    "timestamp": time.time()
+                    "timestamp": now
                 })
             return
 
@@ -289,20 +377,42 @@ class HomeBrewMasterServer:
         """Broadcasts a DMRD voice packet to all connected local hotspots and MMDVM_Bridge."""
         if not self.sock:
             return
+        self.total_tx_packets += 1
         for addr, client in list(self.clients.items()):
             if addr != exclude_addr and client.get("state") in ["CONNECTED", "AUTHENTICATED"]:
                 try:
                     self.sock.sendto(data, addr)
+                    client["tx_packets"] = client.get("tx_packets", 0) + 1
                 except Exception:
                     pass
 
     async def _client_watchdog(self):
-        """Maintains active NAT keepalives and cleans up inactive hotspots."""
+        """Maintains active NAT keepalives, flushes ended QSOs, and cleans up inactive hotspots."""
         while self.running:
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
             now = time.time()
 
-            # 1. Outbound keepalive ping to maintain NAT/firewall pinhole open
+            # 1. Close stalled active stream (>2.5s with no burst)
+            if self.active_stream and (now - self.active_stream.get("last_packet_time", 0) > 2.5):
+                duration = round(now - self.active_stream.get("start_time", now), 1)
+                qso_entry = {
+                    "timestamp": self.active_stream.get("start_time", now),
+                    "end_time": now,
+                    "callsign": self.active_stream.get("callsign", "UNKNOWN"),
+                    "src_id": self.active_stream.get("src_id", 0),
+                    "dst_tg": self.active_stream.get("dst_tg", 0),
+                    "slot": self.active_stream.get("slot", 2),
+                    "call_type": self.active_stream.get("call_type", "group"),
+                    "duration": max(duration, 0.4),
+                    "packets": self.active_stream.get("packets", 1),
+                    "loss": "0.0%"
+                }
+                self.recent_qsos.insert(0, qso_entry)
+                if len(self.recent_qsos) > self.max_recent_qsos:
+                    self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
+                self.active_stream = None
+
+            # 2. Outbound keepalive ping to maintain NAT/firewall pinhole open
             for addr, client in list(self.clients.items()):
                 if client.get("state") in ["CONNECTED", "AUTHENTICATED"]:
                     dmr_id = client.get("dmr_id", 0)
@@ -313,8 +423,67 @@ class HomeBrewMasterServer:
                         except Exception:
                             pass
 
-            # 2. Watchdog timeout: prune clients inactive for > 90 seconds
+            # 3. Watchdog timeout: prune clients inactive for > 90 seconds
             for addr, client in list(self.clients.items()):
                 if now - client.get("last_seen", 0) > 90:
                     logger.info(f"[DMR-Master] Hotspot {client.get('callsign')} ({client.get('dmr_id')}) at {addr} timed out (>90s), removing.")
                     self.clients.pop(addr, None)
+
+    def get_server_status(self) -> dict:
+        """Returns comprehensive telemetry for HBlink / openDMR style monitoring."""
+        now = time.time()
+        hotspots_list = []
+        for addr, c in self.clients.items():
+            conn_time = c.get("connected_at", now)
+            up_sec = int(now - conn_time)
+            up_h, up_rem = divmod(up_sec, 3600)
+            up_m, up_s = divmod(up_rem, 60)
+            uptime_str = f"{up_h}h {up_m}m {up_s}s" if up_h > 0 else f"{up_m}m {up_s}s"
+
+            hotspots_list.append({
+                "ip": addr[0],
+                "port": addr[1],
+                "dmr_id": c.get("dmr_id", 0),
+                "callsign": c.get("callsign", "HOTSPOT"),
+                "software": c.get("software", "MMDVMHost"),
+                "state": c.get("state", "CONNECTED"),
+                "connected_at": conn_time,
+                "uptime": uptime_str,
+                "last_seen_seconds_ago": round(now - c.get("last_seen", now), 1),
+                "rx_packets": c.get("rx_packets", 0),
+                "tx_packets": c.get("tx_packets", 0),
+                "last_tg": c.get("last_tg", 0),
+                "last_slot": c.get("last_slot", 2)
+            })
+
+        active_tx_info = None
+        if self.active_stream:
+            active_tx_info = {
+                "src_id": self.active_stream.get("src_id"),
+                "callsign": self.active_stream.get("callsign"),
+                "dst_tg": self.active_stream.get("dst_tg"),
+                "slot": self.active_stream.get("slot"),
+                "duration": round(now - self.active_stream.get("start_time", now), 1),
+                "packets": self.active_stream.get("packets", 0)
+            }
+
+        up_server = int(now - self.started_at) if self.running else 0
+        s_h, s_rem = divmod(up_server, 3600)
+        s_m, s_s = divmod(s_rem, 60)
+        server_uptime_str = f"{s_h}h {s_m}m {s_s}s"
+
+        return {
+            "online": self.running,
+            "port": self.port,
+            "protocol": "HomeBrew / MMDVM Protocol v1",
+            "server_callsign": self.server_callsign,
+            "server_dmr_id": self.server_dmr_id,
+            "uptime": server_uptime_str,
+            "uptime_seconds": up_server,
+            "connected_hotspots_count": len(self.clients),
+            "total_rx_packets": self.total_rx_packets,
+            "total_tx_packets": self.total_tx_packets,
+            "active_transmission": active_tx_info,
+            "hotspots": hotspots_list,
+            "recent_qsos": self.recent_qsos
+        }
