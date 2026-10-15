@@ -339,7 +339,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                     packet = header + chunk
                     sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
                     try:
-                        sock.sendto(packet, ("bridge-mumble", 12346))
+                        sock.sendto(packet, ("mumble-bridge", 12346))
                     except Exception:
                         pass
         else:
@@ -350,7 +350,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
             packet = header + (b"\x00" * 320)
             sock.sendto(packet, (CORE_USRP_HOST, CORE_USRP_PORT))
             try:
-                sock.sendto(packet, ("bridge-mumble", 12346))
+                sock.sendto(packet, ("mumble-bridge", 12346))
             except Exception:
                 pass
     except Exception:

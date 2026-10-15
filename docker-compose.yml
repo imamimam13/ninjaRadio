@@ -81,7 +81,10 @@ services:
     volumes:
       - ninjaradio_data:/app/data:ro
     networks:
-      - ninjaradio_net
+      ninjaradio_net:
+        aliases:
+          - mumble-bridge
+          - bridge-mumble
 
   # 4. Backend API & Live WebSocket Hub (FastAPI)
   backend:
