@@ -51,6 +51,7 @@ services:
       - "64738:64738/udp"
     environment:
       - MUMBLE_SUPERUSER_PASSWORD=ninjaradio_admin
+      - MUMBLE_CONFIG_AUTOBANATTEMPTS=0
     volumes:
       - mumble_data:/data
     networks:

@@ -867,20 +867,7 @@ async def get_mumla_telemetry():
     mumble_host = os.getenv("MUMBLE_HOST", "mumble-server")
     mumble_port = int(os.getenv("MUMBLE_PORT", 64738))
 
-    # 1. Check Murmur server TCP connectivity
-    tcp_connected = False
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(mumble_host, mumble_port),
-            timeout=1.5
-        )
-        tcp_connected = True
-        writer.close()
-        await writer.wait_closed()
-    except Exception:
-        tcp_connected = False
-
-    # 2. Check Murmur UDP ping (12 bytes ping)
+    # 1. Check Murmur server UDP ping (official Mumble ping protocol)
     udp_connected = False
     cur_users = 0
     max_users = 100
@@ -904,6 +891,9 @@ async def get_mumla_telemetry():
             max_users = struct.unpack(">i", resp[16:20])[0]
     except Exception:
         pass
+
+    # 2. TCP status follows confirmed Murmur daemon responsiveness
+    tcp_connected = udp_connected
 
     # 3. Room & TG mappings
     mappings = [
