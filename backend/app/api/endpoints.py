@@ -901,14 +901,24 @@ async def get_mumla_telemetry():
     except Exception:
         tcp_connected = udp_connected
 
-    # 3. Room & TG mappings
-    mappings = [
+    # 3. Dynamic Room & TG mappings loaded from config.json
+    DEFAULT_MUMBLE_ROOMS = [
         {"channel": "NinjaRadio-Nasional", "tg": 510, "slot": 2, "description": "National DMR Room"},
         {"channel": "NinjaRadio-Nusantara", "tg": 5109, "slot": 2, "description": "Nusantara Wide Room"},
         {"channel": "NinjaRadio-Darurat", "tg": 5108, "slot": 1, "description": "Emergency / SAR Tactical"},
         {"channel": "NinjaRadio-Worldwide", "tg": 91, "slot": 1, "description": "Worldwide DMR TG 91"},
         {"channel": "Echo-Parrot", "tg": 9990, "slot": 2, "description": "Voice Echo Audio Test"}
     ]
+    mappings = DEFAULT_MUMBLE_ROOMS
+    config_path = "/app/data/config.json"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                if "mumble_rooms" in cfg and isinstance(cfg["mumble_rooms"], list) and len(cfg["mumble_rooms"]) > 0:
+                    mappings = cfg["mumble_rooms"]
+        except Exception:
+            pass
 
     return {
         "online": tcp_connected or udp_connected,
@@ -927,6 +937,58 @@ async def get_mumla_telemetry():
             "gateway_port": 12346
         },
         "channels": mappings
+    }
+
+@router.post("/mumla/channels")
+async def save_mumla_channels(payload: dict):
+    """Saves user-defined Mumble channel to DMR talkgroup mappings to /app/data/config.json."""
+    channels = payload.get("channels", [])
+    if not isinstance(channels, list):
+        raise HTTPException(status_code=400, detail="Invalid channels payload")
+
+    cleaned_channels = []
+    for ch in channels:
+        name = str(ch.get("channel", "")).strip().replace(" ", "-")
+        if not name:
+            continue
+        try:
+            tg = int(ch.get("tg", 510))
+            slot = int(ch.get("slot", 2))
+            if slot not in [1, 2]:
+                slot = 2
+            desc = str(ch.get("description", "")).strip()[:80]
+            cleaned_channels.append({
+                "channel": name,
+                "tg": tg,
+                "slot": slot,
+                "description": desc or f"DMR TG {tg} (Slot {slot})"
+            })
+        except (ValueError, TypeError):
+            continue
+
+    if not cleaned_channels:
+        raise HTTPException(status_code=400, detail="No valid channels provided")
+
+    config_path = "/app/data/config.json"
+    data = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    data["mumble_rooms"] = cleaned_channels
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save config: {e}")
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Saved {len(cleaned_channels)} Mumble channels. Bridge bot is synchronizing...",
+        "channels": cleaned_channels
     }
 
 

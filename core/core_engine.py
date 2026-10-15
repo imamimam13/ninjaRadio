@@ -899,12 +899,12 @@ Send={AB_AMBE_RX_PORT}
                         if b"UNREG" in payload:
                             self.registered_usrp_clients.pop(addr, None)
                             self.client_metadata.pop(addr, None)
-                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:UNREG")
+                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:UNREG\x00")
                             logger.info(f"📱 DVSwitch Mobile client UNREGISTERED from {addr}")
                         else:
                             self.registered_usrp_clients[addr] = time.time()
-                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK")
-                            logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({payload.decode('ascii', errors='ignore')})")
+                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
+                            logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({payload.decode('ascii', errors='ignore').strip()})")
                         try:
                             self.usrp_ingress_sock.sendto(reply_pkt, addr)
                         except Exception:
@@ -914,7 +914,7 @@ Send={AB_AMBE_RX_PORT}
                     if payload.startswith(b"PING"):
                         self.registered_usrp_clients[addr] = time.time()
                         try:
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"PONG"), addr)
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"PONG\x00"), addr)
                         except Exception:
                             pass
                         continue
@@ -922,10 +922,34 @@ Send={AB_AMBE_RX_PORT}
                     if payload.startswith(b"INFO:"):
                         self.registered_usrp_clients[addr] = time.time()
                         try:
-                            info_msg = json.dumps({"connected": True, "callsign": self.current_operator_callsign or "N1NJA", "tg": self.current_tx_tg or 1025}).encode("ascii")
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"INFO:" + info_msg), addr)
-                        except Exception:
-                            pass
+                            primary_tg_val = self.current_tx_tg or int(self.config.get("primary_tg", 510990))
+                            info_dict = {
+                                "ab": "Analog_Bridge",
+                                "tlv": {
+                                    "ambe_mode": "DMR",
+                                    "ambe_size": 72,
+                                    "ip": "127.0.0.1",
+                                    "rx_port": 31100,
+                                    "tx_port": 31103
+                                },
+                                "digital": {
+                                    "call": self.current_operator_callsign or "N1NJA",
+                                    "gw": int(self.config.get("server_dmr_id", 5109999)),
+                                    "rpt": int(self.config.get("server_dmr_id", 5109999)),
+                                    "tg": primary_tg_val,
+                                    "ts": self.current_tx_slot or 2,
+                                    "cc": int(self.config.get("color_code", 1))
+                                },
+                                "usrp": {
+                                    "rx_port": USRP_AUDIO_PORT,
+                                    "tx_port": USRP_AUDIO_PORT
+                                },
+                                "last_tune": str(primary_tg_val)
+                            }
+                            info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, info_bytes), addr)
+                        except Exception as ex:
+                            logger.debug(f"INFO reply note: {ex}")
                         continue
 
                     if len(payload) >= 14 and payload[0] == TLV_TAG_SET_INFO:
