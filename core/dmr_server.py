@@ -330,11 +330,11 @@ class HomeBrewMasterServer:
                     self.clients[addr]["last_tg"] = dst_tg
                     self.clients[addr]["last_slot"] = slot
 
-            # Native Parrot (TG 9990 or Private Call 9990)
-            if dst_tg == 9990:
+            # Native Parrot (TG 9990 / 99990 or Private Call 9990 / 99990)
+            if dst_tg in [9990, 99990]:
                 if data_type == 0:  # Voice Header
                     self.parrot_recordings[addr] = [data]
-                    logger.info(f"[DMR-Master] 🦜 Parrot started recording from {addr} (DMR ID: {src_id}, Slot: {slot})")
+                    logger.info(f"[DMR-Master] 🦜 Parrot started recording from {addr} (DMR ID: {src_id}, TG: {dst_tg}, Slot: {slot})")
                 elif data_type == 1:  # Voice Burst
                     if addr not in self.parrot_recordings:
                         self.parrot_recordings[addr] = []
@@ -466,11 +466,11 @@ class HomeBrewMasterServer:
                 echo_dst = caller_id
                 echo_call_type_bit = 0x40
             else:
-                echo_dst = 9990
+                echo_dst = orig_tg
                 echo_call_type_bit = 0x00
 
             slot_bit = 0x80 if slot == 2 else 0x00
-            src_bytes = (9990).to_bytes(3, "big")  # Parrot is sender (ID 9990)
+            src_bytes = orig_tg.to_bytes(3, "big")  # Parrot is sender (ID 9990 or 99990)
             dst_bytes = echo_dst.to_bytes(3, "big")
             repeater_bytes = struct.pack(">I", self.repeater_id)
 
