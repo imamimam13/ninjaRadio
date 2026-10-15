@@ -10,7 +10,7 @@ import subprocess
 import signal
 from typing import Dict, List, Optional
 import aiohttp
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import uvicorn
 from dmr_server import HomeBrewMasterServer
 from dmr_client import HomeBrewClient
@@ -2208,6 +2208,7 @@ async def api_spawn_worker(payload: dict):
         res = await engine_mgr.spawn_bridge_worker(tg=tg, slot=slot, name=name)
         return res
     except Exception as e:
+        logger.error(f"Error spawning worker: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/workers/{worker_id}")
