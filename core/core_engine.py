@@ -1104,7 +1104,7 @@ Send={AB_AMBE_RX_PORT}
                             target_slot = hdr_slot
 
                         if self.dmr_master_server:
-                            self.dmr_master_server.mark_local_transmission(target_dmr_id)
+                            self.dmr_master_server.mark_local_transmission(target_dmr_id, target_tg, target_slot)
 
                         if not self.tx_identity_sent or not self.is_transmitting or self.current_tx_tg != target_tg or self.current_tx_dmr_id != target_dmr_id:
                             self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
@@ -1216,6 +1216,8 @@ Send={AB_AMBE_RX_PORT}
         # Send SET_INFO immediately to inform Analog_Bridge of talker identity
         self.send_set_info_to_ab(target_dmr_id, target_call, tg, slot)
         self.tx_identity_sent = True
+        if self.dmr_master_server:
+            self.dmr_master_server.mark_local_transmission(target_dmr_id, tg, slot)
 
         now = time.time()
         self.last_audio_tx_time = now

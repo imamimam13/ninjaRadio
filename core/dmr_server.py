@@ -86,22 +86,35 @@ class HomeBrewMasterServer:
         self.parrot_recordings: Dict[Tuple[str, int], list] = {}
         self.parrot_tgs: List[int] = [9990, 99990]
 
-        # Loopback suppression: track local transmissions so reflected peer frames are not echoed back
-        self.active_local_txs: Dict[int, float] = {}
+        # Loopback suppression & dynamic talkgroup retargeting for local ingress
+        self.active_local_txs: Dict[int, dict] = {}
 
     def is_local_transmission(self, src_id: int) -> bool:
         """Returns True if the transmission was originated locally within the last 2.5s (Loopback suppression)."""
-        ts = self.active_local_txs.get(src_id)
-        if ts and (time.time() - ts < 2.5):
-            return True
+        entry = self.active_local_txs.get(src_id)
+        if entry:
+            ts = entry["time"] if isinstance(entry, dict) else entry
+            if time.time() - ts < 2.5:
+                return True
         return False
 
-    def mark_local_transmission(self, src_id: int):
-        self.active_local_txs[src_id] = time.time()
+    def mark_local_transmission(self, src_id: int, tg: int = 0, slot: int = 0):
+        self.active_local_txs[src_id] = {
+            "time": time.time(),
+            "tg": tg,
+            "slot": slot
+        }
         now = time.time()
-        for s, t in list(self.active_local_txs.items()):
+        for s, item in list(self.active_local_txs.items()):
+            t = item["time"] if isinstance(item, dict) else item
             if now - t > 10.0:
                 self.active_local_txs.pop(s, None)
+
+    def get_active_local_tx(self, src_id: int) -> Optional[dict]:
+        entry = self.active_local_txs.get(src_id)
+        if isinstance(entry, dict) and (time.time() - entry.get("time", 0) < 3.0):
+            return entry
+        return None
 
     async def start(self):
         self.running = True
@@ -348,6 +361,19 @@ class HomeBrewMasterServer:
             sequence = bits & 0x0F  # 0..5 (Burst A..F)
             stream_id = int.from_bytes(data[16:20], "big")
             payload = data[20:]
+
+            # Retarget packets from local DVSwitch / MMDVM_Bridge (127.0.0.1) to user's intended TG & Slot
+            local_tx = self.get_active_local_tx(src_id)
+            if local_tx and local_tx.get("tg") and addr[0] == "127.0.0.1":
+                intended_tg = int(local_tx["tg"])
+                intended_slot = int(local_tx.get("slot") or slot)
+                if dst_tg != intended_tg or slot != intended_slot:
+                    tg_bytes = struct.pack(">I", intended_tg)[1:]
+                    slot_bit = 0x80 if intended_slot == 2 else 0x00
+                    new_bits = (bits & 0x7F) | slot_bit
+                    data = data[:8] + tg_bytes + data[11:15] + bytes([new_bits]) + data[16:]
+                    dst_tg = intended_tg
+                    slot = intended_slot
 
             now = time.time()
             self.total_rx_packets += 1
