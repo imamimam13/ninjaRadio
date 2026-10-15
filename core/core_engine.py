@@ -1017,9 +1017,21 @@ Send={AB_AMBE_RX_PORT}
                     if payload.startswith(b"PING"):
                         self.registered_usrp_clients[addr] = time.time()
                         try:
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"PONG\x00"), addr)
+                            # Send standard PONG with USRP_TYPE_PING (3)
+                            pong_pkt = b"USRP" + struct.pack(">iiiiiii", seq & 0x7FFFFFFF, 0, 0, 0, 3 << 24, 0, 0) + b"PONG\x00"
+                            self.usrp_ingress_sock.sendto(pong_pkt, addr)
                         except Exception:
                             pass
+                        continue
+
+                    if payload.startswith(b"MODES:"):
+                        self.registered_usrp_clients[addr] = time.time()
+                        try:
+                            modes_reply = b'MODES:["DMR", "DSTAR", "NXDN", "P25", "YSF"]\x00'
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, modes_reply), addr)
+                            logger.info(f"✓ Replied MODES to DVSwitch client at {addr}")
+                        except Exception as ex:
+                            logger.debug(f"MODES reply note: {ex}")
                         continue
 
                     if payload.startswith(b"INFO:"):
@@ -1054,6 +1066,39 @@ Send={AB_AMBE_RX_PORT}
                         except Exception as ex:
                             logger.debug(f"INFO reply note: {ex}")
                         continue
+
+                    # Handle DTMF dialing / Talkgroup tuning from DVSwitch Mobile
+                    # Examples from DVSwitch Mobile:
+                    # - User enters "1025" and taps Send: packet_type == 1 (USRP_TYPE_DTMF), payload == b"1025\x00"
+                    # - Mode selection: b"*DMR\x00"
+                    # - Keypad tone strings: b"*1025#\x00"
+                    if packet_type == 1 or (is_control_pkt and len(payload) > 0 and payload[0] not in [TLV_TAG_SET_INFO, 5, 3] and not payload.startswith(b"REG:") and not payload.startswith(b"PING") and not payload.startswith(b"INFO:") and not payload.startswith(b"MODES:")):
+                        text_clean = payload.split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                        if text_clean:
+                            if text_clean.isdigit():
+                                dialed_tg = int(text_clean)
+                                if addr not in self.client_metadata:
+                                    self.client_metadata[addr] = {}
+                                self.client_metadata[addr]["tg"] = dialed_tg
+                                logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {dialed_tg} via DTMF/Send ('{text_clean}')")
+                                try:
+                                    reply = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, f"TG:{dialed_tg}\x00".encode("ascii"))
+                                    self.usrp_ingress_sock.sendto(reply, addr)
+                                except Exception:
+                                    pass
+                                continue
+                            elif text_clean.startswith("*"):
+                                digits = "".join([c for c in text_clean if c.isdigit()])
+                                if digits:
+                                    dialed_tg = int(digits)
+                                    if addr not in self.client_metadata:
+                                        self.client_metadata[addr] = {}
+                                    self.client_metadata[addr]["tg"] = dialed_tg
+                                    logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {dialed_tg} via DTMF *{digits}")
+                                    continue
+                                elif text_clean.upper() in ["*DMR", "*YSF", "*DSTAR", "*P25"]:
+                                    logger.info(f"📱 DVSwitch Mobile ({addr}) mode selection: {text_clean}")
+                                    continue
 
                     # Handle remote talkgroup tuning / commands from DVSwitch Mobile
                     # Supported: TLV Tag 5 (TLV_TAG_REMOTE_CMD), TLV Tag 3 (TLV_TAG_TG_TUNE), or ASCII (txTg=... or *<tg>)
