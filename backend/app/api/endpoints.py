@@ -660,15 +660,36 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
 
 CONFIG_FILE = "/app/data/config.json"
 
+DEFAULT_MUMBLE_ROOMS = [
+    {"id": "room_1", "name": "NinjaRadio-Nasional", "channel": "NinjaRadio-Nasional", "targetTg": 510, "tg": 510, "slot": 2, "description": "DMR TG 510 Nasional Indonesia", "isActive": True},
+    {"id": "room_2", "name": "NinjaRadio-Nusantara", "channel": "NinjaRadio-Nusantara", "targetTg": 5109, "tg": 5109, "slot": 2, "description": "DMR TG 5109 Komunitas & RAPI", "isActive": True},
+    {"id": "room_3", "name": "Echo-Parrot", "channel": "Echo-Parrot", "targetTg": 9990, "tg": 9990, "slot": 2, "description": "DMR TG 9990 Parrot Audio Echo Test", "isActive": True},
+    {"id": "room_4", "name": "NinjaRadio-Darurat", "channel": "NinjaRadio-Darurat", "targetTg": 5108, "tg": 5108, "slot": 1, "description": "DMR TG 5108 Bencana Alam & SAR Rescue", "isActive": True},
+    {"id": "room_5", "name": "NinjaRadio-Worldwide", "channel": "NinjaRadio-Worldwide", "targetTg": 91, "tg": 91, "slot": 1, "description": "DMR TG 91 BrandMeister Global Worldwide", "isActive": True},
+    {"id": "room_6", "name": "TG-5155", "channel": "TG-5155", "targetTg": 5155, "tg": 5155, "slot": 1, "description": "DMR TG 5155 Room", "isActive": True},
+    {"id": "room_7", "name": "NINJA-BRIDI", "channel": "NINJA-BRIDI", "targetTg": 1025, "tg": 1025, "slot": 2, "description": "Mumble Room Bridge", "isActive": True}
+]
+
+DEFAULT_MUMBLE_BOTS = [
+    {"name": "NinjaBot-Nasional", "channel": "NinjaRadio-Nasional", "tg": 510, "slot": 2, "status": "STATIONED"},
+    {"name": "NinjaBot-Nusantara", "channel": "NinjaRadio-Nusantara", "tg": 5109, "slot": 2, "status": "STATIONED"},
+    {"name": "NinjaBot-Echo-Parrot", "channel": "Echo-Parrot", "tg": 9990, "slot": 2, "status": "STATIONED"},
+    {"name": "NinjaBot-Darurat", "channel": "NinjaRadio-Darurat", "tg": 5108, "slot": 1, "status": "STATIONED"},
+    {"name": "NinjaBot-Worldwide", "channel": "NinjaRadio-Worldwide", "tg": 91, "slot": 1, "status": "STATIONED"},
+    {"name": "NinjaBot-TG-5155", "channel": "TG-5155", "tg": 5155, "slot": 1, "status": "STATIONED"},
+    {"name": "Ninja-BRIDI-bot", "channel": "NINJA-BRIDI", "tg": 1025, "slot": 2, "status": "STATIONED"}
+]
+
 def read_config_file() -> dict:
     import json
     import os
+    cfg = {}
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                cfg = json.load(f)
         except Exception:
-            pass
+            cfg = {}
     
     # Defaults
     default_cfg = {
@@ -684,9 +705,16 @@ def read_config_file() -> dict:
         "hotspot_port": settings.DMR_MASTER_PORT,
         "hotspot_password": "ninjaradio_pass",
         "max_hotspots": 128,
-        "peering": []
+        "parrot_tgs": [9990, 99990],
+        "parrot_delay": 1.2,
+        "peering": [],
+        "mumble_rooms": DEFAULT_MUMBLE_ROOMS,
+        "mumble_bots": DEFAULT_MUMBLE_BOTS
     }
-    return default_cfg
+    for k, v in default_cfg.items():
+        if k not in cfg:
+            cfg[k] = v
+    return cfg
 
 @router.get("/config")
 async def get_system_config():
@@ -711,6 +739,11 @@ async def get_system_config():
 async def save_system_config(config: dict):
     import json
     import os
+    existing = read_config_file()
+    for k in ["mumble_rooms", "mumble_bots", "parrot_tgs", "parrot_delay", "peering"]:
+        if (k not in config or not config[k]) and k in existing and existing[k]:
+            config[k] = existing[k]
+
     # Normalize mumble_rooms keys (support both name/targetTg and channel/tg)
     if "mumble_rooms" in config and isinstance(config["mumble_rooms"], list):
         for r in config["mumble_rooms"]:
