@@ -64,6 +64,7 @@ def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
     if len(payload) < 2 + length or length < 12:
         return None
     body = payload[2:2 + length]
+    logger.info(f"🔍 [PARSE-SET-INFO] body len={len(body)}, hex={body.hex()}")
     slot = body[10]
     if slot not in (1, 2):
         slot = 2
@@ -992,6 +993,9 @@ Send={AB_AMBE_RX_PORT}
                     payload = data[32:]
                     packet_type = (dmr_id >> 24) & 0xFF
                     is_control_pkt = (key_flag == 0) or (packet_type in [USRP_TYPE_TEXT, 4])
+
+                    if is_control_pkt or key_flag == 0 or len(payload) != 320:
+                        logger.info(f"🔍 [USRP-RAW] from {addr}: key={key_flag}, type={packet_type}, tg={tg}, dmr_id={dmr_id}, slot={slot}, len={len(payload)}, hex={payload[:64].hex()}")
 
                     # 1. Handle DVSwitch USRP TEXT / Control packets (Registration, Ping, Info, Remote Commands, TLV SET_INFO)
                     if payload.startswith(b"REG:"):
