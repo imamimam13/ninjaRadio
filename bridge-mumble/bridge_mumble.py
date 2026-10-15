@@ -121,6 +121,31 @@ def ptt_watchdog_loop(usrp_sock):
                     pass
                 active_mumble_tx = None
 
+def ensure_channels_created():
+    """Connects as SuperUser to create permanent channels in Murmur if not present."""
+    import pymumble_py3 as pymumble
+    superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
+    logger.info("Initializing Murmur channels as SuperUser...")
+    try:
+        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
+        su.start()
+        su.is_ready()
+        time.sleep(1.0)
+        for room_name, tg_val in ROOM_MAPPINGS.items():
+            ch = su.channels.find_by_name(room_name)
+            if not ch:
+                try:
+                    su.channels.new_channel(0, room_name, temporary=False)
+                    logger.info(f"✓ SuperUser created Mumble Room: '{room_name}' (TG {tg_val})")
+                except Exception as ce:
+                    logger.warning(f"Could not create channel '{room_name}': {ce}")
+            else:
+                logger.info(f"✓ Channel '{room_name}' already exists.")
+        su.stop()
+        time.sleep(1.0)
+    except Exception as e:
+        logger.warning(f"SuperUser channel initialization warning: {e}")
+
 def main():
     global ROOM_MAPPINGS, last_mumble_tx, active_mumble_tx, tx_seq
     logger.info("==================================================")
@@ -134,6 +159,9 @@ def main():
     for room_name, tg_val in ROOM_MAPPINGS.items():
         logger.info(f"  • Room '{room_name}' <---> DMR TG {tg_val}")
 
+    # 1. Bootstrap all configured rooms in Murmur
+    ensure_channels_created()
+
     usrp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     watchdog = threading.Thread(target=ptt_watchdog_loop, args=(usrp_sock,), daemon=True)
     watchdog.start()
@@ -141,7 +169,7 @@ def main():
     mumble = None
     try:
         import pymumble_py3 as pymumble
-        from pymumble_py3.callbacks import PyMumbleCallback
+        import pymumble_py3.constants as mumble_constants
 
         mumble = pymumble.Mumble(MUMBLE_HOST, MUMBLE_USER, port=MUMBLE_PORT, password=MUMBLE_PASSWORD)
         mumble.set_receive_sound(True)
@@ -191,22 +219,10 @@ def main():
             except Exception as ex:
                 logger.debug(f"Error streaming sound chunk: {ex}")
 
-        mumble.callbacks.set_callback(PyMumbleCallback.SOUND_RECEIVED, sound_received_handler)
+        mumble.callbacks.set_callback(mumble_constants.PYMUMBLE_CLBK_SOUNDRECEIVED, sound_received_handler)
         mumble.start()
         mumble.is_ready()
         logger.info("✓ Successfully connected to Mumble Server!")
-
-        # Initialize and create channels
-        for room_name, tg_val in ROOM_MAPPINGS.items():
-            ch = mumble.channels.find_by_name(room_name)
-            if not ch:
-                try:
-                    mumble.channels.new_channel(0, room_name, temporary=False)
-                    logger.info(f"✓ Created Mumble Channel: {room_name} (TG {tg_val})")
-                except Exception as ce:
-                    logger.debug(f"Channel create notice: {ce}")
-            else:
-                logger.info(f"✓ Found Mumble Channel: {room_name} (TG {tg_val})")
 
         first_ch_name = list(ROOM_MAPPINGS.keys())[0]
         channel = mumble.channels.find_by_name(first_ch_name)

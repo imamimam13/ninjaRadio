@@ -893,7 +893,19 @@ Send={AB_AMBE_RX_PORT}
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                     pcm_payload = data[32:]
                     if key_flag == 0:
-                        self.stop_carrier_tx(tg, slot, dmr_id)
+                        if self.is_transmitting or self.tx_identity_sent:
+                            self.stop_carrier_tx(tg, slot, dmr_id)
+                            asyncio.create_task(self.dispatch_event_to_backend({
+                                "network": "DVSwitch Mobile / USRP (32345)",
+                                "host": f"{addr[0]}:{addr[1]}",
+                                "src_id": dmr_id or getattr(self, "current_tx_dmr_id", 0),
+                                "dst_tg": tg or getattr(self, "current_tx_tg", 0),
+                                "slot": slot or getattr(self, "current_tx_slot", 2),
+                                "callsign": self.current_operator_callsign or "BD62BOT",
+                                "is_tx": False,
+                                "is_transmitting": False,
+                                "data_type": 2
+                            }))
                         # Send unkey pong reply from 32345 to DVSwitch Mobile / USRP client
                         try:
                             ack_pkt = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
@@ -906,12 +918,25 @@ Send={AB_AMBE_RX_PORT}
                         target_tg = tg if tg > 0 else int(self.config.get("primary_tg", 1025))
                         target_slot = slot if slot in [1, 2] else 2
 
-                        if not self.tx_identity_sent:
+                        if not self.tx_identity_sent or not self.is_transmitting:
                             self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
                             self.tx_identity_sent = True
+                            self.is_transmitting = True
                             self.current_tx_tg = target_tg
                             self.current_tx_slot = target_slot
                             self.current_tx_dmr_id = target_dmr_id
+                            logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot})")
+                            asyncio.create_task(self.dispatch_event_to_backend({
+                                "network": "DVSwitch Mobile / USRP (32345)",
+                                "host": f"{addr[0]}:{addr[1]}",
+                                "src_id": target_dmr_id,
+                                "dst_tg": target_tg,
+                                "slot": target_slot,
+                                "callsign": target_call,
+                                "is_tx": True,
+                                "is_transmitting": True,
+                                "data_type": 1
+                            }))
 
                         self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                         std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, pcm_payload)
