@@ -174,6 +174,7 @@ class DVSwitchCoreManager:
         self.current_tx_slot = 2
         self.current_tx_dmr_id = 0
         self.last_rx_src = 0
+        self.active_tx_client_addr = None
 
     def load_config(self) -> Dict:
         if os.path.exists(CONFIG_PATH):
@@ -615,6 +616,28 @@ Send={AB_AMBE_RX_PORT}
         # 4. DMR Metadata Monitor
         asyncio.create_task(self.run_dvswitch_metadata_monitor())
 
+        # 5. PTT Carrier Watchdog (Auto-unkeys carrier if audio stream drops/pauses for >0.6s)
+        asyncio.create_task(self.run_ptt_carrier_watchdog())
+
+    async def run_ptt_carrier_watchdog(self):
+        """Monitors active PTT carrier and auto-unkeys if no audio frame arrives for >0.6s (prevents stuck TX/loops)."""
+        while self.running:
+            await asyncio.sleep(0.1)
+            if self.is_transmitting and (time.time() - self.last_audio_tx_time > 0.6):
+                logger.info(f"[PTT-Watchdog] ⏹️ Audio silence detected (>0.6s). Auto-releasing carrier PTT.")
+                self.stop_carrier_tx()
+                asyncio.create_task(self.dispatch_event_to_backend({
+                    "network": "DVSwitch Mobile / USRP (32345)",
+                    "host": "auto-watchdog",
+                    "src_id": self.current_tx_dmr_id or 1022057,
+                    "dst_tg": self.current_tx_tg or 510,
+                    "slot": self.current_tx_slot or 2,
+                    "callsign": self.current_operator_callsign or "N1NJA",
+                    "is_tx": False,
+                    "is_transmitting": False,
+                    "data_type": 2
+                }))
+
     async def run_process_watchdog(self):
         """Monitors DVSwitch daemons and restarts them if they terminate unexpectedly."""
         while self.running:
@@ -1025,6 +1048,7 @@ Send={AB_AMBE_RX_PORT}
                             self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
                             self.tx_identity_sent = True
                             self.is_transmitting = True
+                            self.active_tx_client_addr = addr
                             self.current_tx_tg = target_tg
                             self.current_tx_slot = target_slot
                             self.current_tx_dmr_id = target_dmr_id
@@ -1212,6 +1236,7 @@ Send={AB_AMBE_RX_PORT}
             return
         self.is_transmitting = False
         self.tx_identity_sent = False
+        self.active_tx_client_addr = None
         target_tg = tg or getattr(self, "current_tx_tg", 0)
         target_slot = slot or getattr(self, "current_tx_slot", 2)
         target_dmr_id = dmr_id or getattr(self, "current_tx_dmr_id", 0)
@@ -1343,6 +1368,7 @@ Send={AB_AMBE_RX_PORT}
             call = meta.get("callsign", "")
             sid = meta.get("src", 0)
             tg = meta.get("tg", 0)
+            is_client_tx = bool(self.is_transmitting and self.active_tx_client_addr == (ip, port))
             usrp_clients.append({
                 "ip": ip,
                 "port": port,
@@ -1351,7 +1377,8 @@ Send={AB_AMBE_RX_PORT}
                 "dmr_id": sid,
                 "tg": tg,
                 "last_seen_seconds_ago": round(now - seen, 1),
-                "is_active": (now - seen) < 120
+                "is_active": (now - seen) < 120,
+                "is_transmitting": is_client_tx
             })
 
         return {
