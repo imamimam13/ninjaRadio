@@ -711,6 +711,38 @@ async def get_system_config():
 async def save_system_config(config: dict):
     import json
     import os
+    # Normalize mumble_rooms keys (support both name/targetTg and channel/tg)
+    if "mumble_rooms" in config and isinstance(config["mumble_rooms"], list):
+        for r in config["mumble_rooms"]:
+            ch_name = r.get("name") or r.get("channel")
+            ch_tg = r.get("targetTg") if r.get("targetTg") is not None else r.get("tg")
+            if ch_name:
+                r["name"] = ch_name
+                r["channel"] = ch_name
+            if ch_tg is not None:
+                r["targetTg"] = ch_tg
+                r["tg"] = ch_tg
+
+    # Also ensure any channel assigned to mumble_bots exists in mumble_rooms
+    if "mumble_bots" in config and isinstance(config["mumble_bots"], list):
+        rooms = config.setdefault("mumble_rooms", [])
+        existing_names = set(r.get("name") for r in rooms if r.get("name"))
+        for b in config["mumble_bots"]:
+            b_ch = b.get("channel")
+            b_tg = b.get("tg", 510)
+            if b_ch and b_ch not in existing_names:
+                rooms.append({
+                    "id": f"room_{b_ch}",
+                    "name": b_ch,
+                    "channel": b_ch,
+                    "targetTg": b_tg,
+                    "tg": b_tg,
+                    "slot": b.get("slot", 2),
+                    "description": f"DMR TG {b_tg}",
+                    "isActive": True
+                })
+                existing_names.add(b_ch)
+
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
@@ -948,20 +980,24 @@ async def save_mumla_channels(payload: dict):
 
     cleaned_channels = []
     for ch in channels:
-        name = str(ch.get("channel", "")).strip().replace(" ", "-")
+        name = str(ch.get("name") or ch.get("channel") or "").strip().replace(" ", "-")
         if not name:
             continue
         try:
-            tg = int(ch.get("tg", 510))
+            tg = int(ch.get("targetTg") if ch.get("targetTg") is not None else ch.get("tg", 510))
             slot = int(ch.get("slot", 2))
             if slot not in [1, 2]:
                 slot = 2
             desc = str(ch.get("description", "")).strip()[:80]
             cleaned_channels.append({
+                "id": ch.get("id") or f"room_{name}",
+                "name": name,
                 "channel": name,
+                "targetTg": tg,
                 "tg": tg,
                 "slot": slot,
-                "description": desc or f"DMR TG {tg} (Slot {slot})"
+                "description": desc or f"DMR TG {tg} (Slot {slot})",
+                "isActive": True
             })
         except (ValueError, TypeError):
             continue
@@ -1056,6 +1092,22 @@ async def create_or_update_bot(payload: dict):
         bots[existing_idx] = bot_entry
     else:
         bots.append(bot_entry)
+
+    # Ensure this bot's channel also exists in mumble_rooms so Murmur creates it
+    rooms = list(data.get("mumble_rooms", []))
+    room_exists = any((r.get("name") == channel or r.get("channel") == channel) for r in rooms)
+    if not room_exists:
+        rooms.append({
+            "id": f"room_{channel}",
+            "name": channel,
+            "channel": channel,
+            "targetTg": tg,
+            "tg": tg,
+            "slot": slot,
+            "description": f"DMR TG {tg} (Slot {slot})",
+            "isActive": True
+        })
+        data["mumble_rooms"] = rooms
 
     data["mumble_bots"] = bots
     try:

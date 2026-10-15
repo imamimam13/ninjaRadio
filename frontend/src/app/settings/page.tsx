@@ -423,10 +423,14 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channels: updated.map(r => ({
+            id: r.id,
+            name: r.name,
             channel: r.name,
+            targetTg: r.targetTg,
             tg: r.targetTg,
             slot: 2,
-            description: r.description
+            description: r.description,
+            isActive: r.isActive
           }))
         })
       });
