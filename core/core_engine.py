@@ -1110,6 +1110,11 @@ Send={AB_AMBE_RX_PORT}
         """Re-reads config.json, updates INI files, and restarts Analog_Bridge & MMDVM_Bridge."""
         logger.info("Reconfiguring DVSwitch stack with new settings...")
         self.load_config()
+        if self.dmr_master_server:
+            self.dmr_master_server.server_callsign = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
+            self.dmr_master_server.server_dmr_id = int(self.config.get("server_dmr_id", 5109999))
+            if "parrot_tgs" in self.config and isinstance(self.config["parrot_tgs"], list):
+                self.dmr_master_server.parrot_tgs = [int(x) for x in self.config["parrot_tgs"]]
         self.stop_bridge_daemons()
         self.generate_configs()
         time.sleep(0.3)

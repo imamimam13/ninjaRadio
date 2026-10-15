@@ -65,8 +65,9 @@ class HomeBrewMasterServer:
         self.recent_qsos: List[dict] = []
         self.max_recent_qsos = 50
 
-        # Native Parrot / Audio Echo Service (TG 9990)
+        # Native Parrot / Audio Echo Service (TG 9990 & 99990)
         self.parrot_recordings: Dict[Tuple[str, int], list] = {}
+        self.parrot_tgs: List[int] = [9990, 99990]
 
     async def start(self):
         self.running = True
@@ -330,8 +331,8 @@ class HomeBrewMasterServer:
                     self.clients[addr]["last_tg"] = dst_tg
                     self.clients[addr]["last_slot"] = slot
 
-            # Native Parrot (TG 9990 / 99990 or Private Call 9990 / 99990)
-            if dst_tg in [9990, 99990]:
+            # Native Parrot (Configured Parrot Talkgroups or Private Calls)
+            if dst_tg in getattr(self, "parrot_tgs", [9990, 99990]):
                 if data_type == 0:  # Voice Header
                     self.parrot_recordings[addr] = [data]
                     logger.info(f"[DMR-Master] 🦜 Parrot started recording from {addr} (DMR ID: {src_id}, TG: {dst_tg}, Slot: {slot})")
