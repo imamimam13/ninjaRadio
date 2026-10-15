@@ -392,12 +392,18 @@ export default function DvSwitchPage() {
                       <td className="p-3 text-right">
                         <span
                           className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            client.is_active
-                              ? "bg-emerald-950 text-emerald-400 border border-emerald-800 animate-pulse"
+                            (client as any).is_transmitting
+                              ? "bg-rose-950 text-rose-400 border border-rose-800 animate-pulse"
+                              : client.is_active
+                              ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
                               : "bg-slate-900 text-slate-500 border border-slate-800"
                           }`}
                         >
-                          {client.is_active ? "TRANSMITTING / ACTIVE" : "IDLE"}
+                          {(client as any).is_transmitting
+                            ? "TRANSMITTING"
+                            : client.is_active
+                            ? "CONNECTED / ONLINE"
+                            : "IDLE / STANDBY"}
                         </span>
                       </td>
                     </tr>
