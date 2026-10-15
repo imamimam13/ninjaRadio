@@ -203,10 +203,12 @@ def resolve_mumble_identity(username: str) -> tuple:
 class MumbleGatewayBot:
     """Dedicated bot instance for a single Mumble channel & DMR Talkgroup pair."""
 
-    def __init__(self, room_name: str, tg: int, usrp_sock: socket.socket, bot_user: str = None):
+    def __init__(self, room_name: str, tg: int, usrp_sock: socket.socket = None, bot_user: str = None, slot: int = None):
         self.room_name = room_name
         self.tg = tg
-        self.usrp_sock = usrp_sock
+        self.slot = slot or (1 if tg in [510, 5108, 91, 1023] else 2)
+        # Dedicated socket per bot so separate channels and talkgroups have distinct UDP ports
+        self.usrp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         if bot_user:
             self.bot_user = bot_user[:25]
         else:
@@ -216,11 +218,15 @@ class MumbleGatewayBot:
         self.running = False
         self.thread = None
 
-    def move_to_channel(self, target_channel_name: str, new_tg: int = None):
+    def move_to_channel(self, target_channel_name: str, new_tg: int = None, new_slot: int = None):
         """Moves this bot into another channel in real-time without reconnection."""
         self.room_name = target_channel_name
         if new_tg is not None:
             self.tg = new_tg
+        if new_slot is not None:
+            self.slot = new_slot
+        elif new_tg is not None:
+            self.slot = (1 if new_tg in [510, 5108, 91, 1023] else 2)
         if self.mumble and self.mumble.is_alive():
             try:
                 target_ch = None
@@ -306,17 +312,17 @@ class MumbleGatewayBot:
 
                         # Dispatch binary TLV SET_INFO at start of transmission to carry over callsign and DMR ID
                         if not active_mumble_tx:
-                            tlv = build_set_info_tlv(user_dmr_id, 5109999, self.tg, 2, 1, user_callsign)
-                            tlv_hdr = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 0, self.tg, user_dmr_id, 2, 0)
+                            tlv = build_set_info_tlv(user_dmr_id, 5109999, self.tg, self.slot, 1, user_callsign)
+                            tlv_hdr = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 0, self.tg, user_dmr_id, self.slot, 0)
                             self.usrp_sock.sendto(tlv_hdr + tlv, (USRP_HOST, USRP_PORT))
-                            logger.info(f"[MUMBLE-TX] 🔴 PTT TRANSMIT from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg}")
+                            logger.info(f"[MUMBLE-TX] 🔴 PTT TRANSMIT from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg} Slot {self.slot}")
 
                         # Send voice frame (key_flag = 1)
-                        header = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 1, self.tg, user_dmr_id, 1, 0)
+                        header = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 1, self.tg, user_dmr_id, self.slot, 0)
                         self.usrp_sock.sendto(header + pcm_8k, (USRP_HOST, USRP_PORT))
 
                         last_mumble_tx = time.time()
-                        active_mumble_tx = (user, self.tg, user_dmr_id, user_callsign, last_mumble_tx)
+                        active_mumble_tx = (user, self.tg, self.slot, user_dmr_id, user_callsign, last_mumble_tx, self.usrp_sock)
                     except Exception as ex:
                         logger.debug(f"[{self.bot_user}] Error streaming sound chunk: {ex}")
 
@@ -424,13 +430,14 @@ def ptt_watchdog_loop(usrp_sock):
     while IS_BRIDGING:
         time.sleep(0.05)
         if active_mumble_tx:
-            user_info, tg, dmr_id, callsign, last_seen = active_mumble_tx
+            user_info, tg, slot, dmr_id, callsign, last_seen, bot_sock = active_mumble_tx
             if time.time() - last_seen > 0.35:
                 tx_seq = (tx_seq + 1) % 65535
-                header = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 0, tg, dmr_id, 1, 0)
+                header = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 0, tg, dmr_id, slot, 0)
                 try:
-                    usrp_sock.sendto(header, (USRP_HOST, USRP_PORT))
-                    logger.info(f"[MUMBLE-TX] ⏹️ PTT RELEASE from {callsign} ({dmr_id}) -> TG {tg}")
+                    target_sock = bot_sock or usrp_sock
+                    target_sock.sendto(header, (USRP_HOST, USRP_PORT))
+                    logger.info(f"[MUMBLE-TX] ⏹️ PTT RELEASE from {callsign} ({dmr_id}) -> TG {tg} Slot {slot}")
                 except Exception:
                     pass
                 active_mumble_tx = None
@@ -450,11 +457,12 @@ def load_configured_bots():
     bots = []
     for room_name, tg_val in ROOM_MAPPINGS.items():
         clean_name = room_name.replace("NinjaRadio-", "").replace(" ", "-")
+        fallback_slot = 1 if tg_val in [510, 5108, 91, 1023] else 2
         bots.append({
             "name": f"NinjaBot-{clean_name}",
             "channel": room_name,
             "tg": tg_val,
-            "slot": 2
+            "slot": fallback_slot
         })
     return bots
 
@@ -468,19 +476,20 @@ def sync_gateway_bots(usrp_sock):
         b_name = b.get("name")
         b_channel = b.get("channel")
         b_tg = int(b.get("tg", 510))
+        b_slot = int(b.get("slot") or (1 if b_tg in [510, 5108, 91, 1023] else 2))
         if not b_name or not b_channel:
             continue
         configured_names.add(b_name)
 
         if b_name not in GATEWAY_POOL:
-            bot = MumbleGatewayBot(b_channel, b_tg, usrp_sock, bot_user=b_name)
+            bot = MumbleGatewayBot(b_channel, b_tg, usrp_sock, bot_user=b_name, slot=b_slot)
             GATEWAY_POOL[b_name] = bot
             bot.start()
             time.sleep(0.4)
         else:
             bot = GATEWAY_POOL[b_name]
-            if bot.room_name != b_channel or bot.tg != b_tg:
-                bot.move_to_channel(b_channel, b_tg)
+            if bot.room_name != b_channel or bot.tg != b_tg or bot.slot != b_slot:
+                bot.move_to_channel(b_channel, b_tg, b_slot)
 
     for b_name in list(GATEWAY_POOL.keys()):
         if b_name not in configured_names:
