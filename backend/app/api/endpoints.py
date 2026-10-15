@@ -867,33 +867,39 @@ async def get_mumla_telemetry():
     mumble_host = os.getenv("MUMBLE_HOST", "mumble-server")
     mumble_port = int(os.getenv("MUMBLE_PORT", 64738))
 
-    # 1. Check Murmur server UDP ping (official Mumble ping protocol)
-    udp_connected = False
-    cur_users = 0
-    max_users = 100
-    server_version = "1.5.x"
+    def _probe_murmur_udp():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.8)
+            s.sendto(struct.pack(">iQ", 0, int(time.time() * 1000)), (mumble_host, mumble_port))
+            data, _ = s.recvfrom(1024)
+            s.close()
+            return data
+        except Exception:
+            return None
+
+    resp = await asyncio.to_thread(_probe_murmur_udp)
+    if resp and len(resp) >= 24:
+        udp_connected = True
+        v_major = resp[1]
+        v_minor = resp[2]
+        v_patch = resp[3]
+        server_version = f"{v_major}.{v_minor}.{v_patch}"
+        cur_users = struct.unpack(">i", resp[12:16])[0]
+        max_users = struct.unpack(">i", resp[16:20])[0]
+
+    # 2. Check Murmur server TCP connectivity
+    tcp_connected = False
     try:
-        loop = asyncio.get_running_loop()
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.setblocking(False)
-        ping_data = struct.pack(">iQ", 0, int(time.time() * 1000))
-        s.sendto(ping_data, (mumble_host, mumble_port))
-
-        resp, _ = await asyncio.wait_for(loop.sock_recvfrom(s, 1024), timeout=1.0)
-        s.close()
-        if len(resp) >= 24:
-            udp_connected = True
-            v_major = resp[1]
-            v_minor = resp[2]
-            v_patch = resp[3]
-            server_version = f"{v_major}.{v_minor}.{v_patch}"
-            cur_users = struct.unpack(">i", resp[12:16])[0]
-            max_users = struct.unpack(">i", resp[16:20])[0]
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(mumble_host, mumble_port),
+            timeout=1.0
+        )
+        tcp_connected = True
+        writer.close()
+        await writer.wait_closed()
     except Exception:
-        pass
-
-    # 2. TCP status follows confirmed Murmur daemon responsiveness
-    tcp_connected = udp_connected
+        tcp_connected = udp_connected
 
     # 3. Room & TG mappings
     mappings = [
