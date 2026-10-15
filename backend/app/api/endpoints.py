@@ -785,3 +785,152 @@ async def update_frequency(data: dict):
         "tx_pwr": cfg.get("tx_pwr")
     }
 
+# ----------------- Dedicated Servers Telemetry: DMR Server, DVSwitch & Mumla -----------------
+
+@router.get("/serverdmr/telemetry")
+async def get_serverdmr_telemetry():
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get("http://core:5000/api/serverdmr/status")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+
+    return {
+        "online": False,
+        "port": 62031,
+        "protocol": "HomeBrew / MMDVM Protocol v1",
+        "server_callsign": settings.SERVER_CALLSIGN,
+        "server_dmr_id": settings.SERVER_DMR_ID,
+        "uptime": "0s",
+        "uptime_seconds": 0,
+        "connected_hotspots_count": 0,
+        "total_rx_packets": 0,
+        "total_tx_packets": 0,
+        "active_transmission": None,
+        "hotspots": [],
+        "upstream_peers": [],
+        "recent_qsos": []
+    }
+
+@router.get("/dvswitch/telemetry")
+async def get_dvswitch_telemetry():
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get("http://core:5000/api/dvswitch/status")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+
+    return {
+        "online": False,
+        "daemons": {
+            "analog_bridge": {"name": "Analog_Bridge", "status": "STOPPED", "pid": None, "description": "AMBE <-> USRP PCM Transcoder"},
+            "mmdvm_bridge": {"name": "MMDVM_Bridge", "status": "STOPPED", "pid": None, "target_master": "127.0.0.1:62031", "description": "HomeBrew DMR Network Bridge"},
+            "md380_emu": {"name": "md380-emu", "status": "STOPPED", "port": 2470, "description": "AMBE Vocoder Hardware/Software Emulator"}
+        },
+        "ports": {
+            "ambe_rx": 31100,
+            "ambe_tx": 31103,
+            "usrp_tx": 32001,
+            "usrp_rx": 32000,
+            "usrp_gateway": 32345
+        },
+        "live_carrier": {
+            "is_transmitting": False,
+            "operator_callsign": settings.SERVER_CALLSIGN,
+            "operator_dmr_id": settings.SERVER_DMR_ID,
+            "tx_tg": 510,
+            "tx_slot": 2,
+            "rx_active": False,
+            "rx_callsign": "",
+            "rx_src": 0,
+            "rx_tg": 0,
+            "rx_slot": 1
+        },
+        "connected_usrp_clients": [],
+        "packets": {
+            "rx_count": 0,
+            "tx_count": 0
+        }
+    }
+
+@router.get("/mumla/telemetry")
+async def get_mumla_telemetry():
+    import socket
+    import struct
+    import os
+    mumble_host = os.getenv("MUMBLE_HOST", "mumble-server")
+    mumble_port = int(os.getenv("MUMBLE_PORT", 64738))
+
+    # 1. Check Murmur server TCP connectivity
+    tcp_connected = False
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(mumble_host, mumble_port),
+            timeout=1.5
+        )
+        tcp_connected = True
+        writer.close()
+        await writer.wait_closed()
+    except Exception:
+        tcp_connected = False
+
+    # 2. Check Murmur UDP ping (12 bytes ping)
+    udp_connected = False
+    cur_users = 0
+    max_users = 100
+    server_version = "1.5.x"
+    try:
+        loop = asyncio.get_running_loop()
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setblocking(False)
+        ping_data = struct.pack(">iQ", 0, int(time.time() * 1000))
+        s.sendto(ping_data, (mumble_host, mumble_port))
+
+        resp, _ = await asyncio.wait_for(loop.sock_recvfrom(s, 1024), timeout=1.0)
+        s.close()
+        if len(resp) >= 24:
+            udp_connected = True
+            v_major = resp[1]
+            v_minor = resp[2]
+            v_patch = resp[3]
+            server_version = f"{v_major}.{v_minor}.{v_patch}"
+            cur_users = struct.unpack(">i", resp[12:16])[0]
+            max_users = struct.unpack(">i", resp[16:20])[0]
+    except Exception:
+        pass
+
+    # 3. Room & TG mappings
+    mappings = [
+        {"channel": "NinjaRadio-Nasional", "tg": 510, "slot": 2, "description": "National DMR Room"},
+        {"channel": "NinjaRadio-Nusantara", "tg": 5109, "slot": 2, "description": "Nusantara Wide Room"},
+        {"channel": "NinjaRadio-Darurat", "tg": 5108, "slot": 1, "description": "Emergency / SAR Tactical"},
+        {"channel": "NinjaRadio-Worldwide", "tg": 91, "slot": 1, "description": "Worldwide DMR TG 91"},
+        {"channel": "Echo-Parrot", "tg": 9990, "slot": 2, "description": "Voice Echo Audio Test"}
+    ]
+
+    return {
+        "online": tcp_connected or udp_connected,
+        "server_host": mumble_host,
+        "server_port": mumble_port,
+        "protocol": "Murmur VoIP Protocol (Opus / CELT)",
+        "server_version": server_version,
+        "tcp_status": "OPEN" if tcp_connected else "CLOSED",
+        "udp_status": "ACTIVE" if udp_connected else ("OPEN" if tcp_connected else "UNREACHABLE"),
+        "connected_users": cur_users,
+        "max_users": max_users,
+        "bridge_bot": {
+            "name": "NinjaRadio-Gateway",
+            "status": "RUNNING" if tcp_connected else "IDLE",
+            "audio_transcoding": "PCM 8kHz (DMR) <-> Opus 48kHz (Mumla)",
+            "gateway_port": 12346
+        },
+        "channels": mappings
+    }
+
+
