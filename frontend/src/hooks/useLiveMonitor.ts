@@ -125,6 +125,10 @@ export function useLiveMonitor() {
                 } catch {}
               });
               setIncomingAudio(data);
+            } else if (message.type === "TX_REJECTED") {
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("ninja_tx_rejected", { detail: message }));
+              }
             }
           } catch {
             // parse error

@@ -45,6 +45,7 @@ class CallbookEntry(Base):
     organization_id: Mapped[str] = mapped_column(String(64), default="") # e.g. 10-28 code / RAPI ID
     remarks: Mapped[str] = mapped_column(String(255), default="")
     default_tg: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=510)
+    allowed_tgs_override: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default=None)
 
 class BridgeRoute(Base):
     __tablename__ = "bridge_routes"
@@ -67,21 +68,42 @@ class Organization(Base):
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     description: Mapped[str] = mapped_column(String(255), default="")
+    allowed_tgs: Mapped[str] = mapped_column(String(255), default="*") # e.g. "5100,9990" or "*"
+    allow_tx: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Safe migration for existing SQLite database
+        from sqlalchemy import text
         try:
-            from sqlalchemy import text
             await conn.execute(text("ALTER TABLE callbook ADD COLUMN default_tg INTEGER DEFAULT 510"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE callbook ADD COLUMN allowed_tgs_override VARCHAR(255) DEFAULT NULL"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE organizations ADD COLUMN allowed_tgs VARCHAR(255) DEFAULT '*'"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE organizations ADD COLUMN allow_tx BOOLEAN DEFAULT 1"))
         except Exception:
             pass
         # Automatically update any existing BD callsigns from KOMUNITAS to BRIDI
         try:
-            from sqlalchemy import text
             await conn.execute(text("UPDATE callbook SET organization = 'BRIDI' WHERE callsign LIKE 'BD%' AND organization = 'KOMUNITAS'"))
+        except Exception:
+            pass
+        # Set default organization talkgroups policy
+        try:
+            await conn.execute(text("UPDATE organizations SET allowed_tgs = '5100,9990' WHERE UPPER(code) = 'KOMUNITAS' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
+            await conn.execute(text("UPDATE organizations SET allowed_tgs = '5109,9990' WHERE UPPER(code) = 'RAPI' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
+            await conn.execute(text("UPDATE organizations SET allowed_tgs = '5108,9990' WHERE UPPER(code) = 'CB-11M' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
+            await conn.execute(text("UPDATE organizations SET allowed_tgs = '*' WHERE UPPER(code) IN ('ORARI', 'BRIDI')"))
         except Exception:
             pass
 

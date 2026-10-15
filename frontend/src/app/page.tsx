@@ -115,6 +115,8 @@ export default function DashboardPage() {
   // Real-time Audio Dispatcher (bypasses React state batching to receive 100% of packets)
   const playAudioChunk = (audioChunk: AudioRxData) => {
     if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
+    // Selective Audio Gate: If a specific TG is selected on Dashboard, only play audio matching that TG!
+    if (selectedTgFilterRef.current !== null && audioChunk.tg !== selectedTgFilterRef.current) return;
     if (lastChunkRef.current === audioChunk.pcm) return;
     lastChunkRef.current = audioChunk.pcm;
 
@@ -178,9 +180,30 @@ export default function DashboardPage() {
     return () => unsub();
   }, []);
 
-  const [filterMode, setFilterMode] = useState<string>("ALL");
   const [searchTerm, setSearchTerm] = useState<string>("");
+  const [filterMode, setFilterMode] = useState<string>("ALL");
   const [selectedTgFilter, setSelectedTgFilter] = useState<number | null>(null);
+  const selectedTgFilterRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    selectedTgFilterRef.current = selectedTgFilter;
+    if (typeof window !== "undefined") {
+      if (selectedTgFilter !== null) {
+        localStorage.setItem("ninjaradio_dashboard_audio_tg", selectedTgFilter.toString());
+      } else {
+        localStorage.removeItem("ninjaradio_dashboard_audio_tg");
+      }
+    }
+  }, [selectedTgFilter]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedTg = localStorage.getItem("ninjaradio_dashboard_audio_tg");
+      if (savedTg && !isNaN(Number(savedTg))) {
+        setSelectedTgFilter(Number(savedTg));
+      }
+    }
+  }, []);
   const [vizMode, setVizMode] = useState<"oscilloscope" | "smeter" | "bars">("oscilloscope");
   const [stats, setStats] = useState({
     server_callsign: "ONLINE",
@@ -476,10 +499,10 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Active Talkgroups Filter Chips Bar */}
+          {/* Active Talkgroups Filter Chips Bar & Audio Speaker Gate */}
           <div className="px-4 py-2.5 bg-[#060a12] border-b border-cyan-900/30 flex items-center gap-2 overflow-x-auto text-xs font-mono">
             <span className="text-[10px] text-slate-400 uppercase font-bold shrink-0">
-              Filter TG:
+              Filter TG & Audio:
             </span>
             <button
               onClick={() => setSelectedTgFilter(null)}
@@ -512,6 +535,17 @@ export default function DashboardPage() {
                 </button>
               );
             })}
+            {selectedTgFilter !== null ? (
+              <span className="ml-auto text-[10px] text-amber-300 font-bold bg-amber-950/60 border border-amber-800/80 px-2.5 py-0.5 rounded-full shrink-0 flex items-center gap-1 shadow-sm">
+                <span>🔊</span>
+                <span>Lock Audio: TG {selectedTgFilter}</span>
+              </span>
+            ) : (
+              <span className="ml-auto text-[10px] text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-800/80 px-2.5 py-0.5 rounded-full shrink-0 flex items-center gap-1 shadow-sm">
+                <span>🔊</span>
+                <span>Audio: Semua TG</span>
+              </span>
+            )}
           </div>
 
           {/* Table Body */}

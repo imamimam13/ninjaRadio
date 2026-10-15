@@ -107,6 +107,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         last_tx_info = {"tg": tg, "dmr_id": dmr_id, "slot": slot, "callsign": callsign}
                         is_tx = bool(msg.get("is_tx", True)) if pcm_b64 else False
                         if pcm_b64 and is_tx:
+                            # Verify TX authorization with Callbook & Organization Firewall
+                            async with async_session_maker() as session:
+                                is_allowed, reason = await CallbookService.check_tx_permission(session, dmr_id, callsign, tg)
+                            if not is_allowed:
+                                await websocket.send_text(json.dumps({
+                                    "type": "TX_REJECTED",
+                                    "tg": tg,
+                                    "callsign": callsign,
+                                    "reason": reason
+                                }))
+                                continue
                             client_tx_active = True
                             pcm_data = base64.b64decode(pcm_b64)
                             send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)

@@ -589,12 +589,35 @@ export default function RadioPocketMode() {
     activeProfileRef.current = activeProfile;
   }, [activeProfile]);
 
+  const currentTgRef = useRef(currentTg);
+  useEffect(() => {
+    currentTgRef.current = currentTg;
+  }, [currentTg]);
+
+  const [txFirewallAlert, setTxFirewallAlert] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleRejection = (e: any) => {
+      const detail = e.detail;
+      const reason = detail?.reason || "Akses transmit ditolak oleh Server TX Firewall.";
+      setTxFirewallAlert(reason);
+      beepPlayer?.playRogerBeep();
+      if (isTxRef.current) {
+        stopTxRef.current?.();
+      }
+    };
+    window.addEventListener("ninja_tx_rejected", handleRejection);
+    return () => window.removeEventListener("ninja_tx_rejected", handleRejection);
+  }, []);
+
   const playAudioChunk = (audioChunk: AudioRxData) => {
     // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
     if (!audioChunk || !audioChunk.pcm) return;
     if (isMutedRef.current || isTxRef.current) return;
     // Suppress self-echo audio ONLY if NOT on Echo / Parrot test (TG 9990)
     if (audioChunk.tg !== 9990 && audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
+    // Selective Squelch: Only decode & play audio from currently tuned TG (or Echo test 9990)
+    if (currentTgRef.current && audioChunk.tg !== currentTgRef.current.id && audioChunk.tg !== 9990) return;
 
     try {
       ensureAudioUnlocked();
@@ -906,6 +929,14 @@ export default function RadioPocketMode() {
           category: activeProfile.category,
           is_transmitting: true,
         }),
+      }).then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          const reason = errData?.detail || `Akses TX ke TG ${targetTgNum} diblokir oleh Server Firewall.`;
+          setTxFirewallAlert(reason);
+          beepPlayer?.playRogerBeep();
+          stopTx();
+        }
       }).catch(() => {});
 
       // TG 9990 transmits directly through DMR network to server Parrot
@@ -2384,6 +2415,49 @@ export default function RadioPocketMode() {
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* SERVER-SIDE TX FIREWALL REJECTION MODAL                  */}
+      {/* ======================================================== */}
+      {txFirewallAlert && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#140a0f] border-2 border-red-500 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-red-900/50 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-red-500/20 border border-red-500 flex items-center justify-center text-red-400 text-xl font-black">
+                  🛑
+                </div>
+                <div>
+                  <h3 className="font-heading font-black text-sm text-red-300">Akses Transmit Ditolak</h3>
+                  <p className="text-[11px] font-mono text-slate-400">Kebijakan Server TX Firewall</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTxFirewallAlert(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-red-950/40 border border-red-800/60 rounded-2xl text-xs font-mono text-red-200 leading-relaxed">
+              {txFirewallAlert}
+            </div>
+
+            <div className="text-[11px] font-mono text-slate-400">
+              💡 <span className="text-slate-300">Catatan Regulasi:</span> Transmisi ke TalkGroup Amatir Nasional/Internasional dibatasi sesuai izin callbook resmi demi mematuhi regulasi IAR & BrandMeister. Silakan beralih ke TalkGroup yang diizinkan untuk organisasi Anda.
+            </div>
+
+            <button
+              onClick={() => setTxFirewallAlert(null)}
+              className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-xs font-mono transition-colors shadow-lg"
+            >
+              Saya Mengerti (Tutup)
+            </button>
           </div>
         </div>
       )}

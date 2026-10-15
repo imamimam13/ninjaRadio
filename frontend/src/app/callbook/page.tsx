@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
-import { Users, Search, Plus, MapPin, Building, ShieldCheck, Radio, Upload, Download, Check, AlertCircle, Lock, Edit2, Trash2, Sliders, Settings2 } from "lucide-react";
+import { Users, Search, Plus, MapPin, Building, ShieldCheck, ShieldAlert, Shield, ShieldX, Radio, Upload, Download, Check, AlertCircle, Lock, Edit2, Trash2, Sliders, Settings2 } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
 
 interface CallbookItem {
@@ -18,12 +18,21 @@ interface CallbookItem {
   organization_id: string;
   remarks: string;
   default_tg?: number;
+  allowed_tgs_override?: string;
 }
 
 interface OrgItem {
   id?: number;
   code: string;
   name: string;
+  description?: string;
+}
+
+interface FirewallRule {
+  code: string;
+  name: string;
+  allowed_tgs: string;
+  allow_tx: boolean;
   description?: string;
 }
 
@@ -46,6 +55,19 @@ export default function CallbookPage() {
   const [editOrg, setEditOrg] = useState("KOMUNITAS");
   const [editDefaultTg, setEditDefaultTg] = useState(510);
   const [editRemarks, setEditRemarks] = useState("");
+  const [editAllowedTgsOverride, setEditAllowedTgsOverride] = useState("");
+
+  // TX Firewall & Permission Rules State
+  const [showFirewallModal, setShowFirewallModal] = useState(false);
+  const [firewallRules, setFirewallRules] = useState<FirewallRule[]>([]);
+  const [isFirewallLoading, setIsFirewallLoading] = useState(false);
+  const [firewallPin, setFirewallPin] = useState("");
+  const [editingOrgCode, setEditingOrgCode] = useState<string | null>(null);
+  const [ruleAllowedTgs, setRuleAllowedTgs] = useState("*");
+  const [ruleAllowTx, setRuleAllowTx] = useState(true);
+  const [firewallError, setFirewallError] = useState<string | null>(null);
+  const [firewallSuccess, setFirewallSuccess] = useState<string | null>(null);
+  const [isSavingFirewall, setIsSavingFirewall] = useState(false);
 
   // Batch Update Modal State
   const [showBatchModal, setShowBatchModal] = useState(false);
@@ -250,6 +272,7 @@ export default function CallbookPage() {
     setEditOrg(entry.organization || "KOMUNITAS");
     setEditDefaultTg(entry.default_tg || 510);
     setEditRemarks(entry.remarks || "");
+    setEditAllowedTgsOverride(entry.allowed_tgs_override || "");
     setShowEditModal(true);
   };
 
@@ -272,6 +295,7 @@ export default function CallbookPage() {
           organization_id: editCallsign.toUpperCase(),
           remarks: editRemarks,
           default_tg: Number(editDefaultTg) || 510,
+          allowed_tgs_override: editAllowedTgsOverride.trim() ? editAllowedTgsOverride.trim() : null,
         }),
       });
 
@@ -284,6 +308,62 @@ export default function CallbookPage() {
       }
     } catch {
       // Error
+    }
+  };
+
+  const fetchFirewallRules = async () => {
+    setIsFirewallLoading(true);
+    try {
+      const res = await fetch("/api/firewall/rules");
+      if (res.ok) {
+        const data = await res.json();
+        setFirewallRules(data);
+      }
+    } catch {
+      // offline
+    } finally {
+      setIsFirewallLoading(false);
+    }
+  };
+
+  const handleStartEditRule = (rule: FirewallRule) => {
+    setEditingOrgCode(rule.code);
+    setRuleAllowedTgs(rule.allowed_tgs || "*");
+    setRuleAllowTx(rule.allow_tx !== false);
+    setFirewallError(null);
+    setFirewallSuccess(null);
+  };
+
+  const handleSaveFirewallRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOrgCode) return;
+    setIsSavingFirewall(true);
+    setFirewallError(null);
+    setFirewallSuccess(null);
+    try {
+      const res = await fetch(`/api/firewall/rules/${editingOrgCode}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pin: firewallPin,
+          allowed_tgs: ruleAllowedTgs.trim() || "*",
+          allow_tx: ruleAllowTx,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "SUCCESS") {
+        setFirewallSuccess(`Aturan firewall untuk ${editingOrgCode} berhasil disimpan.`);
+        setEditingOrgCode(null);
+        fetchFirewallRules();
+        beepPlayer?.playTalkGrant();
+      } else {
+        setFirewallError(data.detail || data.error || "Gagal menyimpan aturan. Pastikan PIN Admin benar.");
+        beepPlayer?.playRogerBeep();
+      }
+    } catch (err: any) {
+      setFirewallError(`Error jaringan: ${err.message}`);
+    } finally {
+      setIsSavingFirewall(false);
     }
   };
 
@@ -372,6 +452,20 @@ export default function CallbookPage() {
             >
               <Upload className="w-4 h-4 text-cyan-400" />
               <span>Import CSV / JSON</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setFirewallError(null);
+                setFirewallSuccess(null);
+                setEditingOrgCode(null);
+                setShowFirewallModal(true);
+                fetchFirewallRules();
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#05080f] border border-rose-700/60 hover:border-rose-400 text-rose-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+            >
+              <ShieldAlert className="w-4 h-4 text-rose-400" />
+              <span>Aturan TX & Firewall</span>
             </button>
 
             <button
@@ -1025,6 +1119,22 @@ export default function CallbookPage() {
                 />
               </div>
 
+              <div>
+                <label className="block text-slate-400 mb-1">
+                  Override Izin TG Khusus (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={editAllowedTgsOverride}
+                  onChange={(e) => setEditAllowedTgsOverride(e.target.value)}
+                  placeholder="Kosongkan = ikuti organisasi, atau isi: 510,5100"
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-rose-300 font-mono focus:border-cyan-400 outline-none"
+                />
+                <span className="text-[10px] text-slate-500 mt-0.5 block">
+                  Isi &apos;*&apos; untuk izinkan semua TG, atau daftar TG dipisah koma (misal: 510,5100).
+                </span>
+              </div>
+
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
@@ -1149,6 +1259,205 @@ export default function CallbookPage() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Aturan TX & Firewall Organisasi */}
+      {showFirewallModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e1422] border-2 border-rose-500/60 rounded-3xl max-w-2xl w-full p-5 sm:p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between border-b border-rose-950 pb-3">
+              <div>
+                <h3 className="font-heading font-black text-lg text-white flex items-center gap-2">
+                  <ShieldAlert className="w-5 h-5 text-rose-400" />
+                  ATURAN TX FIREWALL & IZIN TALKGROUP
+                </h3>
+                <p className="text-xs font-mono text-slate-400 mt-1">
+                  Konfigurasi proteksi transmisi (TX) server-side per organisasi radio.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFirewallModal(false);
+                  setEditingOrgCode(null);
+                }}
+                className="text-slate-500 hover:text-white font-bold text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Info Notice */}
+            <div className="p-3 bg-cyan-950/40 border border-cyan-800/60 rounded-xl text-xs font-mono text-cyan-300 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-cyan-200">
+                <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                Kebijakan Transmit Radio (TX Firewall):
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Tanda <span className="font-bold text-amber-300 font-mono">*</span> mengizinkan TX di seluruh Talkgroup. Untuk membatasi TX, masukkan daftar angka TG dipisahkan koma (contoh: <span className="font-bold text-amber-300 font-mono">5100, 9990</span>). Transmit ke TG lain akan otomatis ditolak oleh server. TG 9990 (Echo Test) selalu diizinkan.
+              </p>
+            </div>
+
+            {/* Alert Messages */}
+            {firewallSuccess && (
+              <div className="p-3 bg-emerald-950/60 border border-emerald-800 rounded-xl text-xs font-mono text-emerald-300 flex items-center gap-2 animate-pulse">
+                <Check className="w-4 h-4 text-emerald-400" />
+                <span>{firewallSuccess}</span>
+              </div>
+            )}
+            {firewallError && (
+              <div className="p-3 bg-rose-950/60 border border-rose-800 rounded-xl text-xs font-mono text-rose-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-400" />
+                <span>{firewallError}</span>
+              </div>
+            )}
+
+            {/* Form Edit Aturan Tertentu */}
+            {editingOrgCode ? (
+              <form onSubmit={handleSaveFirewallRule} className="p-4 bg-[#070b14] border border-rose-900/60 rounded-2xl space-y-3 font-mono text-xs">
+                <div className="flex items-center justify-between border-b border-rose-900/40 pb-2">
+                  <span className="font-bold text-rose-300 text-sm">
+                    Ubah Kebijakan TX: {editingOrgCode}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingOrgCode(null)}
+                    className="text-slate-400 hover:text-white text-xs underline"
+                  >
+                    Kembali ke Daftar
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">
+                    PIN Admin <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    autoFocus
+                    placeholder="Masukkan PIN Admin (default: 1234)"
+                    value={firewallPin}
+                    onChange={(e) => setFirewallPin(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-rose-900/80 rounded-xl text-white tracking-widest focus:border-rose-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">
+                    Talkgroup yang Diizinkan (Allowed TGs)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contoh: * atau 5100, 9990"
+                    value={ruleAllowedTgs}
+                    onChange={(e) => setRuleAllowedTgs(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-rose-900/80 rounded-xl text-amber-300 font-bold focus:border-rose-400 outline-none"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    Gunakan &apos;*&apos; untuk tanpa batas, atau cantumkan daftar TG dipisah koma (misal: 5100, 9990).
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3 pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={ruleAllowTx}
+                      onChange={(e) => setRuleAllowTx(e.target.checked)}
+                      className="w-4 h-4 rounded text-rose-500 bg-[#05080f] border-rose-800"
+                    />
+                    <span className="font-bold">Izinkan Organisasi ini Memancar (TX Enabled)</span>
+                  </label>
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t border-rose-900/40">
+                  <button
+                    type="button"
+                    onClick={() => setEditingOrgCode(null)}
+                    className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingFirewall}
+                    className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-heading font-black rounded-xl shadow-lg shadow-rose-600/30"
+                  >
+                    {isSavingFirewall ? "Menyimpan..." : "Simpan Kebijakan TX"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* Table Rules List */
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-mono text-slate-400 px-1">
+                  <span>Daftar Organisasi & Kebijakan TX Aktif:</span>
+                  <button
+                    type="button"
+                    onClick={fetchFirewallRules}
+                    className="text-cyan-400 hover:text-cyan-300 underline"
+                  >
+                    Muat Ulang
+                  </button>
+                </div>
+
+                {isFirewallLoading ? (
+                  <div className="p-8 text-center text-xs font-mono text-slate-500">
+                    Memuat aturan TX Firewall...
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {firewallRules.map((rule) => (
+                      <div
+                        key={rule.code}
+                        className="p-3.5 bg-[#05080f] border border-cyan-950 hover:border-cyan-800 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs transition-all"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-sm">
+                              {rule.name || rule.code}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 font-bold">
+                              {rule.code}
+                            </span>
+                            {rule.allow_tx ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
+                                TX AKTIF
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] bg-rose-950 text-rose-300 border border-rose-800 font-bold">
+                                TX DIBLOKIR
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            Izin TG:{" "}
+                            {rule.allowed_tgs === "*" ? (
+                              <span className="text-cyan-300 font-bold">Semua Talkgroup (*)</span>
+                            ) : (
+                              <span className="text-amber-300 font-bold">TG {rule.allowed_tgs}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditRule(rule)}
+                          className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-cyan-500 text-slate-300 hover:text-cyan-300 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all self-end sm:self-center"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Ubah Aturan</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
