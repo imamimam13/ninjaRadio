@@ -26,6 +26,23 @@ RPTO = b"RPTO"
 RPTS = b"RPTS"
 DMRD = b"DMRD"
 
+def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
+    """Resolves amateur callsign for DMR ID from SQLite Callbook DB."""
+    db_path = "/app/data/ninjaradio.db"
+    if not os.path.exists(db_path):
+        return None
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (dmr_id,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                return str(row[0]).strip().upper()
+    except Exception:
+        pass
+    return None
+
 class HomeBrewMasterServer:
     """
     Native DMR HomeBrew / MMDVM Protocol Master Server.
@@ -68,6 +85,23 @@ class HomeBrewMasterServer:
         # Native Parrot / Audio Echo Service (TG 9990 & 99990)
         self.parrot_recordings: Dict[Tuple[str, int], list] = {}
         self.parrot_tgs: List[int] = [9990, 99990]
+
+        # Loopback suppression: track local transmissions so reflected peer frames are not echoed back
+        self.active_local_txs: Dict[int, float] = {}
+
+    def is_local_transmission(self, src_id: int) -> bool:
+        """Returns True if the transmission was originated locally within the last 2.5s (Loopback suppression)."""
+        ts = self.active_local_txs.get(src_id)
+        if ts and (time.time() - ts < 2.5):
+            return True
+        return False
+
+    def mark_local_transmission(self, src_id: int):
+        self.active_local_txs[src_id] = time.time()
+        now = time.time()
+        for s, t in list(self.active_local_txs.items()):
+            if now - t > 10.0:
+                self.active_local_txs.pop(s, None)
 
     async def start(self):
         self.running = True
@@ -317,6 +351,7 @@ class HomeBrewMasterServer:
 
             now = time.time()
             self.total_rx_packets += 1
+            self.mark_local_transmission(src_id)
 
             # Update client activity & packet counts
             if addr in self.clients:
@@ -356,11 +391,15 @@ class HomeBrewMasterServer:
             sender_call = None
             if addr in self.clients:
                 sender_call = self.clients[addr].get("callsign")
-            if not sender_call or sender_call == "HOTSPOT":
+            if not sender_call or sender_call in ["HOTSPOT", "DVSWITCH"]:
                 for c in self.clients.values():
-                    if c.get("dmr_id") == src_id:
+                    if c.get("dmr_id") == src_id and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
                         sender_call = c.get("callsign")
                         break
+            if not sender_call or sender_call in ["HOTSPOT", "DVSWITCH"]:
+                cb_call = lookup_callbook_callsign(src_id)
+                if cb_call:
+                    sender_call = cb_call
             callsign_str = sender_call or f"ID-{src_id}"
 
             # Track Active QSO stream & Last Heard list

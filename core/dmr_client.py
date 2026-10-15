@@ -430,3 +430,15 @@ class HomeBrewClient:
         except Exception as e:
             logger.debug(f"[{self.name}] TX DMRD failed: {e}")
             return False
+
+    def send_raw_dmrd(self, raw_data: bytes) -> bool:
+        """Transmits an authentic raw DMRD packet directly to the remote master."""
+        if not self.sock or not self.target_addr or self.state != "CONNECTED":
+            return False
+        try:
+            self.sock.sendto(raw_data, self.target_addr)
+            self.packets_tx += 1
+            return True
+        except Exception as e:
+            logger.debug(f"[{self.name}] send_raw_dmrd error: {e}")
+            return False

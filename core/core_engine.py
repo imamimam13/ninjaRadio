@@ -13,6 +13,7 @@ import aiohttp
 from fastapi import FastAPI
 import uvicorn
 from dmr_server import HomeBrewMasterServer
+from dmr_client import HomeBrewClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NinjaRadio-Core] %(message)s")
 logger = logging.getLogger("NinjaRadio-Core")
@@ -148,6 +149,7 @@ class DVSwitchCoreManager:
         self.standalone_mode = True
         self._last_tx_block_log = 0.0
         self.dmr_master_server: Optional[HomeBrewMasterServer] = None
+        self.peer_clients: Dict[str, HomeBrewClient] = {}
         self.rx_packet_count = 0
         self.tx_packet_count = 0
 
@@ -198,65 +200,63 @@ class DVSwitchCoreManager:
     def generate_configs(self):
         cfg = self.config
         peers = cfg.get("peering", [])
-        active_peer = None
-        for p in peers:
-            if p.get("isActive") is True:
-                active_peer = p
-                break
-        # No active peer => standalone mode (internal master only). Do NOT fall back to
-        # peers[0]: peers switched OFF in the UI must never be connected to.
-        self.standalone_mode = active_peer is None
 
-        if active_peer:
-            master_host = active_peer.get("host", "127.0.0.1")
-            master_port = int(active_peer.get("port", 62031))
-            master_password = active_peer.get("password", "")
-            callsign = (active_peer.get("callsign") or cfg.get("server_callsign", "N1NJA")).strip().upper()
-            dmr_id = int(active_peer.get("dmr_id") or active_peer.get("dmrId") or cfg.get("server_dmr_id", 5109999))
-            rx_freq_mhz = str(active_peer.get("rx_freq") or active_peer.get("rxFreq") or cfg.get("rx_freq", "438.8000")).strip()
-            tx_freq_mhz = str(active_peer.get("tx_freq") or active_peer.get("txFreq") or cfg.get("tx_freq", "438.8000")).strip()
-            color_code = int(active_peer.get("color_code") or active_peer.get("colorCode") or cfg.get("color_code", 1))
-            tx_pwr = int(active_peer.get("tx_pwr") or active_peer.get("txPwr") or cfg.get("tx_pwr", 25))
-            raw_tgs = str(active_peer.get("subscribedTgs") or active_peer.get("subscribed_tgs", "")).strip()
-        else:
-            master_host = "127.0.0.1"
-            master_port = int(cfg.get("hotspot_port", DMR_MASTER_PORT))
-            master_password = cfg.get("hotspot_password", "ninjaradio_pass")
-            callsign = str(cfg.get("server_callsign", "N1NJA")).strip().upper()
-            dmr_id = int(cfg.get("server_dmr_id", 5109999))
-            rx_freq_mhz = str(cfg.get("rx_freq", "438.8000")).strip()
-            tx_freq_mhz = str(cfg.get("tx_freq", "438.8000")).strip()
-            color_code = int(cfg.get("color_code", 1))
-            tx_pwr = int(cfg.get("tx_pwr", 25))
-            raw_tgs = ""
+        # In centralized architecture, MMDVM_Bridge is our internal AMBE/PCM gateway
+        # connecting strictly to our local DMR Master Server on 127.0.0.1:62031.
+        master_host = "127.0.0.1"
+        master_port = int(cfg.get("hotspot_port", DMR_MASTER_PORT))
+        master_password = cfg.get("hotspot_password", "ninjaradio_pass")
+        callsign = str(cfg.get("server_callsign", "N1NJA")).strip().upper()
+        dmr_id = int(cfg.get("server_dmr_id", 5109999))
+        rx_freq_mhz = str(cfg.get("rx_freq", "438.8000")).strip()
+        tx_freq_mhz = str(cfg.get("tx_freq", "438.8000")).strip()
+        color_code = int(cfg.get("color_code", 1))
+        tx_pwr = int(cfg.get("tx_pwr", 25))
+        default_tg = int(cfg.get("default_tg", 510))
 
+        active_peers = [p for p in peers if p.get("isActive") is True]
+        self.standalone_mode = len(active_peers) == 0
         self.active_peer_host = master_host
         self.active_peer_port = master_port
         rx_hz = format_freq_hz(rx_freq_mhz)
         tx_hz = format_freq_hz(tx_freq_mhz)
-        default_tg = int(cfg.get("default_tg", 510))
-
-        # Dynamically determine primary TG and TS slot from user peer options
         primary_tg = default_tg
-        primary_slot = 2  # Default to Slot 2 for standard Indonesian DMR & HBlink (bridi.my.id)
-        m_ts1 = re.search(r'TS1(?:_\d+)?\s*[=:;]\s*(\d+)', raw_tgs, re.IGNORECASE)
-        m_ts2 = re.search(r'TS2(?:_\d+)?\s*[=:;]\s*(\d+)', raw_tgs, re.IGNORECASE)
-        if m_ts2:
-            primary_tg = int(m_ts2.group(1))
-            primary_slot = 2
-        elif m_ts1:
-            primary_tg = int(m_ts1.group(1))
-            primary_slot = 1
-        elif raw_tgs.strip().isdigit():
-            primary_tg = int(raw_tgs.strip())
-            # For DMR servers like bridi.my.id, TG 1025 is primarily on TS2
-            primary_slot = 2
+        primary_slot = 2
 
-        if raw_tgs and "TS" in raw_tgs.upper():
-            options_line = f"Options={raw_tgs}"
-        else:
-            # Dual-slot subscription: Ensures HBlink4 forwards traffic whether sent on TS1 or TS2
-            options_line = f"Options=TS1_1={primary_tg};TS2_1={primary_tg};"
+        # Collect all talkgroups that MMDVM_Bridge should subscribe to on the internal master
+        ts1_list = [510, 5108, 91, 5155]
+        ts2_list = [5109, 1025, 9990]
+
+        for tg_obj in cfg.get("talkgroups", []):
+            tg_val = int(tg_obj.get("tg", 0) or tg_obj.get("tg_id", 0) or 0)
+            slot_val = int(tg_obj.get("slot", 2))
+            if tg_val > 0:
+                if slot_val == 1 and tg_val not in ts1_list:
+                    ts1_list.append(tg_val)
+                elif slot_val == 2 and tg_val not in ts2_list:
+                    ts2_list.append(tg_val)
+
+        for p in peers:
+            raw_sub = str(p.get("subscribedTgs") or p.get("subscribed_tgs", "")).strip()
+            for m in re.finditer(r'TS1(?:_\d+)?\s*[=:;]\s*(\d+)', raw_sub, re.IGNORECASE):
+                v = int(m.group(1))
+                if v not in ts1_list:
+                    ts1_list.append(v)
+            for m in re.finditer(r'TS2(?:_\d+)?\s*[=:;]\s*(\d+)', raw_sub, re.IGNORECASE):
+                v = int(m.group(1))
+                if v not in ts2_list:
+                    ts2_list.append(v)
+            if raw_sub.isdigit():
+                v = int(raw_sub)
+                if v not in ts2_list:
+                    ts2_list.append(v)
+
+        opt_parts = []
+        for idx, t in enumerate(ts1_list, 1):
+            opt_parts.append(f"TS1_{idx}={t}")
+        for idx, t in enumerate(ts2_list, 1):
+            opt_parts.append(f"TS2_{idx}={t}")
+        options_line = f"Options={';'.join(opt_parts)};"
 
         # Smart DMR ID and Repeater ID handling:
         # DMR RF/voice protocol strictly uses 24-bit source addressing (<= 16777215 / 7 digits max).
@@ -618,6 +618,9 @@ Send={AB_AMBE_RX_PORT}
 
         # 5. PTT Carrier Watchdog (Auto-unkeys carrier if audio stream drops/pauses for >0.6s)
         asyncio.create_task(self.run_ptt_carrier_watchdog())
+
+        # 6. Synchronize Native DMR Upstream Peer Clients (e.g., BRIDI)
+        asyncio.create_task(self.sync_peer_clients())
 
     async def run_ptt_carrier_watchdog(self):
         """Monitors active PTT carrier and auto-unkeys if no audio frame arrives for >0.6s (prevents stuck TX/loops)."""
@@ -1027,22 +1030,30 @@ Send={AB_AMBE_RX_PORT}
 
                     # 3. Handle PTT Key-down / Voice audio (key_flag == 1)
                     elif len(payload) > 0:
+                        default_fallback_tg = int(self.config.get("default_tg", 510))
+                        hdr_tg = tg if (0 < tg < 16777215) else 0
+                        hdr_slot = slot if slot in [1, 2] else 2
+                        hdr_dmr_id = dmr_id if (1000 < dmr_id < 16777215 and dmr_id != (USRP_TYPE_TEXT << 24)) else 0
+
                         client_meta = self.client_metadata.get(addr, {})
                         if client_meta:
-                            target_dmr_id = client_meta.get("src", 0) or 1022057
+                            target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or 1022057
                             target_call = client_meta.get("callsign", "DVSWITCH")
-                            target_tg = client_meta.get("tg", 0) or int(self.config.get("primary_tg", 1025))
-                            target_slot = client_meta.get("slot", 2)
-                        elif dmr_id > 1000 and dmr_id != (USRP_TYPE_TEXT << 24):
-                            target_dmr_id = dmr_id
+                            target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
+                            target_slot = hdr_slot if hdr_tg else client_meta.get("slot", 2)
+                        elif hdr_dmr_id:
+                            target_dmr_id = hdr_dmr_id
                             target_call = lookup_callbook_callsign(target_dmr_id) or f"ID-{target_dmr_id}"
-                            target_tg = tg if tg > 0 else int(self.config.get("primary_tg", 1025))
-                            target_slot = slot if slot in [1, 2] else 2
+                            target_tg = hdr_tg or default_fallback_tg
+                            target_slot = hdr_slot
                         else:
                             target_dmr_id = self.current_operator_dmr_id or 1022057
                             target_call = self.current_operator_callsign or "BD62BOT"
-                            target_tg = tg if (0 < tg < 16777215) else int(self.config.get("primary_tg", 1025))
-                            target_slot = 2
+                            target_tg = hdr_tg or default_fallback_tg
+                            target_slot = hdr_slot
+
+                        if self.dmr_master_server:
+                            self.dmr_master_server.mark_local_transmission(target_dmr_id)
 
                         if not self.tx_identity_sent or not self.is_transmitting:
                             self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
@@ -1119,6 +1130,7 @@ Send={AB_AMBE_RX_PORT}
         self.generate_configs()
         time.sleep(0.3)
         self.start_daemons()
+        await self.sync_peer_clients()
         logger.info("✓ DVSwitch stack restarted with updated configuration.")
 
     def tune_remote(self, tg: int, slot: int):
@@ -1255,7 +1267,7 @@ Send={AB_AMBE_RX_PORT}
                 pass
 
     def handle_dmr_master_traffic(self, traffic: dict):
-        """Callback from HomeBrewMasterServer when an external hotspot transmits."""
+        """Callback from HomeBrewMasterServer when an external hotspot or MMDVM_Bridge transmits."""
         try:
             self.current_rx_src = traffic.get("src_id", 0)
             self.current_rx_tg = traffic.get("dst_tg", 0)
@@ -1263,6 +1275,14 @@ Send={AB_AMBE_RX_PORT}
             self.current_rx_time = time.time()
             self.current_rx_active = True
             self.rx_packet_count += 1
+
+            # Forward raw DMRD packet to matching connected upstream peer clients
+            raw_packet = traffic.get("raw_packet")
+            if raw_packet and self.peer_clients:
+                for peer_key, client in list(self.peer_clients.items()):
+                    if client.state == "CONNECTED":
+                        if not client.subscribed_tgs or (self.current_rx_tg in client.subscribed_tgs):
+                            client.send_raw_dmrd(raw_packet)
 
             # Dispatch traffic notification to backend for live monitor & web clients
             traffic_event = {
@@ -1278,8 +1298,112 @@ Send={AB_AMBE_RX_PORT}
         except Exception as e:
             logger.debug(f"handle_dmr_master_traffic note: {e}")
 
+    async def sync_peer_clients(self):
+        """
+        Synchronizes active upstream DMR peers (e.g. BRIDI, KRAP)
+        by creating or terminating HomeBrewClient instances.
+        """
+        cfg = self.config
+        peers = cfg.get("peering", [])
+        active_keys = set()
+
+        for p in peers:
+            if p.get("isActive") is True:
+                host = str(p.get("host", "")).strip()
+                port = int(p.get("port", 62031))
+                if not host:
+                    continue
+                peer_key = f"{host}:{port}"
+                active_keys.add(peer_key)
+
+                if peer_key not in self.peer_clients:
+                    name = str(p.get("name") or host)
+                    dmr_id = int(p.get("dmr_id") or p.get("dmrId") or cfg.get("server_dmr_id", 5109999))
+                    callsign = str(p.get("callsign") or cfg.get("server_callsign", "N1NJA")).strip().upper()
+                    password = str(p.get("password", ""))
+                    subscribed_tgs = str(p.get("subscribedTgs") or p.get("subscribed_tgs", ""))
+                    rx_freq = str(p.get("rx_freq") or p.get("rxFreq") or cfg.get("rx_freq", "438.8000"))
+                    tx_freq = str(p.get("tx_freq") or p.get("txFreq") or cfg.get("tx_freq", "438.8000"))
+                    color_code = int(p.get("color_code") or p.get("colorCode") or cfg.get("color_code", 1))
+                    tx_pwr = int(p.get("tx_pwr") or p.get("txPwr") or cfg.get("tx_pwr", 25))
+
+                    logger.info(f"[Peering] 🌐 Connecting HomeBrew peer client: {name} -> {peer_key}")
+                    client = HomeBrewClient(
+                        name=name,
+                        host=host,
+                        port=port,
+                        dmr_id=dmr_id,
+                        callsign=callsign,
+                        password=password,
+                        subscribed_tgs=subscribed_tgs,
+                        rx_freq=rx_freq,
+                        tx_freq=tx_freq,
+                        color_code=color_code,
+                        tx_pwr=tx_pwr,
+                        on_traffic=self.handle_peer_traffic,
+                        on_status_change=self.handle_peer_status_change
+                    )
+                    self.peer_clients[peer_key] = client
+                    await client.start()
+
+        # Stop removed or deactivated peers
+        for peer_key in list(self.peer_clients.keys()):
+            if peer_key not in active_keys:
+                logger.info(f"[Peering] ⏹️ Stopping inactive peer client: {peer_key}")
+                client = self.peer_clients.pop(peer_key)
+                try:
+                    await client.stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping peer client {peer_key}: {e}")
+
+    def handle_peer_status_change(self, name: str, state: str):
+        logger.info(f"[Peering] Peer '{name}' connection state: {state}")
+
+    def handle_peer_traffic(self, traffic: dict):
+        """
+        Handles incoming DMR traffic from upstream peer (e.g. BRIDI).
+        Suppresses loopback and broadcasts to local hotspots + MMDVM_Bridge (Web/Mumble).
+        """
+        try:
+            src_id = traffic.get("src_id", 0)
+            dst_tg = traffic.get("dst_tg", 0)
+            slot = traffic.get("slot", 2)
+            raw_packet = traffic.get("raw_packet")
+            network_name = traffic.get("network", "Remote Peer")
+
+            # 1. Loopback suppression: if transmission originated locally, drop!
+            if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id):
+                return
+
+            # 2. Forward DMRD frame to our local DMR Master Server
+            # so all connected local hotspots and MMDVM_Bridge (Web Audio/Mumble) hear it!
+            if self.dmr_master_server and raw_packet:
+                self.dmr_master_server.broadcast_dmrd(raw_packet)
+
+            # 3. Last heard & live traffic event to backend
+            callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
+            traffic_event = {
+                "network": f"Peer: {network_name}",
+                "src_id": src_id,
+                "dst_tg": dst_tg,
+                "slot": slot,
+                "callsign": callsign,
+                "is_tx": False,
+                "data_type": traffic.get("data_type", 1)
+            }
+            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+        except Exception as e:
+            logger.debug(f"handle_peer_traffic note: {e}")
+
     async def shutdown(self):
         self.running = False
+        for peer_key, client in list(self.peer_clients.items()):
+            try:
+                await client.stop()
+            except Exception:
+                pass
+        self.peer_clients.clear()
+
         if self.dmr_master_server:
             try:
                 await self.dmr_master_server.stop()
@@ -1305,43 +1429,39 @@ Send={AB_AMBE_RX_PORT}
             await self.http_session.close()
 
     def get_peers_status(self) -> List[dict]:
-        mmdvm_running = self.mmdvm_proc is not None and self.mmdvm_proc.poll() is None
-        if not mmdvm_running:
-            try:
-                r = subprocess.run(["pgrep", "-f", "MMDVM_Bridge"], capture_output=True)
-                if r.returncode == 0:
-                    mmdvm_running = True
-            except Exception:
-                pass
-
         peers_status = []
         peers = self.config.get("peering", [])
         for p in peers:
-            p_host = p.get("host", "")
+            p_host = str(p.get("host", "")).strip()
             p_port = int(p.get("port", 62031))
             p_name = p.get("name") or p_host
             is_active = p.get("isActive", True)
-            is_active_master = (p_host.lower().strip() == self.active_peer_host.lower().strip() and p_port == self.active_peer_port)
+            peer_key = f"{p_host}:{p_port}"
+            client = self.peer_clients.get(peer_key)
 
-            if is_active and is_active_master and mmdvm_running:
-                state = "CONNECTED"
-            elif is_active and is_active_master and not mmdvm_running:
-                state = "CONNECTING"
+            if client:
+                state = client.state
+                packets_rx = client.packets_rx
+                packets_tx = client.packets_tx
             elif not is_active:
                 state = "NONAKTIF"
+                packets_rx = 0
+                packets_tx = 0
             else:
                 state = "STANDBY"
+                packets_rx = 0
+                packets_tx = 0
 
             peers_status.append({
                 "name": p_name,
                 "host": p_host,
                 "port": p_port,
-                "dmr_id": p.get("dmr_id") or self.config.get("server_dmr_id", 5109999),
+                "dmr_id": p.get("dmr_id") or p.get("dmrId") or self.config.get("server_dmr_id", 5109999),
                 "callsign": p.get("callsign") or self.config.get("server_callsign", "N1NJA"),
                 "state": state,
-                "subscribed_tgs": p.get("subscribedTgs", "510"),
-                "packets_rx": getattr(self, "rx_packet_count", 0),
-                "packets_tx": getattr(self, "tx_packet_count", 0),
+                "subscribed_tgs": p.get("subscribedTgs") or p.get("subscribed_tgs", "510"),
+                "packets_rx": packets_rx,
+                "packets_tx": packets_tx,
                 "is_connected": state == "CONNECTED"
             })
         return peers_status
@@ -1470,35 +1590,7 @@ async def get_core_status():
         except Exception:
             pass
 
-    peers_status = []
-    peers = engine_mgr.config.get("peering", [])
-    for p in peers:
-        p_host = p.get("host", "")
-        p_port = int(p.get("port", 62031))
-        p_name = p.get("name") or p_host
-        is_active = p.get("isActive", True)
-        is_active_master = (p_host.lower().strip() == engine_mgr.active_peer_host.lower().strip() and p_port == engine_mgr.active_peer_port)
-
-        if is_active and is_active_master and mmdvm_running:
-            state = "CONNECTED"
-        elif is_active and is_active_master and not mmdvm_running:
-            state = "CONNECTING"
-        elif not is_active:
-            state = "NONAKTIF"
-        else:
-            state = "STANDBY"
-
-        peers_status.append({
-            "name": p_name,
-            "host": p_host,
-            "port": p_port,
-            "dmr_id": p.get("dmr_id") or engine_mgr.config.get("server_dmr_id", 5109999),
-            "callsign": p.get("callsign") or engine_mgr.config.get("server_callsign", "N1NJA"),
-            "state": state,
-            "packets_rx": getattr(engine_mgr, "rx_packet_count", 0),
-            "packets_tx": getattr(engine_mgr, "tx_packet_count", 0),
-            "is_connected": state == "CONNECTED"
-        })
+    peers_status = engine_mgr.get_peers_status()
 
     return {
         "status": "ONLINE" if (ab_running or mmdvm_running or vocoder_running) else "ONLINE",
