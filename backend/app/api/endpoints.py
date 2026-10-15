@@ -293,7 +293,11 @@ async def spawn_bridge_worker(payload: dict):
         import httpx
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post("http://core:5000/api/workers/spawn", json=payload)
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail=f"Core error: {resp.text}")
             return resp.json()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to communicate with Core Engine: {e}")
 
@@ -304,7 +308,11 @@ async def delete_bridge_worker(worker_id: str):
         import httpx
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.delete(f"http://core:5000/api/workers/{worker_id}")
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail=f"Core error: {resp.text}")
             return resp.json()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to communicate with Core Engine: {e}")
 
