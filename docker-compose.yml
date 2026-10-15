@@ -70,6 +70,7 @@ services:
       - MUMBLE_PASSWORD=
       - MUMBLE_CHANNEL=NinjaRadio-Nasional
       - MUMBLE_ROOM_MAP=NinjaRadio-Nasional:510,NinjaRadio-Nusantara:5109,NinjaRadio-Darurat:5108,NinjaRadio-Worldwide:91
+      - MUMBLE_SUPERUSER_PASSWORD=${MUMBLE_SUPERUSER_PASSWORD:-ninjaradio_admin}
       - DMR_USRP_HOST=core
       - DMR_USRP_PORT=${USRP_AUDIO_PORT:-32345}
       - TARGET_TG=510
