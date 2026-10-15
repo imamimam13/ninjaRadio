@@ -29,7 +29,9 @@ import {
   Power,
   X,
   Copy,
-  Edit2
+  Edit2,
+  Bot,
+  ArrowRightLeft
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -61,6 +63,8 @@ export default function SettingsPage() {
   const [hotspotPassword, setHotspotPassword] = useState("ninjaradio_pass");
   const [maxHotspots, setMaxHotspots] = useState(128);
   const [allowLoop, setAllowLoop] = useState(false);
+  const [parrotTgs, setParrotTgs] = useState("9990, 99990");
+  const [parrotDelay, setParrotDelay] = useState(1.2);
 
   // 3. Multi-Peer OpenBridge & HBLink / OpenDMR Peering
   const [peerList, setPeerList] = useState<Array<{
@@ -128,6 +132,16 @@ export default function SettingsPage() {
         if (data.tx_pwr !== undefined) setServerTxPwr(data.tx_pwr);
         if (data.hotspot_port) setHotspotPort(data.hotspot_port);
         if (data.hotspot_password) setHotspotPassword(data.hotspot_password);
+        if (data.parrot_tgs) {
+          setParrotTgs(Array.isArray(data.parrot_tgs) ? data.parrot_tgs.join(", ") : String(data.parrot_tgs));
+        }
+        if (data.parrot_delay !== undefined) setParrotDelay(Number(data.parrot_delay));
+        if (Array.isArray(data.mumble_rooms) && data.mumble_rooms.length > 0) {
+          setMumbleRooms(data.mumble_rooms);
+        }
+        if (Array.isArray(data.mumble_bots) && data.mumble_bots.length > 0) {
+          setMumbleBots(data.mumble_bots);
+        }
         if (Array.isArray(data.peering) && data.peering.length > 0) {
           setPeerList(data.peering);
         }
@@ -142,7 +156,11 @@ export default function SettingsPage() {
 
   useEffect(() => {
     loadSystemConfig();
-    const interval = setInterval(loadSystemConfig, 5000);
+    fetchMumbleBots();
+    const interval = setInterval(() => {
+      loadSystemConfig();
+      fetchMumbleBots();
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -366,11 +384,138 @@ export default function SettingsPage() {
     }
   }, []);
 
-  const saveMumbleRooms = (updated: MumbleRoomBridge[]) => {
+  const [mumbleBots, setMumbleBots] = useState<Array<{
+    name: string;
+    channel: string;
+    tg: number;
+    slot: number;
+    status: string;
+  }>>([]);
+  const [showAddBotModal, setShowAddBotModal] = useState(false);
+  const [showMoveBotModal, setShowMoveBotModal] = useState(false);
+  const [selectedBotForMove, setSelectedBotForMove] = useState<any>(null);
+  const [newBotName, setNewBotName] = useState("");
+  const [newBotChannel, setNewBotChannel] = useState("");
+  const [newBotTg, setNewBotTg] = useState(510);
+  const [newBotSlot, setNewBotSlot] = useState(2);
+  const [moveBotChannel, setMoveBotChannel] = useState("");
+  const [moveBotTg, setMoveBotTg] = useState(510);
+
+  const fetchMumbleBots = async () => {
+    try {
+      const res = await fetch("/api/mumla/bots");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.bots)) setMumbleBots(data.bots);
+      }
+    } catch {}
+  };
+
+  const saveMumbleRooms = async (updated: MumbleRoomBridge[]) => {
     setMumbleRooms(updated);
     if (typeof window !== "undefined") {
       localStorage.setItem("ninjaradio_mumble_rooms", JSON.stringify(updated));
     }
+    // Also save channels to /api/mumla/channels so Murmur creates the rooms live!
+    try {
+      await fetch("/api/mumla/channels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channels: updated.map(r => ({
+            channel: r.name,
+            tg: r.targetTg,
+            slot: 2,
+            description: r.description
+          }))
+        })
+      });
+    } catch {}
+  };
+
+  const handleOpenAddBotModal = () => {
+    if (!isAdminUnlocked) {
+      handleToggleAdminMode();
+      return;
+    }
+    const def = mumbleRooms.length > 0 ? mumbleRooms[0] : null;
+    setNewBotName("");
+    setNewBotChannel(def ? def.name : "NinjaRadio-Nasional");
+    setNewBotTg(def ? def.targetTg : 510);
+    setNewBotSlot(2);
+    setShowAddBotModal(true);
+  };
+
+  const handleAddBot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBotName.trim() || !newBotChannel.trim()) return;
+    try {
+      const res = await fetch("/api/mumla/bots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newBotName.trim(),
+          channel: newBotChannel.trim(),
+          tg: Number(newBotTg) || 510,
+          slot: Number(newBotSlot) || 2
+        })
+      });
+      if (res.ok) {
+        setShowAddBotModal(false);
+        fetchMumbleBots();
+        beepPlayer?.playTalkGrant();
+      }
+    } catch {}
+  };
+
+  const handleOpenMoveBotModal = (bot: any) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdminMode();
+      return;
+    }
+    setSelectedBotForMove(bot);
+    setMoveBotChannel(bot.channel);
+    setMoveBotTg(bot.tg);
+    setShowMoveBotModal(true);
+  };
+
+  const handleMoveBot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBotForMove || !moveBotChannel.trim()) return;
+    try {
+      const res = await fetch("/api/mumla/bots/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: selectedBotForMove.name,
+          target_channel: moveBotChannel.trim(),
+          tg: Number(moveBotTg) || 510
+        })
+      });
+      if (res.ok) {
+        setShowMoveBotModal(false);
+        setSelectedBotForMove(null);
+        fetchMumbleBots();
+        beepPlayer?.playTalkGrant();
+      }
+    } catch {}
+  };
+
+  const handleDeleteBot = async (botName: string) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdminMode();
+      return;
+    }
+    if (!confirm(`Hapus user bot '${botName}' dari server Mumble?`)) return;
+    try {
+      const res = await fetch(`/api/mumla/bots/${encodeURIComponent(botName)}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        fetchMumbleBots();
+        beepPlayer?.playTalkGrant();
+      }
+    } catch {}
   };
 
   const handleOpenAddMumbleModal = () => {
@@ -491,16 +636,28 @@ export default function SettingsPage() {
         tx_freq: serverTxFreq,
         rx_freq: serverRxFreq,
         color_code: Number(serverColorCode) || 1,
-        tx_pwr: Number(serverTxPwr) || 25,
         hotspot_port: Number(hotspotPort),
         hotspot_password: hotspotPassword,
         max_hotspots: Number(maxHotspots),
+        parrot_tgs: parrotTgs.split(/[,; ]+/).filter(Boolean).map(x => Number(x)),
+        parrot_delay: Number(parrotDelay) || 1.2,
         peering: peerList,
+        usrp_port: Number(usrpPort) || 32001,
+        ysf_room_id: Number(ysfRoomId) || 0,
+        asl_node: Number(aslNode) || 0,
+        xlx_reflector: xlxReflector || "",
+        mumble_host: mumbleHost || "mumble-server",
+        mumble_port: Number(mumblePort) || 64738,
+        mumble_rooms: mumbleRooms,
+        mumble_bots: mumbleBots,
       };
 
       const res = await fetch("/api/config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "X-Admin-Pin": pinInput || (typeof window !== "undefined" ? localStorage.getItem("ninjaradio_admin_pin") || "1234" : "1234")
+        },
         body: JSON.stringify(payload)
       });
 
@@ -825,6 +982,43 @@ export default function SettingsPage() {
                         : "bg-[#080d17] border border-slate-800 cursor-default"
                     }`}
                   />
+                  <p className="text-[11px] text-slate-500 mt-1">Batas jumlah hotspot MMDVM yang dapat terkoneksi bersamaan.</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Parrot Echo Talkgroups (Pisahkan dengan Koma)</label>
+                  <input
+                    type="text"
+                    readOnly={!isAdminUnlocked}
+                    value={parrotTgs}
+                    onChange={(e) => setParrotTgs(e.target.value)}
+                    placeholder="9990, 99990"
+                    className={`w-full px-3 py-2.5 rounded-xl font-mono text-sm font-bold text-purple-400 ${
+                      isAdminUnlocked
+                        ? "bg-[#05080f] border border-cyan-400"
+                        : "bg-[#080d17] border border-slate-800 cursor-default"
+                    }`}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">Daftar TG Parrot echo test untuk pengujian audio DMR.</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Parrot PTT Turnaround / Delay (Detik)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="5.0"
+                    readOnly={!isAdminUnlocked}
+                    value={parrotDelay}
+                    onChange={(e) => setParrotDelay(Number(e.target.value))}
+                    className={`w-full px-3 py-2.5 rounded-xl font-mono text-sm ${
+                      isAdminUnlocked
+                        ? "bg-[#05080f] border border-cyan-400 text-white"
+                        : "bg-[#080d17] border border-slate-800 text-slate-300 cursor-default"
+                    }`}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">Jeda waktu sebelum master memutar kembali rekaman suara pengguna.</p>
                 </div>
               </div>
             </div>
@@ -1273,6 +1467,106 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              {/* User Bot Router Management */}
+              <div className="space-y-3 pt-3 border-t border-slate-800">
+                <div className="flex items-center justify-between text-xs font-mono text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <Bot className="w-4 h-4 text-cyan-400" />
+                    <div>
+                      <h4 className="font-heading font-bold text-xs text-white">
+                        Pengelola User Bot Mumble (Dynamic Bot Router)
+                      </h4>
+                      <p className="text-[10px] text-slate-400">
+                        Bot gateway yang standby di setiap room Mumble dan meneruskan audio ke DMR.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    {!isAdminUnlocked ? (
+                      <button
+                        type="button"
+                        onClick={handleToggleAdminMode}
+                        className="px-2.5 py-1 bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border border-amber-800/60 rounded-xl text-[10px] font-mono font-bold flex items-center gap-1"
+                      >
+                        <Lock className="w-3 h-3" /> Buka Kunci Admin untuk Kelola Bot
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleOpenAddBotModal}
+                        className="px-3 py-1.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-mono font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-cyan-500/20"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> + Buat User Bot Baru
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {mumbleBots && mumbleBots.length > 0 ? (
+                    mumbleBots.map((bot, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3.5 rounded-xl border border-cyan-900/40 bg-[#05080f] space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Bot className="w-4 h-4 text-cyan-400" />
+                            <span className="font-heading font-black text-xs text-white">{bot.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-800">
+                              {bot.status || "STATIONED"}
+                            </span>
+                            {isAdminUnlocked && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenMoveBotModal(bot)}
+                                  title="Pindahkan Bot ke Channel Lain"
+                                  className="p-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900 text-cyan-400 border border-cyan-800/40 flex items-center gap-1 text-[10px] font-mono font-bold px-2"
+                                >
+                                  <ArrowRightLeft className="w-3 h-3" />
+                                  <span>Pindah</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteBot(bot.name)}
+                                  title="Hapus Bot"
+                                  className="p-1 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-400 border border-rose-800/40"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] font-mono text-slate-300 pt-1 border-t border-slate-800/80">
+                          <span className="text-slate-400">Ruangan Aktif:</span>
+                          <span className="text-purple-300 font-bold flex items-center gap-1">
+                            <Volume2 className="w-3 h-3 text-purple-400" />
+                            {bot.channel}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                          <span className="text-slate-400">Target DMR:</span>
+                          <span className="text-cyan-400 font-bold">
+                            TG {bot.tg} (Slot {bot.slot || 2})
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="col-span-2 p-6 text-center text-xs font-mono text-slate-500 bg-[#05080f]/50 rounded-xl border border-slate-800">
+                      Belum ada user bot yang aktif. Buka kunci admin untuk menambahkan bot.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1939,6 +2233,181 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   className="flex-1 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 rounded-xl font-black text-xs shadow-lg shadow-emerald-500/20"
                 >
                   {editingMumbleRoomId ? "Simpan Perubahan Room" : "Simpan & Buat Room"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ADD MUMBLE BOT MODAL */}
+      {showAddBotModal && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#101622] border-2 border-cyan-500/70 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                <Bot className="w-4 h-4 text-cyan-400" />
+                Buat User Bot Mumble Baru
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddBotModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddBot} className="space-y-3 text-xs font-mono">
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Nama User Bot</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: NinjaBot-Regional"
+                  value={newBotName}
+                  onChange={(e) => setNewBotName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
+                />
+                <p className="text-[10px] text-slate-500 mt-0.5">Nama bot yang akan tampil di aplikasi Mumla / Mumble.</p>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Ruangan / Channel Standby</label>
+                <select
+                  value={newBotChannel}
+                  onChange={(e) => {
+                    const sel = e.target.value;
+                    const r = mumbleRooms.find(x => x.name === sel);
+                    setNewBotChannel(sel);
+                    if (r) setNewBotTg(r.targetTg);
+                  }}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
+                >
+                  {mumbleRooms.map((r, i) => (
+                    <option key={i} value={r.name}>
+                      {r.name} (TG {r.targetTg})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">DMR Talkgroup</label>
+                  <input
+                    type="number"
+                    required
+                    value={newBotTg}
+                    onChange={(e) => setNewBotTg(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-cyan-300 font-bold outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Timeslot DMR</label>
+                  <select
+                    value={newBotSlot}
+                    onChange={(e) => setNewBotSlot(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
+                  >
+                    <option value={1}>Slot 1</option>
+                    <option value={2}>Slot 2</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddBotModal(false)}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 rounded-xl font-black text-xs shadow-lg shadow-cyan-500/20"
+                >
+                  Buat Bot Sekarang
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MOVE MUMBLE BOT MODAL */}
+      {showMoveBotModal && selectedBotForMove && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#101622] border-2 border-purple-500/70 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-purple-400" />
+                Pindahkan Bot: {selectedBotForMove.name}
+              </h3>
+              <button
+                type="button"
+                onClick={() => { setShowMoveBotModal(false); setSelectedBotForMove(null); }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleMoveBot} className="space-y-3 text-xs font-mono">
+              <div className="p-3 bg-[#05080f] rounded-xl border border-slate-800 space-y-1">
+                <span className="text-slate-500 text-[10px] block">Posisi Bot Saat Ini:</span>
+                <div className="text-white font-bold flex justify-between">
+                  <span>Room: {selectedBotForMove.channel}</span>
+                  <span className="text-purple-400">TG {selectedBotForMove.tg}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Pilih Channel / Room Tujuan</label>
+                <select
+                  value={moveBotChannel}
+                  onChange={(e) => {
+                    const sel = e.target.value;
+                    const r = mumbleRooms.find(x => x.name === sel);
+                    setMoveBotChannel(sel);
+                    if (r) setMoveBotTg(r.targetTg);
+                  }}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                >
+                  {mumbleRooms.map((r, i) => (
+                    <option key={i} value={r.name}>
+                      {r.name} (DMR TG {r.targetTg})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Mapped DMR Talkgroup</label>
+                <input
+                  type="number"
+                  required
+                  value={moveBotTg}
+                  onChange={(e) => setMoveBotTg(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-emerald-400 font-bold outline-none"
+                />
+                <p className="text-[10px] text-slate-500 mt-0.5">Bot akan langsung berpindah di Mumble dan audio dihubungkan ke TG ini.</p>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowMoveBotModal(false); setSelectedBotForMove(null); }}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white rounded-xl font-black text-xs shadow-lg shadow-purple-500/20"
+                >
+                  Pindahkan Bot Sekarang
                 </button>
               </div>
             </form>

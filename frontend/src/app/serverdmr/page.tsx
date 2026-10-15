@@ -112,75 +112,6 @@ export default function ServerDmrPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Dynamic DMR Master Configuration State
-  const [config, setConfig] = useState<DmrConfig>({
-    server_callsign: "N1NJA",
-    server_dmr_id: 5109999,
-    default_tg: 510990,
-    parrot_tgs: "9990, 99990",
-    color_code: 1,
-    hotspot_port: 62031,
-    hotspot_password: "ninjaradio_pass",
-    tx_freq: "142120",
-    rx_freq: "142120",
-    tx_pwr: 50,
-    max_hotspots: 128
-  });
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [configStatusMsg, setConfigStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
-
-  const fetchConfig = async () => {
-    try {
-      const res = await fetch("/api/serverdmr/config");
-      if (res.ok) {
-        const data = await res.json();
-        setConfig({
-          server_callsign: data.server_callsign || "N1NJA",
-          server_dmr_id: data.server_dmr_id || 5109999,
-          default_tg: data.default_tg || 510990,
-          parrot_tgs: Array.isArray(data.parrot_tgs) ? data.parrot_tgs.join(", ") : (data.parrot_tgs || "9990, 99990"),
-          color_code: data.color_code ?? 1,
-          hotspot_port: data.hotspot_port || 62031,
-          hotspot_password: data.hotspot_password || "",
-          tx_freq: data.tx_freq || "142120",
-          rx_freq: data.rx_freq || "142120",
-          tx_pwr: data.tx_pwr || 50,
-          max_hotspots: data.max_hotspots || 128
-        });
-      }
-    } catch (err) {
-      console.error("Failed to fetch DMR Master config:", err);
-    }
-  };
-
-  const handleSaveConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingConfig(true);
-    setConfigStatusMsg(null);
-    try {
-      const res = await fetch("/api/serverdmr/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...config,
-          parrot_tgs: config.parrot_tgs.split(",").map(s => s.trim()).filter(Boolean)
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setConfigStatusMsg({ type: "success", text: "✓ Konfigurasi DMR Master berhasil disimpan dan diterapkan ke server!" });
-        fetchTelemetry();
-      } else {
-        setConfigStatusMsg({ type: "error", text: data.detail || "Gagal menyimpan konfigurasi" });
-      }
-    } catch {
-      setConfigStatusMsg({ type: "error", text: "Terjadi kesalahan koneksi ke server" });
-    } finally {
-      setSavingConfig(false);
-      setTimeout(() => setConfigStatusMsg(null), 5000);
-    }
-  };
-
   const fetchTelemetry = async () => {
     try {
       const res = await fetch("/api/serverdmr/telemetry");
@@ -198,7 +129,6 @@ export default function ServerDmrPage() {
 
   useEffect(() => {
     fetchTelemetry();
-    fetchConfig();
     const interval = setInterval(fetchTelemetry, 2500);
     return () => clearInterval(interval);
   }, []);
@@ -206,7 +136,6 @@ export default function ServerDmrPage() {
   const handleManualRefresh = () => {
     setRefreshing(true);
     fetchTelemetry();
-    fetchConfig();
   };
 
   const formatTime = (ts: number) => {
@@ -254,6 +183,15 @@ export default function ServerDmrPage() {
                 {telemetry?.online ? "MASTER: ONLINE" : "MASTER: OFFLINE"}
               </span>
             </div>
+
+            <a
+              href="/settings"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/70 hover:bg-purple-900/60 text-purple-300 border border-purple-800 text-xs font-mono font-bold transition-all shadow-md hover:scale-[1.02]"
+              title="Buka Halaman Pengaturan Lengkap DMR Master (PIN Terlindungi)"
+            >
+              <Settings className="w-3.5 h-3.5 text-purple-400" />
+              <span>PENGATURAN DMR (PIN)</span>
+            </a>
 
             <button
               onClick={handleManualRefresh}
@@ -369,183 +307,6 @@ export default function ServerDmrPage() {
               Broadcasted DMR Frames
             </div>
           </div>
-        </div>
-
-        {/* DMR Master Server Configuration Card */}
-        <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 overflow-hidden shadow-xl">
-          <div className="p-4 sm:p-5 border-b border-cyan-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Sliders className="w-5 h-5 text-cyan-400" />
-              <div>
-                <h2 className="font-heading font-bold text-base sm:text-lg text-white">
-                  PENGATURAN DMR MASTER SERVER
-                </h2>
-                <p className="text-[11px] text-slate-400 font-mono">
-                  Konfigurasi identitas server, default talkgroup, parrot echo, dan parameter hotspot secara realtime.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {configStatusMsg && (
-            <div
-              className={`p-3 text-xs font-mono border-b flex items-center justify-between ${
-                configStatusMsg.type === "success"
-                  ? "bg-emerald-950/50 border-emerald-800/60 text-emerald-300"
-                  : "bg-rose-950/50 border-rose-800/60 text-rose-300"
-              }`}
-            >
-              <span>{configStatusMsg.text}</span>
-              <button onClick={() => setConfigStatusMsg(null)} className="text-slate-400 hover:text-white">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          <form onSubmit={handleSaveConfig} className="p-5 space-y-5 text-xs font-mono">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">SERVER CALLSIGN</label>
-                <input
-                  type="text"
-                  required
-                  value={config.server_callsign}
-                  onChange={(e) => setConfig({ ...config, server_callsign: e.target.value.toUpperCase() })}
-                  placeholder="N1NJA / BD62BOT"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-cyan-400 font-bold font-mono focus:outline-none focus:border-cyan-500 uppercase"
-                />
-                <span className="text-[10px] text-slate-500">Callsign yang dikirim saat master handshake DMR.</span>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">SERVER DMR ID</label>
-                <input
-                  type="number"
-                  required
-                  min={100000}
-                  max={99999999}
-                  value={config.server_dmr_id}
-                  onChange={(e) => setConfig({ ...config, server_dmr_id: parseInt(e.target.value) || 0 })}
-                  placeholder="5109999 / 1022057"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-bold font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">ID DMR master yang dikirim ke radio & hotspot.</span>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">DEFAULT TALKGROUP (PRIMARY)</label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={16777215}
-                  value={config.default_tg}
-                  onChange={(e) => setConfig({ ...config, default_tg: parseInt(e.target.value) || 0 })}
-                  placeholder="1025 / 510990"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-emerald-400 font-bold font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">Talkgroup utama untuk bridging dan default radio routing.</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-800/80">
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">PARROT ECHO TALKGROUPS</label>
-                <input
-                  type="text"
-                  required
-                  value={config.parrot_tgs}
-                  onChange={(e) => setConfig({ ...config, parrot_tgs: e.target.value })}
-                  placeholder="9990, 99990"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-purple-400 font-bold font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">Daftar TG Parrot echo replay (pisahkan dengan koma).</span>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">COLOR CODE (CC)</label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={15}
-                  value={config.color_code}
-                  onChange={(e) => setConfig({ ...config, color_code: parseInt(e.target.value) || 1 })}
-                  placeholder="1"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">Color code repeater / DMR access (biasanya CC 1).</span>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">HOTSPOT UDP PORT</label>
-                <input
-                  type="number"
-                  required
-                  min={1024}
-                  max={65535}
-                  value={config.hotspot_port}
-                  onChange={(e) => setConfig({ ...config, hotspot_port: parseInt(e.target.value) || 62031 })}
-                  placeholder="62031"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">Port UDP MMDVM/Pi-Star HomeBrew protocol.</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-800/80">
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">HOTSPOT PASSWORD / AUTH KEY</label>
-                <input
-                  type="text"
-                  value={config.hotspot_password}
-                  onChange={(e) => setConfig({ ...config, hotspot_password: e.target.value })}
-                  placeholder="ninjaradio_pass"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-300 font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">Password autentikasi Pi-Star DMR Master.</span>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">TX FREQUENCY (KHZ / MHZ)</label>
-                <input
-                  type="text"
-                  value={config.tx_freq || ""}
-                  onChange={(e) => setConfig({ ...config, tx_freq: e.target.value })}
-                  placeholder="142120"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-300 font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">Frekuensi pemancar hotspot / repeater.</span>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-slate-400 block font-bold">RX FREQUENCY (KHZ / MHZ)</label>
-                <input
-                  type="text"
-                  value={config.rx_freq || ""}
-                  onChange={(e) => setConfig({ ...config, rx_freq: e.target.value })}
-                  placeholder="142120"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-300 font-mono focus:outline-none focus:border-cyan-500"
-                />
-                <span className="text-[10px] text-slate-500">Frekuensi penerima hotspot / repeater.</span>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-              <span className="text-[11px] text-slate-500 font-mono">
-                Perubahan akan langsung dimuat ke runtime DMR server tanpa me-restart daemon.
-              </span>
-
-              <button
-                type="submit"
-                disabled={savingConfig}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-white font-mono font-bold text-xs shadow-lg shadow-cyan-900/30 transition-all hover:scale-[1.02] disabled:opacity-50"
-              >
-                <Save className={`w-4 h-4 ${savingConfig ? "animate-spin" : ""}`} />
-                <span>{savingConfig ? "MENYIMPAN..." : "SIMPAN & TERAPKAN KONFIGURASI DMR"}</span>
-              </button>
-            </div>
-          </form>
         </div>
 
         {/* Connected Hotspots Table */}
