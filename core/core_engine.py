@@ -61,16 +61,19 @@ def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
     if len(payload) < 14 or payload[0] != TLV_TAG_SET_INFO:
         return None
     length = payload[1]
-    body = payload[2:2 + length]
-    if len(body) < 12:
+    if len(payload) < 2 + length or length < 12:
         return None
+    body = payload[2:2 + length]
+    slot = body[10]
+    if slot not in (1, 2):
+        slot = 2
     callsign = body[12:].split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
     return {
         "src": int.from_bytes(body[0:3], "big"),
         "rpt": int.from_bytes(body[3:7], "big"),
         "tg": int.from_bytes(body[7:10], "big"),
-        "slot": body[10],
-        "cc": body[11],
+        "slot": slot,
+        "cc": body[11] if body[11] else 1,
         "callsign": callsign,
     }
 
@@ -987,8 +990,10 @@ Send={AB_AMBE_RX_PORT}
 
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                     payload = data[32:]
+                    packet_type = (dmr_id >> 24) & 0xFF
+                    is_control_pkt = (key_flag == 0) or (packet_type in [USRP_TYPE_TEXT, 4])
 
-                    # 1. Handle DVSwitch USRP TEXT / Control packets (Registration, Ping, TLV SET_INFO)
+                    # 1. Handle DVSwitch USRP TEXT / Control packets (Registration, Ping, Info, Remote Commands, TLV SET_INFO)
                     if payload.startswith(b"REG:"):
                         if b"UNREG" in payload:
                             self.registered_usrp_clients.pop(addr, None)
@@ -1016,7 +1021,7 @@ Send={AB_AMBE_RX_PORT}
                     if payload.startswith(b"INFO:"):
                         self.registered_usrp_clients[addr] = time.time()
                         try:
-                            primary_tg_val = self.current_tx_tg or int(self.config.get("primary_tg", 510990))
+                            primary_tg_val = self.current_tx_tg or int(self.config.get("primary_tg", 0)) or int(self.config.get("default_tg", 510))
                             info_dict = {
                                 "ab": "Analog_Bridge",
                                 "tlv": {
@@ -1046,20 +1051,66 @@ Send={AB_AMBE_RX_PORT}
                             logger.debug(f"INFO reply note: {ex}")
                         continue
 
-                    if len(payload) >= 14 and payload[0] == TLV_TAG_SET_INFO:
+                    # Handle remote talkgroup tuning / commands from DVSwitch Mobile
+                    # Supported: TLV Tag 5 (TLV_TAG_REMOTE_CMD), TLV Tag 3 (TLV_TAG_TG_TUNE), or ASCII (txTg=... or *<tg>)
+                    cmd_str = ""
+                    if len(payload) >= 3 and payload[0] == 5:  # TLV_TAG_REMOTE_CMD
+                        cmd_len = payload[1]
+                        cmd_str = payload[2:2 + cmd_len].decode("ascii", errors="ignore").strip()
+                    elif len(payload) >= 5 and payload[0] == 3:  # TLV_TAG_TG_TUNE
+                        tune_val = int.from_bytes(payload[2:2 + payload[1]], "big") if payload[1] <= 4 else 0
+                        if tune_val > 0:
+                            if addr not in self.client_metadata:
+                                self.client_metadata[addr] = {}
+                            self.client_metadata[addr]["tg"] = tune_val
+                            logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {tune_val} via TLV_TAG_TG_TUNE")
+                            continue
+                    elif is_control_pkt and (payload.startswith(b"txTg=") or payload.startswith(b"*")):
+                        cmd_str = payload.decode("ascii", errors="ignore").strip()
+
+                    if cmd_str:
+                        if "txTg=" in cmd_str:
+                            val_part = cmd_str.split("txTg=")[-1].strip().split()[0].replace("#", "")
+                            if val_part.isdigit():
+                                new_tg = int(val_part)
+                                if addr not in self.client_metadata:
+                                    self.client_metadata[addr] = {}
+                                self.client_metadata[addr]["tg"] = new_tg
+                                logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {new_tg} via remote command '{cmd_str}'")
+                                continue
+                        elif cmd_str.startswith("*"):
+                            digits = "".join([c for c in cmd_str if c.isdigit()])
+                            if digits:
+                                new_tg = int(digits)
+                                if addr not in self.client_metadata:
+                                    self.client_metadata[addr] = {}
+                                self.client_metadata[addr]["tg"] = new_tg
+                                logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {new_tg} via keypad '{cmd_str}'")
+                                continue
+
+                    # Handle TLV SET_INFO (Identity carry-over from DVSwitch Mobile)
+                    # STRICT: Only process as TLV when is_control_pkt is True (never parse audio PCM as TLV!)
+                    if is_control_pkt and len(payload) >= 14 and payload[0] == TLV_TAG_SET_INFO:
                         tlv_info = parse_set_info_tlv(payload)
                         if tlv_info:
+                            existing = self.client_metadata.get(addr, {})
+                            if tlv_info.get("tg", 0) == 0 and existing.get("tg", 0) > 0:
+                                tlv_info["tg"] = existing["tg"]
+                            if tlv_info.get("slot") not in (1, 2):
+                                tlv_info["slot"] = 2
                             self.client_metadata[addr] = tlv_info
                             self.registered_usrp_clients[addr] = time.time()
-                            logger.info(f"📱 DVSwitch client identity recorded from {addr}: {tlv_info['callsign']} (ID: {tlv_info['src']}, TG: {tlv_info['tg']})")
+                            logger.info(f"📱 DVSwitch client identity recorded from {addr}: {tlv_info['callsign']} (ID: {tlv_info['src']}, TG: {tlv_info['tg']}, Slot: {tlv_info['slot']})")
                         continue
 
                     # 2. Handle PTT Release / Unkey (key_flag == 0)
                     if key_flag == 0:
+                        default_fallback_tg = int(self.config.get("default_tg", 510))
+                        default_server_id = int(self.config.get("server_dmr_id", 5109999))
                         if self.is_transmitting or self.tx_identity_sent:
-                            active_tg = self.current_tx_tg or tg or 1025
+                            active_tg = self.current_tx_tg or tg or default_fallback_tg
                             active_slot = self.current_tx_slot or slot or 2
-                            active_id = self.current_tx_dmr_id or dmr_id or 1022057
+                            active_id = self.current_tx_dmr_id or dmr_id or self.current_operator_dmr_id or default_server_id
                             self.stop_carrier_tx(active_tg, active_slot, active_id)
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
@@ -1084,14 +1135,18 @@ Send={AB_AMBE_RX_PORT}
                         default_fallback_tg = int(self.config.get("default_tg", 510))
                         hdr_tg = tg if (0 < tg < 16777215) else 0
                         hdr_slot = slot if slot in [1, 2] else 2
-                        hdr_dmr_id = dmr_id if (1000 < dmr_id < 16777215 and dmr_id != (USRP_TYPE_TEXT << 24)) else 0
+                        hdr_dmr_id = dmr_id if (1000 < dmr_id < 16777215 and dmr_id != (USRP_TYPE_TEXT << 24) and packet_type == 0) else 0
 
                         client_meta = self.client_metadata.get(addr, {})
+                        meta_slot = client_meta.get("slot", 2)
+                        if meta_slot not in (1, 2):
+                            meta_slot = 2
+
                         if client_meta and (not hdr_dmr_id or client_meta.get("src") == hdr_dmr_id):
-                            target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or 1022057
+                            target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or self.current_operator_dmr_id or 1022057
                             target_call = client_meta.get("callsign", "DVSWITCH")
                             target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
-                            target_slot = hdr_slot if hdr_tg else client_meta.get("slot", 2)
+                            target_slot = hdr_slot if hdr_tg else meta_slot
                         elif hdr_dmr_id:
                             target_dmr_id = hdr_dmr_id
                             target_call = lookup_callbook_callsign(target_dmr_id) or f"ID-{target_dmr_id}"
