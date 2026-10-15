@@ -17,7 +17,12 @@ import {
   Radio,
   Activity,
   Zap,
-  Sliders
+  Sliders,
+  Cpu,
+  Server,
+  Trash2,
+  RefreshCw,
+  Flame
 } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
 
@@ -34,6 +39,17 @@ interface RouteItem {
   bidirectional: boolean;
 }
 
+interface BridgeWorker {
+  id: string;
+  tg: number;
+  slot: number;
+  usrp_rx_port: number;
+  usrp_tx_port: number;
+  pid: number | null;
+  status: string;
+  is_primary: boolean;
+}
+
 export default function MatrixPage() {
   const { isConnected } = useLiveMonitor();
   const [routes, setRoutes] = useState<RouteItem[]>([]);
@@ -44,6 +60,13 @@ export default function MatrixPage() {
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState(false);
+
+  // Dynamic Bridge Workers State (Metode B)
+  const [workers, setWorkers] = useState<BridgeWorker[]>([]);
+  const [spawnTg, setSpawnTg] = useState(5100);
+  const [spawnSlot, setSpawnSlot] = useState(2);
+  const [isSpawning, setIsSpawning] = useState(false);
+  const [workerMsg, setWorkerMsg] = useState<{ text: string; isError: boolean } | null>(null);
 
   // New Route Form
   const [name, setName] = useState("");
@@ -62,8 +85,25 @@ export default function MatrixPage() {
       .catch(() => setLoading(false));
   };
 
+  const fetchWorkers = async () => {
+    try {
+      const res = await fetch("/api/workers");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.workers)) {
+          setWorkers(data.workers);
+        }
+      }
+    } catch {
+      // offline
+    }
+  };
+
   useEffect(() => {
     fetchRoutes();
+    fetchWorkers();
+    const interval = setInterval(fetchWorkers, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleToggleAdmin = () => {
@@ -136,6 +176,63 @@ export default function MatrixPage() {
       }
     } catch {
       // Error
+    }
+  };
+
+  const handleSpawnWorker = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdminUnlocked) {
+      handleToggleAdmin();
+      return;
+    }
+    if (!spawnTg || spawnTg <= 0) return;
+    setIsSpawning(true);
+    setWorkerMsg(null);
+    try {
+      const res = await fetch("/api/workers/spawn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tg: Number(spawnTg), slot: Number(spawnSlot) }),
+      });
+      const data = await res.json();
+      if (data.status === "SUCCESS") {
+        setWorkerMsg({
+          text: `Worker Analog_Bridge untuk TG ${spawnTg} (Slot ${spawnSlot}) berhasil dijalankan! (PID: ${data.worker?.pid || "active"})`,
+          isError: false,
+        });
+        fetchWorkers();
+        beepPlayer?.playTalkGrant();
+      } else {
+        setWorkerMsg({
+          text: `Gagal menjalankan worker: ${data.message || data.error || "Terjadi kesalahan"}`,
+          isError: true,
+        });
+      }
+    } catch (err: any) {
+      setWorkerMsg({ text: `Gagal terhubung ke backend: ${err.message}`, isError: true });
+    } finally {
+      setIsSpawning(false);
+    }
+  };
+
+  const handleStopWorker = async (workerId: string, tg: number) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdmin();
+      return;
+    }
+    if (!confirm(`Hentikan worker bridge untuk TG ${tg} (${workerId})?`)) return;
+    try {
+      const res = await fetch(`/api/workers/${workerId}`, { method: "DELETE" });
+      if (res.ok) {
+        setWorkerMsg({ text: `Worker ${workerId} berhasil dihentikan.`, isError: false });
+        fetchWorkers();
+        beepPlayer?.playTalkGrant();
+      } else {
+        const data = await res.json();
+        setWorkerMsg({ text: `Gagal menghentikan: ${data.message || data.error}`, isError: true });
+      }
+    } catch (err: any) {
+      setWorkerMsg({ text: `Error: ${err.message}`, isError: true });
     }
   };
 
@@ -316,6 +413,158 @@ export default function MatrixPage() {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Dynamic Multi-Worker Analog_Bridge Section (Metode B) */}
+        <div className="bg-[#0b121e] border border-indigo-900/40 rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-heading font-black text-white flex items-center gap-2">
+                <Cpu className="w-5 h-5 text-indigo-400" />
+                MULTI-WORKER ANALOG BRIDGE (METODE B)
+              </h3>
+              <p className="text-xs font-mono text-slate-400 mt-1">
+                Worker Analog_Bridge modular on-demand di dalam kontainer Core. Mendukung multi-TG audio simultan tanpa restart daemon (~15MB RAM per-worker).
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={fetchWorkers}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center gap-1.5 transition-all"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                Segarkan
+              </button>
+              <span className="px-3 py-1.5 rounded-xl bg-indigo-950/80 border border-indigo-800 text-indigo-300 text-xs font-mono font-bold flex items-center gap-1.5">
+                <Server className="w-3.5 h-3.5" />
+                {workers.length} / 16 Worker Aktif
+              </span>
+            </div>
+          </div>
+
+          {workerMsg && (
+            <div
+              className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between ${
+                workerMsg.isError
+                  ? "bg-rose-950/60 border-rose-800 text-rose-300"
+                  : "bg-emerald-950/60 border-emerald-800 text-emerald-300"
+              }`}
+            >
+              <span>{workerMsg.text}</span>
+              <button
+                onClick={() => setWorkerMsg(null)}
+                className="text-xs opacity-70 hover:opacity-100 font-bold ml-2"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Spawn Worker Form */}
+          <form
+            onSubmit={handleSpawnWorker}
+            className="p-3 bg-[#05080f] border border-indigo-900/50 rounded-xl flex flex-wrap sm:flex-nowrap items-center gap-3"
+          >
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <span className="text-xs font-mono font-bold text-indigo-400 whitespace-nowrap">
+                Target TG:
+              </span>
+              <input
+                type="number"
+                placeholder="misal: 5100"
+                value={spawnTg}
+                onChange={(e) => setSpawnTg(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-[#090d18] border border-indigo-900/60 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-indigo-400"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold text-indigo-400 whitespace-nowrap">
+                Slot:
+              </span>
+              <select
+                value={spawnSlot}
+                onChange={(e) => setSpawnSlot(Number(e.target.value))}
+                className="px-3 py-2 bg-[#090d18] border border-indigo-900/60 rounded-lg text-xs font-mono text-cyan-300 focus:outline-none focus:border-indigo-400"
+              >
+                <option value={1}>Slot 1</option>
+                <option value={2}>Slot 2</option>
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSpawning}
+              className={`px-4 py-2 rounded-lg text-xs font-heading font-black flex items-center gap-2 transition-all whitespace-nowrap ${
+                isSpawning
+                  ? "bg-slate-800 text-slate-500 cursor-not-allowed"
+                  : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30"
+              }`}
+            >
+              <Flame className="w-4 h-4 text-amber-300" />
+              {isSpawning ? "Memproses..." : "+ Jalankan Worker Baru"}
+            </button>
+          </form>
+
+          {/* Active Workers Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {workers.map((worker) => (
+              <div
+                key={worker.id}
+                className={`p-3.5 rounded-xl border transition-all ${
+                  worker.is_primary
+                    ? "bg-[#08111e] border-cyan-500/50 shadow-md"
+                    : "bg-[#090e1c] border-indigo-900/60"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
+                    <span className="font-mono font-bold text-xs text-white">
+                      {worker.is_primary ? "PRIMARY BRIDGE" : worker.id}
+                    </span>
+                  </div>
+                  {worker.is_primary ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                      PERMANENT
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleStopWorker(worker.id, worker.tg)}
+                      className="p-1 px-2 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[11px] font-mono font-bold flex items-center gap-1 transition-all"
+                      title="Hentikan Worker"
+                    >
+                      <Trash2 className="w-3 h-3 text-rose-400" />
+                      Stop
+                    </button>
+                  )}
+                </div>
+
+                <div className="mt-2.5 grid grid-cols-2 gap-2 text-xs font-mono bg-[#05080f] p-2.5 rounded-lg border border-slate-800/80">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block uppercase">Talkgroup</span>
+                    <span className="font-bold text-amber-300">TG {worker.tg}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block uppercase">Timeslot</span>
+                    <span className="font-bold text-slate-300">TS {worker.slot}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block uppercase">USRP Ports</span>
+                    <span className="text-[11px] text-cyan-300">
+                      RX:{worker.usrp_rx_port} / TX:{worker.usrp_tx_port}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block uppercase">Status / PID</span>
+                    <span className="text-[11px] text-emerald-400">
+                      {worker.status.toUpperCase()} {worker.pid ? `(${worker.pid})` : ""}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
       </main>

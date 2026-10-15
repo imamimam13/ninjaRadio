@@ -13,7 +13,7 @@ from backend.app.models.schemas import (
     CallbookResponse, CallbookCreate,
     BridgeRouteResponse, BridgeRouteCreate,
     ServerStatus, LastHeardItem, PttTransmitRequest, PinVerifyRequest,
-    OrganizationCreateRequest, OrganizationResponse
+    OrganizationCreateRequest, OrganizationResponse, OrganizationRuleUpdate
 )
 from backend.app.services.logbook_service import LogbookService
 from backend.app.services.callbook_service import CallbookService
@@ -224,6 +224,90 @@ async def create_organization(
     org = await CallbookService.add_organization(session, code=code, name=name, description=desc)
     return {"status": "SUCCESS", "organization": org}
 
+# ----------------- TX Firewall & Permission Rules -----------------
+
+@router.get("/firewall/rules")
+async def get_firewall_rules(session: AsyncSession = Depends(get_db)):
+    """Returns talkgroup permission rules for all registered organizations."""
+    orgs = await CallbookService.get_all_organizations(session)
+    return [
+        {
+            "code": o.code,
+            "name": o.name,
+            "allowed_tgs": getattr(o, "allowed_tgs", "*") or "*",
+            "allow_tx": getattr(o, "allow_tx", True) if getattr(o, "allow_tx", None) is not None else True,
+            "description": o.description
+        }
+        for o in orgs
+    ]
+
+@router.put("/firewall/rules/{org_code}")
+async def update_firewall_rule(
+    org_code: str,
+    payload: OrganizationRuleUpdate,
+    session: AsyncSession = Depends(get_db)
+):
+    """Updates allowed talkgroups and TX permission for an organization (PIN protected)."""
+    import os
+    admin_pin = str(os.getenv("ADMIN_PIN") or getattr(settings, "ADMIN_PIN", "1234")).strip()
+    if str(payload.pin).strip() != admin_pin:
+        raise HTTPException(status_code=403, detail="PIN Admin salah! Akses ditolak.")
+
+    org = await CallbookService.update_organization_rule(
+        session,
+        code=org_code,
+        allowed_tgs=payload.allowed_tgs,
+        allow_tx=payload.allow_tx if payload.allow_tx is not None else True
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisasi tidak ditemukan.")
+    return {
+        "status": "SUCCESS",
+        "organization": {
+            "code": org.code,
+            "name": org.name,
+            "allowed_tgs": org.allowed_tgs,
+            "allow_tx": org.allow_tx
+        }
+    }
+
+# ----------------- Dynamic Multi-Worker Analog_Bridge Proxy -----------------
+
+@router.get("/workers")
+async def get_bridge_workers():
+    """Fetches list of active Analog_Bridge workers from Core Engine."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get("http://core:5000/api/workers")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception as e:
+        return {"status": "OFFLINE", "workers": [], "detail": str(e)}
+    return {"status": "OK", "workers": []}
+
+@router.post("/workers/spawn")
+async def spawn_bridge_worker(payload: dict):
+    """Spawns an on-demand Analog_Bridge worker for a talkgroup."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post("http://core:5000/api/workers/spawn", json=payload)
+            return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with Core Engine: {e}")
+
+@router.delete("/workers/{worker_id}")
+async def delete_bridge_worker(worker_id: str):
+    """Stops and removes an on-demand Analog_Bridge worker."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.delete(f"http://core:5000/api/workers/{worker_id}")
+            return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with Core Engine: {e}")
+
 # ----------------- Matrix Talkgroup Router -----------------
 
 @router.get("/matrix", response_model=List[BridgeRouteResponse])
@@ -390,12 +474,18 @@ async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = 
     category = payload.category or "Amatir"
     is_transmitting = payload.is_transmitting if payload.is_transmitting is not None else True
 
-    # Anti-abuse validation: Monitor mode cannot transmit
+    # Anti-abuse validation & Dynamic TX Firewall check
     if is_transmitting:
         if callsign.upper() in ["SWL-MONITOR", "MONITOR", "LISTENER", "GUEST", "TAMU"] or dmr_id == 0:
             raise HTTPException(
                 status_code=403,
                 detail="Mode Monitor (SWL) tidak diizinkan memancar. Silakan gunakan profil Callsign pribadi atau masukkan PIN Operator."
+            )
+        is_allowed, reason = await CallbookService.check_tx_permission(session, dmr_id, callsign, tg)
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=reason
             )
 
     # Resolve operator name & organization from Callbook

@@ -95,6 +95,59 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
         pass
     return None
 
+def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tuple:
+    """
+    Validates whether the incoming DMR/USRP operator is allowed to transmit on target_tg.
+    Returns (is_allowed: bool, reason: str).
+    """
+    if target_tg == 9990:
+        return True, "Echo Test"
+    db_path = "/app/data/ninjaradio.db"
+    if not os.path.exists(db_path):
+        return True, "Default (No DB)"
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT organization, allowed_tgs_override FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, (callsign or "").upper()))
+            row = cursor.fetchone()
+            org_code = "ORARI"
+            if row:
+                org_code = row[0] or "ORARI"
+                override = row[1]
+                if override:
+                    if override.strip() == "*":
+                        return True, org_code
+                    allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
+                    if target_tg in allowed:
+                        return True, org_code
+                    return False, f"User override forbids TG {target_tg}"
+            else:
+                call_upper = (callsign or "").upper()
+                if call_upper.startswith(("YB", "YC", "YD", "YE", "BD", "N1NJA", "TEST-OP")):
+                    org_code = "ORARI"
+                elif call_upper.startswith("JZ"):
+                    org_code = "RAPI"
+                else:
+                    org_code = "KOMUNITAS"
+
+            cursor.execute("SELECT allowed_tgs, allow_tx FROM organizations WHERE UPPER(code) = ?", (org_code.upper(),))
+            org_row = cursor.fetchone()
+            if org_row:
+                allowed_tgs, allow_tx = org_row
+                if not allow_tx:
+                    return False, f"Organization {org_code} is monitor-only"
+                rule = (allowed_tgs or "*").strip()
+                if rule == "*":
+                    return True, org_code
+                allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+                if target_tg in allowed:
+                    return True, org_code
+                return False, f"Organization {org_code} not authorized for TG {target_tg}"
+    except Exception:
+        pass
+    return True, "Fallback"
+
 def is_tg_bridged_to_peer(tg: int, peer_name: str = "") -> bool:
     """
     Checks SQLite bridge_routes to determine if a talkgroup is actively bridged
@@ -218,6 +271,10 @@ class DVSwitchCoreManager:
         self.current_tx_dmr_id = 0
         self.last_rx_src = 0
         self.active_tx_client_addr = None
+
+        # Modular Dynamic Analog_Bridge Worker Pool (Metode B)
+        self.bridge_workers: Dict[str, dict] = {}
+        self.worker_rx_tasks: Dict[str, asyncio.Task] = {}
 
     def load_config(self) -> Dict:
         if os.path.exists(CONFIG_PATH):
@@ -606,6 +663,240 @@ Send={AB_AMBE_RX_PORT}
         self.md380_proc = None
         self.mmdvm_proc = None
         self.ab_proc = None
+
+    def get_workers_status(self) -> List[dict]:
+        """Returns live status of all active Analog_Bridge workers."""
+        workers = []
+        ab_running = self.ab_proc is not None and self.ab_proc.poll() is None
+        workers.append({
+            "id": "worker_primary",
+            "name": f"Primary Gateway (TG {self.current_tx_tg or self.config.get('primary_tg', 1025)})",
+            "tg": self.current_tx_tg or int(self.config.get("primary_tg", 1025)),
+            "slot": self.current_tx_slot or 2,
+            "usrp_rx_port": AB_USRP_RX_PORT,
+            "usrp_tx_port": AB_USRP_TX_PORT,
+            "status": "RUNNING" if ab_running else "STOPPED",
+            "is_primary": True,
+            "rx_packets": self.rx_packet_count,
+            "tx_packets": self.tx_packet_count,
+            "created_at": "Boot"
+        })
+
+        for w_id, w in list(self.bridge_workers.items()):
+            proc = w.get("proc")
+            is_alive = proc is not None and proc.poll() is None
+            workers.append({
+                "id": w_id,
+                "name": w.get("name", f"TG {w.get('tg')}"),
+                "tg": w.get("tg"),
+                "slot": w.get("slot", 2),
+                "usrp_rx_port": w.get("usrp_rx_port"),
+                "usrp_tx_port": w.get("usrp_tx_port"),
+                "status": "RUNNING" if is_alive else "STOPPED",
+                "is_primary": False,
+                "rx_packets": w.get("rx_packets", 0),
+                "tx_packets": w.get("tx_packets", 0),
+                "created_at": w.get("created_at", "")
+            })
+        return workers
+
+    async def spawn_bridge_worker(self, tg: int, slot: int = 2, name: str = "") -> dict:
+        """Spawns an on-demand Analog_Bridge worker for a specific talkgroup (Metode B)."""
+        w_id = f"worker_tg_{tg}_{slot}"
+        if w_id in self.bridge_workers:
+            w = self.bridge_workers[w_id]
+            if w.get("proc") and w["proc"].poll() is None:
+                return {"status": "ALREADY_RUNNING", "worker": {
+                    "id": w_id, "name": w.get("name"), "tg": tg, "slot": slot, "status": "RUNNING"
+                }}
+
+        ab_bin = find_binary("Analog_Bridge")
+        if not ab_bin:
+            raise RuntimeError("Analog_Bridge binary not found")
+
+        # Pick unique port offset based on index (1..16)
+        allocated_indices = {w.get("index", 1) for w in self.bridge_workers.values()}
+        idx = 1
+        while idx in allocated_indices:
+            idx += 1
+
+        usrp_rx = 32000 + (idx * 10)
+        usrp_tx = 32001 + (idx * 10)
+        ambe_rx = 31100 + (idx * 10)
+        ambe_tx = 31103 + (idx * 10)
+
+        ini_path = f"/app/data/Analog_Bridge_{w_id}.ini"
+        log_path = f"/var/log/dvswitch/Analog_Bridge_{w_id}.log"
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+        ini_content = f"""; Auto-generated On-Demand Worker for TG {tg} Slot {slot}
+[GENERAL]
+logLevel = 2
+exportMetadata = true
+subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
+decoderFallBack = true
+useEmulator = false
+outputAudioDevice = /dev/null
+inputAudioDevice = /dev/null
+useMicrophone = false
+useVox = false
+
+[AMBE_AUDIO]
+address = 127.0.0.1
+txPort = {ambe_tx}
+rxPort = {ambe_rx}
+ambeMode = DMR
+minTxTimeMS = 2500
+gatewayDmrId = 5109999
+repeaterID = 5109999{idx:02d}
+txTg = {tg}
+txTs = {slot}
+colorCode = 1
+
+[USRP]
+address = 127.0.0.1
+txPort = {usrp_tx}
+rxPort = {usrp_rx}
+usrpAudio = AUDIO_USE_BPF
+tlvAudio = AUDIO_USE_BPF
+usrpGain = 1.00
+"""
+        with open(ini_path, "w", encoding="utf-8") as f:
+            f.write(ini_content)
+
+        # Qemu detection if running ARM binary on x86_64
+        qemu_bin = None
+        for qp in ["/opt/md380-emu/qemu-arm-static", "/usr/bin/qemu-arm-static", "/usr/local/bin/qemu-arm-static"]:
+            if os.path.exists(qp) and os.access(qp, os.X_OK):
+                qemu_bin = qp
+                break
+        is_arm = False
+        try:
+            with open(ab_bin, "rb") as bf:
+                hdr = bf.read(20)
+                if len(hdr) >= 20 and hdr[4] == 1 and (hdr[18] == 40 or hdr[18] == 0x28):
+                    is_arm = True
+        except Exception:
+            pass
+
+        cmd = [qemu_bin, ab_bin, ini_path] if (is_arm and qemu_bin) else [ab_bin, ini_path]
+        log_f = open(log_path, "a")
+        ab_cwd = "/opt/Analog_Bridge" if os.path.isdir("/opt/Analog_Bridge") else "/app/data"
+        proc = subprocess.Popen(cmd, cwd=ab_cwd, stdout=log_f, stderr=log_f)
+
+        # Create worker UDP socket for PCM RX
+        rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        rx_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        rx_sock.bind(("0.0.0.0", usrp_tx))
+        rx_sock.setblocking(False)
+
+        worker_entry = {
+            "id": w_id,
+            "name": name or f"Dynamic Bridge TG {tg}",
+            "tg": tg,
+            "slot": slot,
+            "index": idx,
+            "usrp_rx_port": usrp_rx,
+            "usrp_tx_port": usrp_tx,
+            "ambe_rx_port": ambe_rx,
+            "ambe_tx_port": ambe_tx,
+            "proc": proc,
+            "rx_sock": rx_sock,
+            "rx_packets": 0,
+            "tx_packets": 0,
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        self.bridge_workers[w_id] = worker_entry
+
+        # Start background RX loop for this worker
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(self.run_worker_pcm_rx_loop(w_id))
+        self.worker_rx_tasks[w_id] = task
+
+        logger.info(f"✓ Spawned on-demand Analog_Bridge worker '{w_id}' for TG {tg} (Ports: RX={usrp_rx}, TX={usrp_tx}, PID={proc.pid})")
+        return {
+            "status": "SPAWNED",
+            "worker": {
+                "id": w_id,
+                "name": worker_entry["name"],
+                "tg": tg,
+                "slot": slot,
+                "usrp_rx_port": usrp_rx,
+                "usrp_tx_port": usrp_tx,
+                "status": "RUNNING"
+            }
+        }
+
+    def stop_bridge_worker(self, worker_id: str) -> bool:
+        """Stops and frees an on-demand Analog_Bridge worker."""
+        w = self.bridge_workers.get(worker_id)
+        if not w:
+            return False
+        task = self.worker_rx_tasks.pop(worker_id, None)
+        if task and not task.done():
+            task.cancel()
+        sock = w.get("rx_sock")
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        proc = w.get("proc")
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        del self.bridge_workers[worker_id]
+        logger.info(f"✓ Stopped and removed on-demand Analog_Bridge worker '{worker_id}'")
+        return True
+
+    async def run_worker_pcm_rx_loop(self, worker_id: str):
+        """Asynchronously receives decoded PCM from an on-demand worker socket."""
+        w = self.bridge_workers.get(worker_id)
+        if not w:
+            return
+        sock = w.get("rx_sock")
+        tg = w.get("tg")
+        slot = w.get("slot", 2)
+        loop = asyncio.get_running_loop()
+        logger.info(f"📻 Worker {worker_id} started PCM Rx loop on UDP port {w.get('usrp_tx_port')}")
+        while self.running and worker_id in self.bridge_workers:
+            try:
+                data, _ = await loop.sock_recvfrom(sock, 2048)
+                if len(data) >= 32 and data.startswith(b"USRP"):
+                    w["rx_packets"] = w.get("rx_packets", 0) + 1
+                    magic, seq, mem, key_flag, hdr_tg = struct.unpack(">4sIIII", data[:20])
+                    usrp_type, = struct.unpack("<I", data[20:24])
+                    pcm_payload = data[32:]
+                    if usrp_type == 2:
+                        continue
+                    if key_flag == 1 and len(pcm_payload) >= 320:
+                        try:
+                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, tg, 5109999, slot, 0) + pcm_payload
+                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                        except Exception:
+                            pass
+                        asyncio.create_task(self.dispatch_event_to_backend({
+                            "network": f"Analog_Bridge (Worker TG {tg})",
+                            "host": "127.0.0.1",
+                            "src_id": 5109999,
+                            "dst_tg": tg,
+                            "slot": slot,
+                            "callsign": f"TG-{tg}",
+                            "is_tx": False,
+                            "is_transmitting": True,
+                            "data_type": 1,
+                            "pcm": base64.b64encode(pcm_payload).decode("ascii")
+                        }))
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                await asyncio.sleep(0.01)
 
     async def init(self):
         self.http_session = aiohttp.ClientSession()
@@ -1207,18 +1498,42 @@ Send={AB_AMBE_RX_PORT}
                             target_tg = hdr_tg or default_fallback_tg
                             target_slot = hdr_slot
 
+                        # Server-Side TX Firewall check
+                        is_allowed, reason = check_core_tx_permission(target_dmr_id, target_call, target_tg)
+                        if not is_allowed:
+                            now = time.time()
+                            if now - getattr(self, "_last_fw_alert_time", 0) > 3.0:
+                                self._last_fw_alert_time = now
+                                logger.warning(f"🛑 [TX-FIREWALL] Blocked PTT from {addr} ({target_call} - {target_dmr_id}) to TG {target_tg}: {reason}")
+                            continue
+
+                        # Check if a dedicated on-demand worker is active for target_tg
+                        target_worker_port = AB_USRP_RX_PORT
+                        for w in self.bridge_workers.values():
+                            if w.get("tg") == target_tg and w.get("proc") and w["proc"].poll() is None:
+                                target_worker_port = w.get("usrp_rx_port", AB_USRP_RX_PORT)
+                                w["tx_packets"] = w.get("tx_packets", 0) + 1
+                                break
+
                         if self.dmr_master_server:
                             self.dmr_master_server.mark_local_transmission(target_dmr_id, target_tg, target_slot)
 
                         if not self.tx_identity_sent or not self.is_transmitting or self.current_tx_tg != target_tg or self.current_tx_dmr_id != target_dmr_id:
                             self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
+                            if target_worker_port != AB_USRP_RX_PORT:
+                                try:
+                                    tlv = build_set_info_tlv(target_dmr_id, 5109999, target_tg, target_slot, 1, target_call)
+                                    pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv)
+                                    self.bridge_sock.sendto(pkt, ("127.0.0.1", target_worker_port))
+                                except Exception:
+                                    pass
                             self.tx_identity_sent = True
                             self.is_transmitting = True
                             self.active_tx_client_addr = addr
                             self.current_tx_tg = target_tg
                             self.current_tx_slot = target_slot
                             self.current_tx_dmr_id = target_dmr_id
-                            logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot})")
+                            logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot}, Port: {target_worker_port})")
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
                                 "host": f"{addr[0]}:{addr[1]}",
@@ -1234,9 +1549,9 @@ Send={AB_AMBE_RX_PORT}
                         self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                         std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, payload)
                         try:
-                            self.bridge_sock.sendto(std_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                            self.bridge_sock.sendto(std_pkt, ("127.0.0.1", target_worker_port))
                         except Exception as e:
-                            logger.debug(f"Error forwarding USRP to Analog_Bridge: {e}")
+                            logger.debug(f"Error forwarding USRP to Analog_Bridge port {target_worker_port}: {e}")
             except Exception as e:
                 if self.running:
                     logger.debug(f"usrp_ingress_loop note: {e}")
@@ -1869,6 +2184,41 @@ async def ptt_transmit(payload: dict):
             return {"status": "TX_STOPPED"}
     except Exception as e:
         return {"status": "ERROR", "detail": str(e)}
+
+# ----------------- Dynamic Multi-Worker API (Metode B) -----------------
+
+@app.get("/api/workers")
+async def api_get_workers():
+    """Returns active Analog_Bridge workers with status and metrics."""
+    return {
+        "status": "OK",
+        "count": len(engine_mgr.get_workers_status()),
+        "workers": engine_mgr.get_workers_status()
+    }
+
+@app.post("/api/workers/spawn")
+async def api_spawn_worker(payload: dict):
+    """Dynamically spawns an on-demand Analog_Bridge worker."""
+    tg = int(payload.get("tg", 0))
+    slot = int(payload.get("slot", 2))
+    name = str(payload.get("name", "")).strip()
+    if tg <= 0 or tg > 16777215:
+        raise HTTPException(status_code=400, detail="Nomor Talkgroup tidak valid.")
+    try:
+        res = await engine_mgr.spawn_bridge_worker(tg=tg, slot=slot, name=name)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/workers/{worker_id}")
+async def api_delete_worker(worker_id: str):
+    """Stops and deletes an on-demand Analog_Bridge worker."""
+    if worker_id == "worker_primary":
+        raise HTTPException(status_code=400, detail="Primary Gateway tidak dapat dihapus.")
+    success = engine_mgr.stop_bridge_worker(worker_id)
+    if success:
+        return {"status": "DELETED", "worker_id": worker_id}
+    raise HTTPException(status_code=404, detail="Worker tidak ditemukan.")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info")

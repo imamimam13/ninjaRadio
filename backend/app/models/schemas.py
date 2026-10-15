@@ -39,6 +39,7 @@ class CallbookBase(BaseModel):
     organization_id: Optional[str] = ""
     remarks: Optional[str] = ""
     default_tg: Optional[int] = 510
+    allowed_tgs_override: Optional[str] = None
 
 class CallbookCreate(CallbookBase):
     pass
@@ -117,12 +118,21 @@ class OrganizationCreateRequest(BaseModel):
     name: str
     code: Optional[str] = None
     description: Optional[str] = ""
+    allowed_tgs: Optional[str] = "*"
+    allow_tx: Optional[bool] = True
+
+class OrganizationRuleUpdate(BaseModel):
+    pin: str
+    allowed_tgs: str
+    allow_tx: Optional[bool] = True
 
 class OrganizationResponse(BaseModel):
     id: int
     name: str
     code: str
     description: Optional[str] = ""
+    allowed_tgs: Optional[str] = "*"
+    allow_tx: Optional[bool] = True
     is_default: Optional[bool] = False
 
 

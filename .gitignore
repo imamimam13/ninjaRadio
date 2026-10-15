@@ -48,6 +48,9 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
+# Scratch and analysis scripts
+scratch/
+
 # Docker & Caddy persistent state
 caddy_data/
 caddy_config/
