@@ -34,6 +34,7 @@ interface HotspotClient {
   tx_packets: number;
   last_tg: number;
   last_slot: number;
+  options?: string;
 }
 
 interface PeerStatus {
@@ -303,6 +304,7 @@ export default function ServerDmrPage() {
                   <th className="p-3 font-bold">DMR ID</th>
                   <th className="p-3 font-bold">REMOTE ENDPOINT</th>
                   <th className="p-3 font-bold">SOFTWARE</th>
+                  <th className="p-3 font-bold">SUBSCRIBED TG</th>
                   <th className="p-3 font-bold">STATUS</th>
                   <th className="p-3 font-bold">UPTIME</th>
                   <th className="p-3 font-bold">LAST SEEN</th>
@@ -321,6 +323,11 @@ export default function ServerDmrPage() {
                       <td className="p-3 text-slate-400">{hs.ip}:{hs.port}</td>
                       <td className="p-3 text-slate-400">{hs.software}</td>
                       <td className="p-3">
+                        <span className="text-cyan-400 font-bold">
+                          {hs.last_tg ? `TG ${hs.last_tg} (TS${hs.last_slot || 2})` : (hs.options || "-")}
+                        </span>
+                      </td>
+                      <td className="p-3">
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
                           {hs.state}
                         </span>
@@ -334,7 +341,7 @@ export default function ServerDmrPage() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={8} className="p-8 text-center text-slate-500">
+                    <td colSpan={9} className="p-8 text-center text-slate-500">
                       <Radio className="w-8 h-8 mx-auto mb-2 opacity-40 text-cyan-400" />
                       <div>No hotspots currently connected.</div>
                       <div className="text-[11px] text-slate-600 mt-1">
