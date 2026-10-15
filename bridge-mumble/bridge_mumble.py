@@ -131,18 +131,29 @@ def ensure_channels_created():
         su.start()
         su.is_ready()
         time.sleep(1.0)
+
+        existing_names = set()
+        for ch in list(su.channels.values()):
+            try:
+                name = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+                if name:
+                    existing_names.add(str(name))
+            except Exception:
+                pass
+
+        logger.info(f"Existing Murmur channels before init: {list(existing_names)}")
         for room_name, tg_val in ROOM_MAPPINGS.items():
-            ch = su.channels.find_by_name(room_name)
-            if not ch:
+            if room_name not in existing_names:
                 try:
                     su.channels.new_channel(0, room_name, temporary=False)
-                    logger.info(f"✓ SuperUser created Mumble Room: '{room_name}' (TG {tg_val})")
+                    logger.info(f"✓ SuperUser created permanent Mumble Room: '{room_name}' (TG {tg_val})")
+                    time.sleep(0.3)
                 except Exception as ce:
                     logger.warning(f"Could not create channel '{room_name}': {ce}")
             else:
                 logger.info(f"✓ Channel '{room_name}' already exists.")
         su.stop()
-        time.sleep(1.0)
+        time.sleep(0.8)
     except Exception as e:
         logger.warning(f"SuperUser channel initialization warning: {e}")
 
@@ -225,9 +236,18 @@ def main():
         logger.info("✓ Successfully connected to Mumble Server!")
 
         first_ch_name = list(ROOM_MAPPINGS.keys())[0]
-        channel = mumble.channels.find_by_name(first_ch_name)
-        if channel:
-            mumble.users.myself.move_in(channel)
+        primary_ch = None
+        for ch in list(mumble.channels.values()):
+            try:
+                name = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+                if name == first_ch_name:
+                    primary_ch = ch
+                    break
+            except Exception:
+                pass
+
+        if primary_ch:
+            mumble.users.myself.move_in(primary_ch)
             logger.info(f"✓ Joined Primary Mumble Channel: {first_ch_name}")
 
     except Exception as e:

@@ -118,6 +118,7 @@ class DVSwitchCoreManager:
         self.usrp_ingress_sock: Optional[socket.socket] = None
         self.ab_pcm_sock: Optional[socket.socket] = None
         self.registered_usrp_clients: Dict[tuple, float] = {}
+        self.client_metadata: Dict[tuple, dict] = {}
         self.running = True
 
         # Process handles
@@ -891,32 +892,93 @@ Send={AB_AMBE_RX_PORT}
                     self.last_ptt_heartbeat_time = time.time()
 
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
-                    pcm_payload = data[32:]
+                    payload = data[32:]
+
+                    # 1. Handle DVSwitch USRP TEXT / Control packets (Registration, Ping, TLV SET_INFO)
+                    if payload.startswith(b"REG:"):
+                        if b"UNREG" in payload:
+                            self.registered_usrp_clients.pop(addr, None)
+                            self.client_metadata.pop(addr, None)
+                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:UNREG")
+                            logger.info(f"📱 DVSwitch Mobile client UNREGISTERED from {addr}")
+                        else:
+                            self.registered_usrp_clients[addr] = time.time()
+                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK")
+                            logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({payload.decode('ascii', errors='ignore')})")
+                        try:
+                            self.usrp_ingress_sock.sendto(reply_pkt, addr)
+                        except Exception:
+                            pass
+                        continue
+
+                    if payload.startswith(b"PING"):
+                        self.registered_usrp_clients[addr] = time.time()
+                        try:
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"PONG"), addr)
+                        except Exception:
+                            pass
+                        continue
+
+                    if payload.startswith(b"INFO:"):
+                        self.registered_usrp_clients[addr] = time.time()
+                        try:
+                            info_msg = json.dumps({"connected": True, "callsign": self.current_operator_callsign or "N1NJA", "tg": self.current_tx_tg or 1025}).encode("ascii")
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"INFO:" + info_msg), addr)
+                        except Exception:
+                            pass
+                        continue
+
+                    if len(payload) >= 14 and payload[0] == TLV_TAG_SET_INFO:
+                        tlv_info = parse_set_info_tlv(payload)
+                        if tlv_info:
+                            self.client_metadata[addr] = tlv_info
+                            self.registered_usrp_clients[addr] = time.time()
+                            logger.info(f"📱 DVSwitch client identity recorded from {addr}: {tlv_info['callsign']} (ID: {tlv_info['src']}, TG: {tlv_info['tg']})")
+                        continue
+
+                    # 2. Handle PTT Release / Unkey (key_flag == 0)
                     if key_flag == 0:
                         if self.is_transmitting or self.tx_identity_sent:
-                            self.stop_carrier_tx(tg, slot, dmr_id)
+                            active_tg = self.current_tx_tg or tg or 1025
+                            active_slot = self.current_tx_slot or slot or 2
+                            active_id = self.current_tx_dmr_id or dmr_id or 1022057
+                            self.stop_carrier_tx(active_tg, active_slot, active_id)
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
                                 "host": f"{addr[0]}:{addr[1]}",
-                                "src_id": dmr_id or getattr(self, "current_tx_dmr_id", 0),
-                                "dst_tg": tg or getattr(self, "current_tx_tg", 0),
-                                "slot": slot or getattr(self, "current_tx_slot", 2),
+                                "src_id": active_id,
+                                "dst_tg": active_tg,
+                                "slot": active_slot,
                                 "callsign": self.current_operator_callsign or "BD62BOT",
                                 "is_tx": False,
                                 "is_transmitting": False,
                                 "data_type": 2
                             }))
-                        # Send unkey pong reply from 32345 to DVSwitch Mobile / USRP client
+                        # Send unkey ack reply from 32345 to DVSwitch Mobile / USRP client
                         try:
                             ack_pkt = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
                             self.usrp_ingress_sock.sendto(ack_pkt, addr)
                         except Exception:
                             pass
-                    elif len(pcm_payload) > 0:
-                        target_dmr_id = dmr_id if dmr_id > 0 else (self.current_operator_dmr_id or 1022057)
-                        target_call = self.current_operator_callsign or "BD62BOT"
-                        target_tg = tg if tg > 0 else int(self.config.get("primary_tg", 1025))
-                        target_slot = slot if slot in [1, 2] else 2
+
+                    # 3. Handle PTT Key-down / Voice audio (key_flag == 1)
+                    elif len(payload) > 0:
+                        client_meta = self.client_metadata.get(addr, {})
+                        if client_meta:
+                            target_dmr_id = client_meta.get("src", 0) or 1022057
+                            target_call = client_meta.get("callsign", "DVSWITCH")
+                            target_tg = client_meta.get("tg", 0) or int(self.config.get("primary_tg", 1025))
+                            target_slot = client_meta.get("slot", 2)
+                        elif dmr_id > 1000 and dmr_id != (USRP_TYPE_TEXT << 24):
+                            target_dmr_id = dmr_id
+                            target_call = "MUMBLE"
+                            target_tg = tg if tg > 0 else int(self.config.get("primary_tg", 1025))
+                            target_slot = slot if slot in [1, 2] else 2
+                        else:
+                            target_dmr_id = self.current_operator_dmr_id or 1022057
+                            target_call = self.current_operator_callsign or "BD62BOT"
+                            target_tg = tg if (0 < tg < 16777215) else int(self.config.get("primary_tg", 1025))
+                            target_slot = 2
 
                         if not self.tx_identity_sent or not self.is_transmitting:
                             self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
@@ -939,7 +1001,7 @@ Send={AB_AMBE_RX_PORT}
                             }))
 
                         self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
-                        std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, pcm_payload)
+                        std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, payload)
                         try:
                             self.bridge_sock.sendto(std_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
                         except Exception as e:
@@ -1236,10 +1298,17 @@ Send={AB_AMBE_RX_PORT}
         now = time.time()
         usrp_clients = []
         for (ip, port), seen in self.registered_usrp_clients.items():
+            meta = self.client_metadata.get((ip, port), {})
+            call = meta.get("callsign", "")
+            sid = meta.get("src", 0)
+            tg = meta.get("tg", 0)
             usrp_clients.append({
                 "ip": ip,
                 "port": port,
-                "type": "DVSwitch Mobile / USRP Client",
+                "type": f"DVSwitch ({call} / {sid})" if call or sid else "DVSwitch Mobile / USRP Client",
+                "callsign": call,
+                "dmr_id": sid,
+                "tg": tg,
                 "last_seen_seconds_ago": round(now - seen, 1),
                 "is_active": (now - seen) < 120
             })
