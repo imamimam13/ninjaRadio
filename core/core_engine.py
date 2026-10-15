@@ -98,7 +98,7 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "") -> bool:
     """
     db_path = "/app/data/ninjaradio.db"
     if not os.path.exists(db_path):
-        return True
+        return False
     try:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
@@ -109,18 +109,19 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "") -> bool:
                     SELECT id FROM bridge_routes 
                     WHERE is_active = 1 
                       AND (source_tg = ? OR target_tg = ?)
-                      AND (UPPER(name) LIKE ? OR UPPER(target_mode) LIKE ?)
+                      AND (UPPER(name) LIKE ? OR UPPER(source_mode) LIKE ? OR UPPER(target_mode) LIKE ?)
                     LIMIT 1
-                """, (tg, tg, p_clean, p_clean))
-                if cursor.fetchone():
-                    return True
-            cursor.execute("""
-                SELECT id FROM bridge_routes 
-                WHERE is_active = 1 
-                  AND (source_tg = ? OR target_tg = ?)
-                LIMIT 1
-            """, (tg, tg))
-            return cursor.fetchone() is not None
+                """, (tg, tg, p_clean, p_clean, p_clean))
+                row = cursor.fetchone()
+                return row is not None
+            else:
+                cursor.execute("""
+                    SELECT id FROM bridge_routes 
+                    WHERE is_active = 1 
+                      AND (source_tg = ? OR target_tg = ?)
+                    LIMIT 1
+                """, (tg, tg))
+                return cursor.fetchone() is not None
     except Exception:
         pass
     return False
