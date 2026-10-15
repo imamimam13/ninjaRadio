@@ -29,19 +29,7 @@ export const DEFAULT_MONITOR_PROFILE: UserProfile = {
   defaultTg: 510,
 };
 
-export const DEFAULT_OPERATOR_PROFILE: UserProfile = {
-  id: "prof_bd62bot",
-  category: "Amatir",
-  callsign: "BD62BOT",
-  displayName: "NinjaRadio Operator",
-  dmrId: 1022057,
-  allowedTalkgroups: [1025, 510, 5101, 5102, 5103, 9990, 91],
-  badgeColor: "bg-emerald-500 text-slate-950",
-  networkTag: "BRIDI DMR Master",
-  defaultTg: 1025,
-};
-
-const DEFAULT_PROFILES: UserProfile[] = [DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE];
+const DEFAULT_PROFILES: UserProfile[] = [DEFAULT_MONITOR_PROFILE];
 
 interface ProfileSwitcherProps {
   activeProfile: UserProfile;
@@ -71,7 +59,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   const [isCustomTg, setIsCustomTg] = useState(false);
   const [customTgInput, setCustomTgInput] = useState("");
 
-  // Load from local storage, purging any old hardcoded N1NJA
+  // Load from local storage, purging legacy test profiles
   useEffect(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("ninjaradio_user_profiles") || localStorage.getItem("ninjadmr_user_profiles");
@@ -79,25 +67,30 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
-            // Purge hardcoded N1NJA and legacy test BD62AA from storage
+            // Purge hardcoded legacy profiles (N1NJA, BD62AA, BD62BOT) and duplicate monitors
             const cleaned = parsed.filter(
-              (p: UserProfile) => p.callsign !== "N1NJA" && p.id !== "prof_default" && p.callsign !== "BD62AA" && p.id !== "prof_bd62aa"
+              (p: UserProfile) =>
+                p.callsign !== "N1NJA" &&
+                p.id !== "prof_default" &&
+                p.callsign !== "BD62AA" &&
+                p.id !== "prof_bd62aa" &&
+                p.callsign !== "BD62BOT" &&
+                p.id !== "prof_bd62bot" &&
+                p.id !== "prof_monitor"
             );
-            if (cleaned.length > 0) {
-              const hasBd62bot = cleaned.some((p: UserProfile) => p.callsign === "BD62BOT");
-              const fullList = hasBd62bot ? [DEFAULT_MONITOR_PROFILE, ...cleaned] : [DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE, ...cleaned];
-              setProfiles(fullList);
-              if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA") {
-                onProfileChange(DEFAULT_OPERATOR_PROFILE);
-              }
-              return;
+            const fullList = [DEFAULT_MONITOR_PROFILE, ...cleaned];
+            setProfiles(fullList);
+            localStorage.setItem("ninjaradio_user_profiles", JSON.stringify(fullList));
+            if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA" || activeProfile.callsign === "BD62BOT") {
+              onProfileChange(DEFAULT_MONITOR_PROFILE);
             }
+            return;
           }
         } catch {}
       }
-      setProfiles([DEFAULT_MONITOR_PROFILE, DEFAULT_OPERATOR_PROFILE]);
-      if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA") {
-        onProfileChange(DEFAULT_OPERATOR_PROFILE);
+      setProfiles([DEFAULT_MONITOR_PROFILE]);
+      if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA" || activeProfile.callsign === "BD62BOT") {
+        onProfileChange(DEFAULT_MONITOR_PROFILE);
       }
     }
   }, []);
