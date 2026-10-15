@@ -261,6 +261,8 @@ class MumbleGatewayBot:
             try:
                 # Resample 8kHz 16-bit mono PCM to 48kHz for Mumble Opus encoder
                 samples_8k = np.frombuffer(pcm_8k, dtype=np.int16)
+                # Apply 1.5x digital gain cushion for punchy clear Mumla audio
+                samples_8k = np.clip(samples_8k.astype(np.float32) * 1.5, -32768, 32767).astype(np.int16)
                 samples_48k = np.repeat(samples_8k, 6)
                 self.mumble.sound_output.add_sound(samples_48k.tobytes())
             except Exception:
@@ -386,6 +388,7 @@ def run_usrp_listener(gateway_pool):
     except Exception as e:
         logger.warning(f"Could not bind on {bind_port}: {e}")
 
+    last_rx_log = 0.0
     while IS_BRIDGING:
         try:
             data, addr = sock.recvfrom(2048)
@@ -403,6 +406,11 @@ def run_usrp_listener(gateway_pool):
                     target_bots = [bot for bot in gateway_pool.values() if bot.tg == TARGET_TG]
                     if not target_bots and gateway_pool:
                         target_bots = [list(gateway_pool.values())[0]]
+
+                if time.time() - last_rx_log > 2.0 and target_bots:
+                    last_rx_log = time.time()
+                    bot_names = ", ".join([f"{b.bot_user} in '{b.room_name}'" for b in target_bots])
+                    logger.info(f"[Mumble-Bridge] 🔊 Routing DMR RX (TG {talkgroup}) to {bot_names}")
 
                 for bot in target_bots:
                     bot.play_pcm_8k(pcm_8k)

@@ -102,6 +102,8 @@ DEFAULT_CONFIG = {
     "tx_pwr": 25,
     "hotspot_port": DMR_MASTER_PORT,
     "hotspot_password": "ninjaradio_pass",
+    "rx_audio_gain": 2.50,
+    "tx_audio_gain": 1.25,
     "peering": []
 }
 
@@ -213,6 +215,8 @@ class DVSwitchCoreManager:
         color_code = int(cfg.get("color_code", 1))
         tx_pwr = int(cfg.get("tx_pwr", 25))
         default_tg = int(cfg.get("default_tg", 510))
+        rx_audio_gain = float(cfg.get("rx_audio_gain", 2.50))
+        tx_audio_gain = float(cfg.get("tx_audio_gain", 1.25))
 
         active_peers = [p for p in peers if p.get("isActive") is True]
         self.standalone_mode = len(active_peers) == 0
@@ -323,9 +327,11 @@ colorCode = {color_code}
 address = 127.0.0.1
 txPort = {AB_USRP_TX_PORT}
 rxPort = {AB_USRP_RX_PORT}
-usrpAudio = AUDIO_USE_BPF
-tlvAudio = AUDIO_USE_BPF
-usrpGain = 1.00
+usrpAudio = AUDIO_USE_GAIN
+tlvAudio = AUDIO_USE_GAIN
+usrpGain = {rx_audio_gain:.2f}
+tlvGain = {tx_audio_gain:.2f}
+usrpAGC = -20,10,100
 """
         with open("/app/data/Analog_Bridge.ini", "w", encoding="utf-8") as f:
             f.write(ab_content)
@@ -820,14 +826,7 @@ Send={AB_AMBE_RX_PORT}
                     mpxid, res = struct.unpack(">II", data[24:32])
                     pcm_payload = data[32:]
 
-                    # Forward to Mumble bridge (UDP 12346)
-                    try:
-                        self.bridge_sock.sendto(data, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                    except Exception:
-                        pass
-
-                    # Forward to any connected external USRP clients
-                    self.broadcast_to_usrp_clients(data)
+                    # Metadata and audio dispatch will occur after parsing talker and TG info below
 
                     # Handle USRP_TYPE_TEXT (2) metadata packets exported by Analog_Bridge
                     if usrp_type == 2 and len(pcm_payload) > 0:
@@ -868,6 +867,25 @@ Send={AB_AMBE_RX_PORT}
                     # Refresh active timestamp while receiving audio packets
                     self.current_rx_time = time.time()
                     self.current_rx_active = True
+
+                    # 1. Forward tagged PCM frame to Mumble bridge (UDP 12346)
+                    # We pack active_tg into field 3 so Mumble router knows which room bot should play it!
+                    if len(pcm_payload) >= 320:
+                        try:
+                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, active_tg, active_src, active_slot, 0) + pcm_payload
+                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                        except Exception:
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                pass
+
+                        # 2. Forward to external USRP clients (DVSwitch Mobile)
+                        try:
+                            usrp_mobile_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, active_tg, active_src, active_slot, 0) + pcm_payload
+                            self.broadcast_to_usrp_clients(usrp_mobile_pkt)
+                        except Exception:
+                            pass
 
                     # Dispatch event to backend API for Web Audio player
                     if key_flag == 1 and len(pcm_payload) >= 320:
