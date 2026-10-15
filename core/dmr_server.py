@@ -22,6 +22,8 @@ RPTPONG = b"RPTPONG"
 MSTACK = b"MSTACK"
 MSTNAK = b"MSTNAK"
 RPTCL = b"RPTCL"
+RPTO = b"RPTO"
+RPTS = b"RPTS"
 DMRD = b"DMRD"
 
 class HomeBrewMasterServer:
@@ -215,6 +217,41 @@ class HomeBrewMasterServer:
                 logger.info(f"[DMR-Master] ✓ Hotspot {callsign} ({dmr_id}) fully CONNECTED from {addr} [{software_str}]")
 
             # Send RPTACK acknowledgment
+            self.sock.sendto(RPTACK, addr)
+            return
+
+        # 3b. RPTO: Repeater / Hotspot Options Block (e.g. TS2_1=510990;)
+        elif data.startswith(RPTO) and len(data) >= 8:
+            dmr_id = struct.unpack(">I", data[4:8])[0]
+            options_payload = data[8:].decode("ascii", errors="ignore").strip()
+
+            if addr not in self.clients:
+                self._update_client_seen(dmr_id, addr)
+
+            if addr in self.clients:
+                self.clients[addr]["options"] = options_payload
+                self.clients[addr]["state"] = "CONNECTED"
+                self.clients[addr]["last_seen"] = time.time()
+                # Parse talkgroup subscription if present (e.g. TS2_1=510990 or TS1_1=...)
+                import re
+                m2 = re.search(r"TS2_\d+=(\d+)", options_payload)
+                if m2:
+                    self.clients[addr]["last_tg"] = int(m2.group(1))
+                    self.clients[addr]["last_slot"] = 2
+                m1 = re.search(r"TS1_\d+=(\d+)", options_payload)
+                if m1 and not m2:
+                    self.clients[addr]["last_tg"] = int(m1.group(1))
+                    self.clients[addr]["last_slot"] = 1
+                logger.info(f"[DMR-Master] ✓ Hotspot {self.clients[addr].get('callsign')} ({dmr_id}) options: {options_payload}")
+
+            # Send RPTACK acknowledgment (CRUCIAL: MMDVMHost transitions to STATE_RUNNING upon receiving this)
+            self.sock.sendto(RPTACK, addr)
+            return
+
+        # 3c. RPTS: Repeater Status / Short Block
+        elif data.startswith(RPTS) and len(data) >= 8:
+            dmr_id = struct.unpack(">I", data[4:8])[0]
+            self._update_client_seen(dmr_id, addr)
             self.sock.sendto(RPTACK, addr)
             return
 
@@ -453,7 +490,8 @@ class HomeBrewMasterServer:
                 "rx_packets": c.get("rx_packets", 0),
                 "tx_packets": c.get("tx_packets", 0),
                 "last_tg": c.get("last_tg", 0),
-                "last_slot": c.get("last_slot", 2)
+                "last_slot": c.get("last_slot", 2),
+                "options": c.get("options", "")
             })
 
         active_tx_info = None
