@@ -991,4 +991,246 @@ async def save_mumla_channels(payload: dict):
         "channels": cleaned_channels
     }
 
+# ----------------- Mumla Bot Management -----------------
+
+DEFAULT_MUMBLE_BOTS = [
+    {"name": "NinjaBot-Nasional", "channel": "NinjaRadio-Nasional", "tg": 510, "slot": 2, "status": "STATIONED"},
+    {"name": "NinjaBot-Nusantara", "channel": "NinjaRadio-Nusantara", "tg": 5109, "slot": 2, "status": "STATIONED"},
+    {"name": "NinjaBot-Echo-Parrot", "channel": "Echo-Parrot", "tg": 9990, "slot": 2, "status": "STATIONED"},
+    {"name": "NinjaBot-Darurat", "channel": "NinjaRadio-Darurat", "tg": 5108, "slot": 1, "status": "STATIONED"},
+    {"name": "NinjaBot-Worldwide", "channel": "NinjaRadio-Worldwide", "tg": 91, "slot": 1, "status": "STATIONED"},
+    {"name": "NinjaBot-TG-5155", "channel": "TG-5155", "tg": 5155, "slot": 1, "status": "STATIONED"}
+]
+
+@router.get("/mumla/bots")
+async def get_mumla_bots():
+    """Returns the list of active user bots and their assigned channels/talkgroups."""
+    import json
+    import os
+    config_path = "/app/data/config.json"
+    bots = DEFAULT_MUMBLE_BOTS
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "mumble_bots" in data and isinstance(data["mumble_bots"], list) and len(data["mumble_bots"]) > 0:
+                    bots = data["mumble_bots"]
+        except Exception:
+            pass
+    return {"bots": bots}
+
+@router.post("/mumla/bots")
+async def create_or_update_bot(payload: dict):
+    """Creates a new Mumble user bot or updates existing bot."""
+    import json
+    import os
+    name = str(payload.get("name", "")).strip().replace(" ", "-")
+    channel = str(payload.get("channel", "")).strip().replace(" ", "-")
+    if not name or not channel:
+        raise HTTPException(status_code=400, detail="Bot name and target channel are required")
+    try:
+        tg = int(payload.get("tg", 510))
+        slot = int(payload.get("slot", 2))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid TG or slot")
+
+    config_path = "/app/data/config.json"
+    data = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    bots = list(data.get("mumble_bots", list(DEFAULT_MUMBLE_BOTS)))
+    existing_idx = next((i for i, b in enumerate(bots) if b.get("name") == name), None)
+    bot_entry = {
+        "name": name,
+        "channel": channel,
+        "tg": tg,
+        "slot": slot,
+        "status": "STATIONED"
+    }
+    if existing_idx is not None:
+        bots[existing_idx] = bot_entry
+    else:
+        bots.append(bot_entry)
+
+    data["mumble_bots"] = bots
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save bot config: {e}")
+
+    return {"status": "SUCCESS", "message": f"Bot '{name}' created/updated in channel '{channel}'", "bot": bot_entry}
+
+@router.post("/mumla/bots/move")
+async def move_mumla_bot(payload: dict):
+    """Moves an active Mumble bot to a different room/channel."""
+    import json
+    import os
+    name = str(payload.get("name", "")).strip()
+    target_channel = str(payload.get("target_channel", "")).strip().replace(" ", "-")
+    if not name or not target_channel:
+        raise HTTPException(status_code=400, detail="Bot name and target channel required")
+
+    config_path = "/app/data/config.json"
+    data = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    bots = list(data.get("mumble_bots", list(DEFAULT_MUMBLE_BOTS)))
+    target_bot = next((b for b in bots if b.get("name") == name), None)
+    if not target_bot:
+        tg = int(payload.get("tg", 510))
+        target_bot = {"name": name, "channel": target_channel, "tg": tg, "slot": 2, "status": "STATIONED"}
+        bots.append(target_bot)
+    else:
+        target_bot["channel"] = target_channel
+        if "tg" in payload:
+            try:
+                target_bot["tg"] = int(payload["tg"])
+            except Exception:
+                pass
+
+    data["mumble_bots"] = bots
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save move: {e}")
+
+    return {"status": "SUCCESS", "message": f"Bot '{name}' moved to '{target_channel}'", "bot": target_bot}
+
+@router.delete("/mumla/bots/{bot_name}")
+async def delete_mumla_bot(bot_name: str):
+    """Removes a bot from configuration."""
+    import json
+    import os
+    config_path = "/app/data/config.json"
+    data = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    bots = list(data.get("mumble_bots", list(DEFAULT_MUMBLE_BOTS)))
+    bots = [b for b in bots if b.get("name") != bot_name]
+    data["mumble_bots"] = bots
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete bot: {e}")
+
+    return {"status": "SUCCESS", "message": f"Bot '{bot_name}' removed"}
+
+# ----------------- DMR Master Server Settings -----------------
+
+@router.get("/serverdmr/config")
+async def get_serverdmr_config():
+    """Returns the persistent DMR Master configuration."""
+    import json
+    import os
+    config_path = "/app/data/config.json"
+    cfg = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+
+    return {
+        "server_callsign": cfg.get("server_callsign", "N1NJA"),
+        "server_dmr_id": cfg.get("server_dmr_id", 5109999),
+        "default_tg": cfg.get("default_tg", 510990),
+        "parrot_tgs": cfg.get("parrot_tgs", [9990, 99990]),
+        "color_code": cfg.get("color_code", 1),
+        "hotspot_port": cfg.get("hotspot_port", 62031),
+        "hotspot_password": cfg.get("hotspot_password", "ninjaradio_pass"),
+        "tx_freq": cfg.get("tx_freq", "142120"),
+        "rx_freq": cfg.get("rx_freq", "142120"),
+        "tx_pwr": cfg.get("tx_pwr", 50),
+        "max_hotspots": cfg.get("max_hotspots", 128)
+    }
+
+@router.post("/serverdmr/config")
+async def save_serverdmr_config(payload: dict):
+    """Saves DMR Master server configuration and reloads core engine dynamically."""
+    import json
+    import os
+    import re
+    import aiohttp
+    config_path = "/app/data/config.json"
+    cfg = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+
+    if "server_callsign" in payload:
+        cfg["server_callsign"] = str(payload["server_callsign"]).strip().upper()[:16]
+    if "server_dmr_id" in payload:
+        try:
+            cfg["server_dmr_id"] = int(payload["server_dmr_id"])
+        except Exception:
+            pass
+    if "default_tg" in payload:
+        try:
+            cfg["default_tg"] = int(payload["default_tg"])
+        except Exception:
+            pass
+    if "parrot_tgs" in payload:
+        raw_p = payload["parrot_tgs"]
+        if isinstance(raw_p, list):
+            cfg["parrot_tgs"] = [int(x) for x in raw_p if str(x).isdigit()]
+        elif isinstance(raw_p, str):
+            cfg["parrot_tgs"] = [int(x.strip()) for x in re.split(r"[,; ]+", raw_p) if x.strip().isdigit()]
+    if "color_code" in payload:
+        try:
+            cfg["color_code"] = int(payload["color_code"])
+        except Exception:
+            pass
+    if "hotspot_port" in payload:
+        try:
+            cfg["hotspot_port"] = int(payload["hotspot_port"])
+        except Exception:
+            pass
+    if "hotspot_password" in payload:
+        cfg["hotspot_password"] = str(payload["hotspot_password"]).strip()
+    if "tx_freq" in payload:
+        cfg["tx_freq"] = str(payload["tx_freq"]).strip()
+    if "rx_freq" in payload:
+        cfg["rx_freq"] = str(payload["rx_freq"]).strip()
+
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save DMR Master config: {e}")
+
+    # Notify core engine to reload dynamically
+    try:
+        async with aiohttp.ClientSession() as s:
+            await s.post("http://core:5000/api/reload", timeout=aiohttp.ClientTimeout(total=2.0))
+    except Exception:
+        pass
+
+    return {
+        "status": "SUCCESS",
+        "message": "DMR Master configuration saved and applied.",
+        "config": cfg
+    }
+
 

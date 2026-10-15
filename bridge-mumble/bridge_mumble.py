@@ -193,16 +193,43 @@ def resolve_mumble_identity(username: str) -> tuple:
 class MumbleGatewayBot:
     """Dedicated bot instance for a single Mumble channel & DMR Talkgroup pair."""
 
-    def __init__(self, room_name: str, tg: int, usrp_sock: socket.socket):
+    def __init__(self, room_name: str, tg: int, usrp_sock: socket.socket, bot_user: str = None):
         self.room_name = room_name
         self.tg = tg
         self.usrp_sock = usrp_sock
-        # Generate clean readable bot username: e.g. "NinjaBot-Nasional", "NinjaBot-Nusantara", "NinjaBot-Echo"
-        clean_name = room_name.replace("NinjaRadio-", "").replace(" ", "-")
-        self.bot_user = f"NinjaBot-{clean_name}"[:25]
+        if bot_user:
+            self.bot_user = bot_user[:25]
+        else:
+            clean_name = room_name.replace("NinjaRadio-", "").replace(" ", "-")
+            self.bot_user = f"NinjaBot-{clean_name}"[:25]
         self.mumble = None
         self.running = False
         self.thread = None
+
+    def move_to_channel(self, target_channel_name: str, new_tg: int = None):
+        """Moves this bot into another channel in real-time without reconnection."""
+        self.room_name = target_channel_name
+        if new_tg is not None:
+            self.tg = new_tg
+        if self.mumble and self.mumble.is_alive():
+            try:
+                target_ch = None
+                for ch in list(self.mumble.channels.values()):
+                    try:
+                        cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+                        if cname == self.room_name:
+                            target_ch = ch
+                            break
+                    except Exception:
+                        pass
+                if target_ch:
+                    ch_id = target_ch["channel_id"] if (isinstance(target_ch, dict) or hasattr(target_ch, "__getitem__")) else getattr(target_ch, "channel_id", 0)
+                    self.mumble.users.myself.move_in(int(ch_id))
+                    logger.info(f"[{self.bot_user}] 🔀 Moved live into '{self.room_name}' (ID: {ch_id}), target TG {self.tg}")
+                else:
+                    logger.warning(f"[{self.bot_user}] Channel '{self.room_name}' not found for live move.")
+            except Exception as e:
+                logger.warning(f"[{self.bot_user}] Failed to move channel live: {e}")
 
     def start(self):
         if self.running:
@@ -367,15 +394,58 @@ def ptt_watchdog_loop(usrp_sock):
                     pass
                 active_mumble_tx = None
 
-def sync_gateway_bots(usrp_sock):
-    """Ensures each configured Mumble room has an active gateway bot running."""
-    global GATEWAY_POOL, ROOM_MAPPINGS
+def load_configured_bots():
+    """Loads bot definitions from config.json, or generates default bots for each room."""
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "mumble_bots" in data and isinstance(data["mumble_bots"], list) and len(data["mumble_bots"]) > 0:
+                    return data["mumble_bots"]
+        except Exception:
+            pass
+
+    # Fallback: auto-generate one bot per configured room
+    bots = []
     for room_name, tg_val in ROOM_MAPPINGS.items():
-        if room_name not in GATEWAY_POOL:
-            bot = MumbleGatewayBot(room_name, tg_val, usrp_sock)
-            GATEWAY_POOL[room_name] = bot
+        clean_name = room_name.replace("NinjaRadio-", "").replace(" ", "-")
+        bots.append({
+            "name": f"NinjaBot-{clean_name}",
+            "channel": room_name,
+            "tg": tg_val,
+            "slot": 2
+        })
+    return bots
+
+def sync_gateway_bots(usrp_sock):
+    """Ensures each configured Mumble bot is running and stationed in its assigned channel."""
+    global GATEWAY_POOL
+    configured_bots = load_configured_bots()
+    configured_names = set()
+
+    for b in configured_bots:
+        b_name = b.get("name")
+        b_channel = b.get("channel")
+        b_tg = int(b.get("tg", 510))
+        if not b_name or not b_channel:
+            continue
+        configured_names.add(b_name)
+
+        if b_name not in GATEWAY_POOL:
+            bot = MumbleGatewayBot(b_channel, b_tg, usrp_sock, bot_user=b_name)
+            GATEWAY_POOL[b_name] = bot
             bot.start()
-            time.sleep(0.5)
+            time.sleep(0.4)
+        else:
+            bot = GATEWAY_POOL[b_name]
+            if bot.room_name != b_channel or bot.tg != b_tg:
+                bot.move_to_channel(b_channel, b_tg)
+
+    for b_name in list(GATEWAY_POOL.keys()):
+        if b_name not in configured_names:
+            logger.info(f"[{b_name}] Removing decommissioned bot...")
+            GATEWAY_POOL[b_name].stop()
+            GATEWAY_POOL.pop(b_name, None)
 
 def config_file_watcher_loop(usrp_sock):
     """Background thread watching /app/data/config.json for dynamic channel changes."""

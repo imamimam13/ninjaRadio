@@ -20,7 +20,9 @@ import {
   Pencil,
   Trash2,
   Save,
-  X
+  X,
+  Bot,
+  ArrowRightLeft
 } from "lucide-react";
 
 interface ChannelMapping {
@@ -28,6 +30,14 @@ interface ChannelMapping {
   tg: number;
   slot: number;
   description: string;
+}
+
+interface MumbleBot {
+  name: string;
+  channel: string;
+  tg: number;
+  slot: number;
+  status: string;
 }
 
 interface BridgeBotInfo {
@@ -72,6 +82,38 @@ export default function MumlaPage() {
   const [savingChannels, setSavingChannels] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Dynamic Bot Management State
+  const [bots, setBots] = useState<MumbleBot[]>([]);
+  const [loadingBots, setLoadingBots] = useState(false);
+  const [isAddBotModalOpen, setIsAddBotModalOpen] = useState(false);
+  const [isMoveBotModalOpen, setIsMoveBotModalOpen] = useState(false);
+  const [selectedBotForMove, setSelectedBotForMove] = useState<MumbleBot | null>(null);
+  const [newBotForm, setNewBotForm] = useState({
+    name: "",
+    channel: "",
+    tg: 510,
+    slot: 2
+  });
+  const [moveBotForm, setMoveBotForm] = useState({
+    target_channel: "",
+    tg: 510
+  });
+  const [botStatusMsg, setBotStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const fetchBots = async () => {
+    try {
+      const res = await fetch("/api/mumla/bots");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.bots) {
+          setBots(data.bots);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch Mumble bots:", err);
+    }
+  };
+
   const fetchTelemetry = async () => {
     try {
       const res = await fetch("/api/mumla/telemetry");
@@ -92,13 +134,120 @@ export default function MumlaPage() {
 
   useEffect(() => {
     fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 3000);
+    fetchBots();
+    const interval = setInterval(() => {
+      fetchTelemetry();
+      fetchBots();
+    }, 3000);
     return () => clearInterval(interval);
   }, [hasUnsavedChanges]);
 
   const handleManualRefresh = () => {
     setRefreshing(true);
     fetchTelemetry();
+    fetchBots();
+  };
+
+  const handleOpenAddBotModal = () => {
+    const defaultCh = channels.length > 0 ? channels[0] : null;
+    setNewBotForm({
+      name: "",
+      channel: defaultCh ? defaultCh.channel : "Root",
+      tg: defaultCh ? defaultCh.tg : 510,
+      slot: defaultCh ? defaultCh.slot : 2
+    });
+    setIsAddBotModalOpen(true);
+  };
+
+  const handleAddBot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBotForm.name.trim() || !newBotForm.channel.trim()) return;
+    setLoadingBots(true);
+    setBotStatusMsg(null);
+    try {
+      const res = await fetch("/api/mumla/bots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newBotForm)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBotStatusMsg({ type: "success", text: `✓ Bot '${newBotForm.name}' berhasil dibuat di channel '${newBotForm.channel}'!` });
+        setIsAddBotModalOpen(false);
+        fetchBots();
+      } else {
+        setBotStatusMsg({ type: "error", text: data.detail || "Gagal membuat user bot" });
+      }
+    } catch {
+      setBotStatusMsg({ type: "error", text: "Terjadi kesalahan koneksi ke server" });
+    } finally {
+      setLoadingBots(false);
+      setTimeout(() => setBotStatusMsg(null), 4000);
+    }
+  };
+
+  const handleOpenMoveBotModal = (bot: MumbleBot) => {
+    setSelectedBotForMove(bot);
+    setMoveBotForm({
+      target_channel: bot.channel,
+      tg: bot.tg
+    });
+    setIsMoveBotModalOpen(true);
+  };
+
+  const handleMoveBot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBotForMove || !moveBotForm.target_channel.trim()) return;
+    setLoadingBots(true);
+    setBotStatusMsg(null);
+    try {
+      const res = await fetch("/api/mumla/bots/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: selectedBotForMove.name,
+          target_channel: moveBotForm.target_channel,
+          tg: moveBotForm.tg
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBotStatusMsg({ type: "success", text: `✓ Bot '${selectedBotForMove.name}' berhasil dipindahkan ke channel '${moveBotForm.target_channel}'!` });
+        setIsMoveBotModalOpen(false);
+        setSelectedBotForMove(null);
+        fetchBots();
+      } else {
+        setBotStatusMsg({ type: "error", text: data.detail || "Gagal memindahkan bot" });
+      }
+    } catch {
+      setBotStatusMsg({ type: "error", text: "Terjadi kesalahan koneksi ke server" });
+    } finally {
+      setLoadingBots(false);
+      setTimeout(() => setBotStatusMsg(null), 4000);
+    }
+  };
+
+  const handleDeleteBot = async (botName: string) => {
+    if (!confirm(`Hapus user bot '${botName}' dari sistem Mumble?`)) return;
+    setLoadingBots(true);
+    setBotStatusMsg(null);
+    try {
+      const res = await fetch(`/api/mumla/bots/${encodeURIComponent(botName)}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBotStatusMsg({ type: "success", text: `✓ Bot '${botName}' berhasil dihapus!` });
+        fetchBots();
+      } else {
+        setBotStatusMsg({ type: "error", text: data.detail || "Gagal menghapus bot" });
+      }
+    } catch {
+      setBotStatusMsg({ type: "error", text: "Terjadi kesalahan koneksi" });
+    } finally {
+      setLoadingBots(false);
+      setTimeout(() => setBotStatusMsg(null), 4000);
+    }
   };
 
   const copyToClipboard = (text: string, field: string) => {
@@ -435,6 +584,113 @@ export default function MumlaPage() {
           </div>
         </div>
 
+        {/* Mumble User Bot Management */}
+        <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 overflow-hidden shadow-xl">
+          <div className="p-4 sm:p-5 border-b border-cyan-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Bot className="w-5 h-5 text-cyan-400" />
+              <div>
+                <h2 className="font-heading font-bold text-base sm:text-lg text-white">
+                  PENGELOLA USER BOT MUMBLE (DYNAMIC BOT ROUTER)
+                </h2>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Buat user bot baru dan pindahkan user bot ke channel tertentu secara instan dari web frontend.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-center">
+              <button
+                onClick={handleOpenAddBotModal}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-950/70 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-800 text-xs font-mono font-bold transition-all shadow-md hover:scale-[1.02]"
+              >
+                <Plus className="w-3.5 h-3.5 text-cyan-400" />
+                <span>+ BUAT USER BOT BARU</span>
+              </button>
+            </div>
+          </div>
+
+          {botStatusMsg && (
+            <div
+              className={`p-3 text-xs font-mono border-b flex items-center justify-between ${
+                botStatusMsg.type === "success"
+                  ? "bg-emerald-950/50 border-emerald-800/60 text-emerald-300"
+                  : "bg-rose-950/50 border-rose-800/60 text-rose-300"
+              }`}
+            >
+              <span>{botStatusMsg.text}</span>
+              <button onClick={() => setBotStatusMsg(null)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs font-mono">
+              <thead>
+                <tr className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                  <th className="p-3 font-bold">NAMA USER BOT</th>
+                  <th className="p-3 font-bold">RUANGAN / CHANNEL AKTIF</th>
+                  <th className="p-3 font-bold">MAPPED DMR TG</th>
+                  <th className="p-3 font-bold">TIMESLOT</th>
+                  <th className="p-3 font-bold text-center">STATUS</th>
+                  <th className="p-3 font-bold text-right">AKSI</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {bots && bots.length > 0 ? (
+                  bots.map((bot, idx) => (
+                    <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                      <td className="p-3 font-bold text-white flex items-center gap-2">
+                        <Bot className="w-4 h-4 text-cyan-400" />
+                        <span className="text-cyan-300 font-black text-sm">{bot.name}</span>
+                      </td>
+                      <td className="p-3">
+                        <span className="px-2.5 py-1 rounded-lg bg-purple-950/60 text-purple-300 border border-purple-800/70 font-bold inline-flex items-center gap-1.5">
+                          <Volume2 className="w-3 h-3 text-purple-400" />
+                          {bot.channel}
+                        </span>
+                      </td>
+                      <td className="p-3 font-bold text-emerald-400 text-sm">TG {bot.tg}</td>
+                      <td className="p-3 text-slate-300">Slot {bot.slot}</td>
+                      <td className="p-3 text-center">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                          {bot.status || "STATIONED"}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => handleOpenMoveBotModal(bot)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-700/60 transition-all font-bold"
+                            title="Pindahkan Bot ke Channel Lain"
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Pindah Channel</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBot(bot.name)}
+                            className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-rose-950/80 text-rose-400 border border-slate-700 hover:border-rose-800 transition-colors"
+                            title="Hapus Bot"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-slate-500">
+                      Belum ada user bot yang dikonfigurasi. Klik "+ BUAT USER BOT BARU" di atas.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {/* Modal Dialog for Add/Edit Channel */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
@@ -520,6 +776,197 @@ export default function MumlaPage() {
                     className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all shadow-md"
                   >
                     {editingIdx !== null ? "Perbarui" : "Tambahkan"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Dialog for Add User Bot */}
+        {isAddBotModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
+            <div className="bg-[#0b1322] border border-cyan-800/50 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-cyan-400" />
+                  <h3 className="font-heading font-black text-white text-base">
+                    BUAT USER BOT MUMBLE BARU
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setIsAddBotModalOpen(false)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddBot} className="space-y-4 text-xs font-mono">
+                <div className="space-y-1">
+                  <label className="text-slate-400 block font-bold">NAMA USER BOT</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contoh: NinjaBot-Regional"
+                    value={newBotForm.name}
+                    onChange={(e) => setNewBotForm({ ...newBotForm, name: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:outline-none focus:border-cyan-500"
+                  />
+                  <span className="text-[10px] text-slate-500">Nama bot yang akan muncul di daftar user Mumla / Mumble.</span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-400 block font-bold">PILIH CHANNEL / RUANGAN AWAL</label>
+                  <select
+                    value={newBotForm.channel}
+                    onChange={(e) => {
+                      const sel = e.target.value;
+                      const matched = channels.find(c => c.channel === sel);
+                      setNewBotForm({
+                        ...newBotForm,
+                        channel: sel,
+                        tg: matched ? matched.tg : newBotForm.tg,
+                        slot: matched ? matched.slot : newBotForm.slot
+                      });
+                    }}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:outline-none focus:border-cyan-500"
+                  >
+                    {channels.map((ch, i) => (
+                      <option key={i} value={ch.channel}>
+                        {ch.channel} (TG {ch.tg})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 block font-bold">DMR TALKGROUP</label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      max={16777215}
+                      value={newBotForm.tg}
+                      onChange={(e) => setNewBotForm({ ...newBotForm, tg: parseInt(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-cyan-400 font-bold font-mono focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-400 block font-bold">TIMESLOT</label>
+                    <select
+                      value={newBotForm.slot}
+                      onChange={(e) => setNewBotForm({ ...newBotForm, slot: parseInt(e.target.value) || 2 })}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value={1}>Slot 1</option>
+                      <option value={2}>Slot 2</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddBotModalOpen(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold transition-all"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loadingBots}
+                    className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition-all shadow-md disabled:opacity-50"
+                  >
+                    {loadingBots ? "Memproses..." : "Buat User Bot"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Dialog for Move Bot to Channel */}
+        {isMoveBotModalOpen && selectedBotForMove && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
+            <div className="bg-[#0b1322] border border-cyan-800/50 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <ArrowRightLeft className="w-5 h-5 text-cyan-400" />
+                  <h3 className="font-heading font-black text-white text-base">
+                    PINDAHKAN USER BOT: {selectedBotForMove.name}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setIsMoveBotModalOpen(false)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleMoveBot} className="space-y-4 text-xs font-mono">
+                <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-1">
+                  <span className="text-slate-500 block text-[11px]">Posisi Bot Saat Ini:</span>
+                  <div className="text-white font-bold flex items-center justify-between">
+                    <span>Channel: {selectedBotForMove.channel}</span>
+                    <span className="text-purple-400">TG {selectedBotForMove.tg}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-400 block font-bold">PILIH CHANNEL TUJUAN</label>
+                  <select
+                    value={moveBotForm.target_channel}
+                    onChange={(e) => {
+                      const sel = e.target.value;
+                      const matched = channels.find(c => c.channel === sel);
+                      setMoveBotForm({
+                        ...moveBotForm,
+                        target_channel: sel,
+                        tg: matched ? matched.tg : moveBotForm.tg
+                      });
+                    }}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:outline-none focus:border-cyan-500"
+                  >
+                    {channels.map((ch, i) => (
+                      <option key={i} value={ch.channel}>
+                        {ch.channel} (DMR TG {ch.tg})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-400 block font-bold">MAPPED DMR TG (AUTO / CUSTOM)</label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={16777215}
+                    value={moveBotForm.tg}
+                    onChange={(e) => setMoveBotForm({ ...moveBotForm, tg: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-cyan-400 font-bold font-mono focus:outline-none focus:border-cyan-500"
+                  />
+                  <span className="text-[10px] text-slate-500">Audio Mumble bot di channel baru akan di-transcode ke TG ini.</span>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setIsMoveBotModalOpen(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold transition-all"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loadingBots}
+                    className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all shadow-md disabled:opacity-50"
+                  >
+                    {loadingBots ? "Memindahkan..." : "Pindahkan Sekarang"}
                   </button>
                 </div>
               </form>
