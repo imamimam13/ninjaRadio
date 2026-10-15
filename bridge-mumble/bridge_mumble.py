@@ -59,8 +59,18 @@ def load_room_mappings():
                 data = json.load(f)
                 custom_rooms = data.get("mumble_rooms", [])
                 for r in custom_rooms:
-                    ch = r.get("channel")
-                    tg = r.get("tg")
+                    ch = r.get("name") or r.get("channel")
+                    tg = r.get("targetTg") if r.get("targetTg") is not None else r.get("tg")
+                    if ch and tg is not None:
+                        try:
+                            mappings[ch.strip()] = int(tg)
+                        except (ValueError, TypeError):
+                            pass
+
+                custom_bots = data.get("mumble_bots", [])
+                for b in custom_bots:
+                    ch = b.get("channel")
+                    tg = b.get("tg")
                     if ch and tg is not None:
                         try:
                             mappings[ch.strip()] = int(tg)
@@ -334,6 +344,29 @@ class MumbleGatewayBot:
 
                 # Keep thread alive while connection lasts
                 while self.running and IS_BRIDGING and self.mumble.is_alive():
+                    try:
+                        my_user = getattr(self.mumble.users, "myself", None)
+                        current_ch_id = None
+                        if my_user:
+                            if isinstance(my_user, dict) or hasattr(my_user, "__getitem__"):
+                                current_ch_id = my_user.get("channel_id")
+                            else:
+                                current_ch_id = getattr(my_user, "channel_id", None)
+
+                        target_ch = None
+                        for ch in list(self.mumble.channels.values()):
+                            cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+                            if cname == self.room_name:
+                                target_ch = ch
+                                break
+
+                        if target_ch:
+                            t_id = target_ch["channel_id"] if (isinstance(target_ch, dict) or hasattr(target_ch, "__getitem__")) else getattr(target_ch, "channel_id", 0)
+                            if current_ch_id != t_id:
+                                self.mumble.users.myself.move_in(int(t_id))
+                                logger.info(f"[{self.bot_user}] ✓ Stationed into '{self.room_name}' (ID: {t_id})")
+                    except Exception:
+                        pass
                     time.sleep(2)
 
             except Exception as e:
