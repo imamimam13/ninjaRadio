@@ -73,6 +73,23 @@ def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
         "callsign": callsign,
     }
 
+def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
+    """Resolves amateur callsign for DMR ID from SQLite Callbook DB."""
+    db_path = "/app/data/ninjaradio.db"
+    if not os.path.exists(db_path):
+        return None
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (dmr_id,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                return str(row[0]).strip().upper()
+    except Exception:
+        pass
+    return None
+
 DEFAULT_CONFIG = {
     "server_callsign": os.getenv("SERVER_CALLSIGN", "N1NJA"),
     "server_dmr_id": int(os.getenv("SERVER_DMR_ID", 5109999)),
@@ -995,7 +1012,7 @@ Send={AB_AMBE_RX_PORT}
                             target_slot = client_meta.get("slot", 2)
                         elif dmr_id > 1000 and dmr_id != (USRP_TYPE_TEXT << 24):
                             target_dmr_id = dmr_id
-                            target_call = "MUMBLE"
+                            target_call = lookup_callbook_callsign(target_dmr_id) or f"ID-{target_dmr_id}"
                             target_tg = tg if tg > 0 else int(self.config.get("primary_tg", 1025))
                             target_slot = slot if slot in [1, 2] else 2
                         else:

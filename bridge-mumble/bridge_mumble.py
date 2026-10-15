@@ -116,6 +116,80 @@ def ensure_channels_created():
     except Exception as e:
         logger.warning(f"SuperUser channel initialization warning: {e}")
 
+TLV_TAG_SET_INFO = 0x08
+
+def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, callsign: str) -> bytes:
+    call = (callsign or str(src_id)).encode("ascii", errors="ignore")[:16]
+    body = (
+        (src_id & 0xFFFFFF).to_bytes(3, "big")
+        + (rpt_id & 0xFFFFFFFF).to_bytes(4, "big")
+        + (tg & 0xFFFFFF).to_bytes(3, "big")
+        + bytes([slot & 0xFF, cc & 0xFF])
+        + call + b"\x00"
+    )
+    return bytes([TLV_TAG_SET_INFO, len(body)]) + body
+
+def resolve_mumble_identity(username: str) -> tuple:
+    """
+    Extracts DMR ID and Callsign from Mumble username and matches against Callbook DB.
+    Supports: Callsign matching (e.g. BD62AA), Name+Callsign (BD62AA-Ali), DMR ID, or fallback.
+    """
+    clean_name = username.strip()
+
+    # 1. Look for 7-digit DMR ID in string
+    id_match = re.search(r"\b(\d{7})\b", clean_name)
+    found_id = int(id_match.group(1)) if id_match else None
+
+    # 2. Extract potential callsign tokens (e.g. BD62AA, YB0ABC, JZ11XYZ)
+    tokens = re.findall(r"[A-Za-z0-9]{3,10}", clean_name)
+    found_call = None
+    for token in tokens:
+        token_upper = token.strip("/").upper()
+        if not token_upper.isdigit() and any(c.isdigit() for c in token_upper) and any(c.isalpha() for c in token_upper):
+            found_call = token_upper
+            break
+
+    # 3. Lookup against SQLite Callbook DB (/app/data/ninjaradio.db)
+    db_path = "/app/data/ninjaradio.db"
+    if os.path.exists(db_path):
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
+                if found_call:
+                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE UPPER(callsign) = ?", (found_call,))
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
+
+                for token in tokens:
+                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE UPPER(callsign) = ?", (token.upper(),))
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
+
+                if found_id:
+                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE dmr_id = ?", (found_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
+        except Exception:
+            pass
+
+    # 4. Fallback if not registered in Callbook DB:
+    if found_id and found_call:
+        return found_id, found_call
+    if found_id:
+        return found_id, f"ID-{found_id}"
+    if found_call:
+        virtual_id = 5100000 + (abs(hash(found_call)) % 90000)
+        return virtual_id, found_call
+
+    # Fallback from username
+    virtual_id = 5100000 + (abs(hash(clean_name)) % 90000)
+    clean_call = re.sub(r'[^A-Za-z0-9]', '', clean_name)[:8].upper() or f"MUM{virtual_id%1000:03d}"
+    return virtual_id, clean_call
+
 class MumbleGatewayBot:
     """Dedicated bot instance for a single Mumble channel & DMR Talkgroup pair."""
 
@@ -181,11 +255,7 @@ class MumbleGatewayBot:
                     if not pcm_48k:
                         return
 
-                    match = re.search(r"\b(\d{7})\b", str(uname))
-                    if match:
-                        user_dmr_id = int(match.group(1))
-                    else:
-                        user_dmr_id = 5100000 + (user.get("session", 1) % 99999)
+                    user_dmr_id, user_callsign = resolve_mumble_identity(uname)
 
                     try:
                         # Downsample 48kHz -> 8kHz PCM (decimate by 6)
@@ -194,13 +264,20 @@ class MumbleGatewayBot:
                         pcm_8k = samples_8k.tobytes()
 
                         tx_seq = (tx_seq + 1) % 65535
+
+                        # Dispatch binary TLV SET_INFO at start of transmission to carry over callsign and DMR ID
+                        if not active_mumble_tx:
+                            tlv = build_set_info_tlv(user_dmr_id, 5109999, self.tg, 2, 1, user_callsign)
+                            tlv_hdr = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 0, self.tg, user_dmr_id, 2, 0)
+                            self.usrp_sock.sendto(tlv_hdr + tlv, (USRP_HOST, USRP_PORT))
+                            logger.info(f"[MUMBLE-TX] 🔴 PTT TRANSMIT from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg}")
+
+                        # Send voice frame (key_flag = 1)
                         header = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 1, self.tg, user_dmr_id, 1, 0)
                         self.usrp_sock.sendto(header + pcm_8k, (USRP_HOST, USRP_PORT))
 
                         last_mumble_tx = time.time()
-                        if not active_mumble_tx:
-                            logger.info(f"[MUMBLE-TX] 🔴 PTT TRANSMIT from {uname} in '{self.room_name}' -> DMR TG {self.tg}")
-                        active_mumble_tx = (user, self.tg, user_dmr_id, last_mumble_tx)
+                        active_mumble_tx = (user, self.tg, user_dmr_id, user_callsign, last_mumble_tx)
                     except Exception as ex:
                         logger.debug(f"[{self.bot_user}] Error streaming sound chunk: {ex}")
 
@@ -279,13 +356,13 @@ def ptt_watchdog_loop(usrp_sock):
     while IS_BRIDGING:
         time.sleep(0.05)
         if active_mumble_tx:
-            user_info, tg, dmr_id, last_seen = active_mumble_tx
+            user_info, tg, dmr_id, callsign, last_seen = active_mumble_tx
             if time.time() - last_seen > 0.35:
                 tx_seq = (tx_seq + 1) % 65535
                 header = struct.pack(">4sIIIIIII", b"USRP", tx_seq, 0, 0, tg, dmr_id, 1, 0)
                 try:
                     usrp_sock.sendto(header, (USRP_HOST, USRP_PORT))
-                    logger.info(f"[MUMBLE-TX] ⏹️ PTT RELEASE from {user_info.get('name')} -> TG {tg}")
+                    logger.info(f"[MUMBLE-TX] ⏹️ PTT RELEASE from {callsign} ({dmr_id}) -> TG {tg}")
                 except Exception:
                     pass
                 active_mumble_tx = None
