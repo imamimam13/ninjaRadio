@@ -65,6 +65,9 @@ class HomeBrewMasterServer:
         self.recent_qsos: List[dict] = []
         self.max_recent_qsos = 50
 
+        # Native Parrot / Audio Echo Service (TG 9990)
+        self.parrot_recordings: Dict[Tuple[str, int], list] = {}
+
     async def start(self):
         self.running = True
         loop = asyncio.get_running_loop()
@@ -327,8 +330,26 @@ class HomeBrewMasterServer:
                     self.clients[addr]["last_tg"] = dst_tg
                     self.clients[addr]["last_slot"] = slot
 
-            # Broadcast to other connected hotspots and MMDVM_Bridge
-            self.broadcast_dmrd(data, exclude_addr=addr)
+            # Native Parrot (TG 9990 or Private Call 9990)
+            if dst_tg == 9990:
+                if data_type == 0:  # Voice Header
+                    self.parrot_recordings[addr] = [data]
+                    logger.info(f"[DMR-Master] 🦜 Parrot started recording from {addr} (DMR ID: {src_id}, Slot: {slot})")
+                elif data_type == 1:  # Voice Burst
+                    if addr not in self.parrot_recordings:
+                        self.parrot_recordings[addr] = []
+                    if len(self.parrot_recordings[addr]) < 350:
+                        self.parrot_recordings[addr].append(data)
+                elif data_type == 2:  # Voice Terminator
+                    if addr in self.parrot_recordings:
+                        self.parrot_recordings[addr].append(data)
+                        bursts = list(self.parrot_recordings.pop(addr, []))
+                        if len(bursts) >= 3:
+                            logger.info(f"[DMR-Master] 🦜 Parrot received terminator, queued {len(bursts)} frames for playback to {addr}")
+                            asyncio.create_task(self._play_parrot_echo(addr, src_id, dst_tg, slot, call_type, bursts))
+            else:
+                # Broadcast to other connected hotspots and MMDVM_Bridge
+                self.broadcast_dmrd(data, exclude_addr=addr)
 
             # Resolve callsign from connected clients if available
             sender_call = None
@@ -422,6 +443,62 @@ class HomeBrewMasterServer:
                     client["tx_packets"] = client.get("tx_packets", 0) + 1
                 except Exception:
                     pass
+
+    async def _play_parrot_echo(self, target_addr: Tuple[str, int], caller_id: int, orig_tg: int, slot: int, call_type: str, recorded_packets: list):
+        """Plays back recorded DMR voice burst to the hotspot on TG 9990 after turnaround delay."""
+        try:
+            logger.info(f"[DMR-Master] 🦜 Parrot buffering complete ({len(recorded_packets)} frames from ID {caller_id}). Waiting 1.2s turnaround...")
+            await asyncio.sleep(1.2)
+
+            dest_addr = target_addr
+            if dest_addr not in self.clients:
+                for a, cl in list(self.clients.items()):
+                    if cl.get("dmr_id") == caller_id:
+                        dest_addr = a
+                        break
+
+            logger.info(f"[DMR-Master] 🦜 Echoing {len(recorded_packets)} frames back to {dest_addr} (Caller: {caller_id}, Slot: {slot})")
+
+            new_stream_id = int(time.time()) & 0xFFFFFFFF
+            out_seq = 0
+
+            if call_type == "unit":
+                echo_dst = caller_id
+                echo_call_type_bit = 0x40
+            else:
+                echo_dst = 9990
+                echo_call_type_bit = 0x00
+
+            slot_bit = 0x80 if slot == 2 else 0x00
+            src_bytes = (9990).to_bytes(3, "big")  # Parrot is sender (ID 9990)
+            dst_bytes = echo_dst.to_bytes(3, "big")
+            repeater_bytes = struct.pack(">I", self.repeater_id)
+
+            for pkt in recorded_packets:
+                if not self.running or not self.sock:
+                    break
+                if len(pkt) < 20:
+                    continue
+
+                out_seq = (out_seq + 1) % 256
+                orig_bits = pkt[15]
+                data_type_seq = orig_bits & 0x3F  # preserve data_type and burst sequence
+                new_bits = slot_bit | echo_call_type_bit | data_type_seq
+
+                payload = pkt[20:]
+                echo_pkt = DMRD + bytes([out_seq]) + src_bytes + dst_bytes + repeater_bytes + bytes([new_bits]) + struct.pack(">I", new_stream_id) + payload
+
+                try:
+                    self.sock.sendto(echo_pkt, dest_addr)
+                    self.total_tx_packets += 1
+                except Exception:
+                    pass
+
+                await asyncio.sleep(0.06)
+
+            logger.info(f"[DMR-Master] 🦜 Parrot echo playback finished to {caller_id} at {dest_addr}")
+        except Exception as e:
+            logger.error(f"[DMR-Master] Parrot playback error: {e}")
 
     async def _client_watchdog(self):
         """Maintains active NAT keepalives, flushes ended QSOs, and cleans up inactive hotspots."""
