@@ -259,6 +259,30 @@ export default function MatrixPage() {
     }
   };
 
+  const handleRestartWorker = async (tg: number, slot: number, name: string) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdmin();
+      return;
+    }
+    try {
+      const res = await fetch("/api/workers/spawn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tg, slot, name }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setWorkerMsg({ text: `Worker TG ${tg} berhasil direstart.`, isError: false });
+        fetchWorkers();
+        beepPlayer?.playTalkGrant();
+      } else {
+        setWorkerMsg({ text: `Gagal me-restart: ${data.message || data.error}`, isError: true });
+      }
+    } catch (err: any) {
+      setWorkerMsg({ text: `Error: ${err.message}`, isError: true });
+    }
+  };
+
   const handleOpenTunePrimary = (currentTg: number, currentSlot: number) => {
     if (!isAdminUnlocked) {
       handleToggleAdmin();
@@ -586,7 +610,13 @@ export default function MatrixPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full ${
+                        worker.status === "RUNNING"
+                          ? "bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse"
+                          : "bg-rose-500 shadow-[0_0_8px_#f43f5e]"
+                      }`}
+                    />
                     <span className="font-mono font-bold text-xs text-white">
                       {worker.is_primary ? "PRIMARY BRIDGE" : worker.id}
                     </span>
@@ -606,14 +636,26 @@ export default function MatrixPage() {
                       </span>
                     </div>
                   ) : (
-                    <button
-                      onClick={() => handleStopWorker(worker.id, worker.tg)}
-                      className="p-1 px-2 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[11px] font-mono font-bold flex items-center gap-1 transition-all"
-                      title="Hentikan Worker"
-                    >
-                      <Trash2 className="w-3 h-3 text-rose-400" />
-                      Stop
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {worker.status !== "RUNNING" && (
+                        <button
+                          onClick={() => handleRestartWorker(worker.tg, worker.slot, worker.name || "")}
+                          className="p-1 px-2 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 text-[11px] font-mono font-bold flex items-center gap-1 transition-all"
+                          title="Restart Worker"
+                        >
+                          <RefreshCw className="w-3 h-3 text-emerald-400" />
+                          Restart
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleStopWorker(worker.id, worker.tg)}
+                        className="p-1 px-2 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[11px] font-mono font-bold flex items-center gap-1 transition-all"
+                        title="Hentikan Worker"
+                      >
+                        <Trash2 className="w-3 h-3 text-rose-400" />
+                        Stop
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -634,7 +676,11 @@ export default function MatrixPage() {
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block uppercase">Status / PID</span>
-                    <span className="text-[11px] text-emerald-400">
+                    <span
+                      className={`text-[11px] font-bold ${
+                        worker.status === "RUNNING" ? "text-emerald-400" : "text-rose-400"
+                      }`}
+                    >
                       {worker.status.toUpperCase()} {worker.pid ? `(${worker.pid})` : ""}
                     </span>
                   </div>

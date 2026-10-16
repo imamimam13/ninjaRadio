@@ -568,10 +568,19 @@ Send={AB_AMBE_RX_PORT}
 
     def start_md380(self):
         """Starts md380-emu vocoder daemon using qemu-arm-static if on x86_64."""
-        # Ensure any stale md380-emu instances are terminated so UDP port 2470 is free
+        # Ensure any stale primary md380-emu instance is terminated so UDP port 2470 is free
+        if self.md380_proc:
+            try:
+                self.md380_proc.terminate()
+                self.md380_proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    self.md380_proc.kill()
+                except Exception:
+                    pass
         try:
-            subprocess.run(["pkill", "-9", "-f", "md380-emu"], capture_output=True)
-            time.sleep(0.2)
+            subprocess.run(["pkill", "-9", "-f", f"md380-emu -S {MD380_EMU_PORT}"], capture_output=True)
+            time.sleep(0.1)
         except Exception:
             pass
 
@@ -667,7 +676,7 @@ Send={AB_AMBE_RX_PORT}
         self.start_mmdvm_bridge()
 
     def stop_bridge_daemons(self):
-        """Stops md380-emu, Analog_Bridge, and MMDVM_Bridge processes for reconfiguration."""
+        """Stops primary md380-emu, Analog_Bridge, and MMDVM_Bridge processes without killing workers."""
         for name, proc in [("MMDVM_Bridge", self.mmdvm_proc), ("Analog_Bridge", self.ab_proc), ("md380-emu", self.md380_proc)]:
             if proc:
                 try:
@@ -680,9 +689,10 @@ Send={AB_AMBE_RX_PORT}
                         pass
                 logger.info(f"Stopped {name} daemon.")
         try:
-            subprocess.run(["pkill", "-9", "-f", "md380-emu"], capture_output=True)
-            subprocess.run(["pkill", "-9", "-f", "Analog_Bridge"], capture_output=True)
-            subprocess.run(["pkill", "-9", "-f", "MMDVM_Bridge"], capture_output=True)
+            # Only kill primary daemon instances, preserving worker instances:
+            subprocess.run(["pkill", "-9", "-f", f"md380-emu -S {MD380_EMU_PORT}"], capture_output=True)
+            subprocess.run(["pkill", "-9", "-f", "Analog_Bridge /app/data/Analog_Bridge.ini"], capture_output=True)
+            subprocess.run(["pkill", "-9", "-f", "MMDVM_Bridge /app/data/MMDVM_Bridge.ini"], capture_output=True)
         except Exception:
             pass
         self.md380_proc = None
@@ -753,6 +763,8 @@ Send={AB_AMBE_RX_PORT}
                         "id": w_id, "name": w.get("name"), "tg": tg, "slot": slot, "pid": ab_p.pid, "status": "RUNNING"
                     }
                 }
+            # Clean up dead worker remnants so it can be cleanly re-spawned
+            self.stop_bridge_worker(w_id)
 
         ab_bin = find_binary("Analog_Bridge")
         md380_bin = find_binary("md380-emu")
@@ -996,6 +1008,15 @@ usrpAGC = -20,10,100
         task = loop.create_task(self.run_worker_pcm_rx_loop(w_id))
         self.worker_rx_tasks[w_id] = task
 
+        # Persist to configured_workers in config.json
+        try:
+            c_workers = self.config.setdefault("configured_workers", [])
+            if not any(cw.get("tg") == tg and cw.get("slot") == slot for cw in c_workers):
+                c_workers.append({"tg": tg, "slot": slot, "name": name or f"Dynamic Trio TG {tg}"})
+                self.save_config()
+        except Exception:
+            pass
+
         logger.info(f"✓ Spawned Full-Stack Trio worker '{w_id}' for TG {tg} (Ports: USRP={usrp_rx}/{usrp_tx}, AMBE={ambe_rx}/{ambe_tx}, Emu={emu_port}, MMDVM={mmdvm_local}, PID={ab_proc.pid})")
         return {
             "status": "SUCCESS",
@@ -1041,6 +1062,14 @@ usrpAGC = -20,10,100
                         proc.kill()
                     except Exception:
                         pass
+        tg = w.get("tg")
+        slot = w.get("slot", 2)
+        try:
+            c_workers = self.config.get("configured_workers", [])
+            self.config["configured_workers"] = [cw for cw in c_workers if not (cw.get("tg") == tg and cw.get("slot") == slot)]
+            self.save_config()
+        except Exception:
+            pass
         del self.bridge_workers[worker_id]
         logger.info(f"✓ Stopped and removed on-demand Full-Stack worker '{worker_id}'")
         return True
@@ -1168,6 +1197,24 @@ usrpAGC = -20,10,100
 
         # 6. Synchronize Native DMR Upstream Peer Clients (e.g., BRIDI)
         asyncio.create_task(self.sync_peer_clients())
+
+        # 7. Auto-restore configured on-demand workers
+        asyncio.create_task(self.restore_configured_workers())
+
+    async def restore_configured_workers(self):
+        """Restores configured workers after engine boots."""
+        await asyncio.sleep(2.0)
+        c_workers = self.config.get("configured_workers", [])
+        for cw in c_workers:
+            tg = int(cw.get("tg", 0))
+            slot = int(cw.get("slot", 2))
+            name = cw.get("name", "")
+            if tg > 0:
+                try:
+                    await self.spawn_bridge_worker(tg=tg, slot=slot, name=name)
+                    logger.info(f"✓ Restored configured worker for TG {tg} (Slot {slot})")
+                except Exception as e:
+                    logger.error(f"Failed to restore worker for TG {tg}: {e}")
 
     async def run_ptt_carrier_watchdog(self):
         """Monitors active PTT carrier and auto-unkeys if no audio frame arrives for >0.6s (prevents stuck TX/loops)."""
@@ -1881,7 +1928,7 @@ usrpAGC = -20,10,100
             self.stop_carrier_tx(tg, slot, target_dmr_id)
 
     def restart_analog_bridge(self):
-        """Restarts only Analog_Bridge if requested."""
+        """Restarts only Analog_Bridge if requested without touching workers."""
         if self.ab_proc:
             try:
                 self.ab_proc.terminate()
@@ -1892,7 +1939,7 @@ usrpAGC = -20,10,100
                 except Exception:
                     pass
         try:
-            subprocess.run(["pkill", "-9", "-f", "Analog_Bridge"], capture_output=True)
+            subprocess.run(["pkill", "-9", "-f", "Analog_Bridge /app/data/Analog_Bridge.ini"], capture_output=True)
         except Exception:
             pass
         self.ab_proc = None
