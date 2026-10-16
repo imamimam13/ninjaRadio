@@ -1601,12 +1601,61 @@ usrpAGC = -20,10,100
                             logger.info(f"📱 DVSwitch Mobile client UNREGISTERED from {addr}")
                         else:
                             self.registered_usrp_clients[addr] = time.time()
-                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
                             logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({payload.decode('ascii', errors='ignore').strip()})")
-                        try:
-                            self.usrp_ingress_sock.sendto(reply_pkt, addr)
-                        except Exception:
-                            pass
+                            primary_tg_val = self.current_tx_tg or int(self.config.get("primary_tg", 0)) or int(self.config.get("default_tg", 510))
+
+                            # 1. Standard REG:OK acknowledgment
+                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
+                            try:
+                                self.usrp_ingress_sock.sendto(reply_pkt, addr)
+                            except Exception:
+                                pass
+
+                            # 2. Automatically command DVSwitch Mobile client to switch mode to DMR
+                            try:
+                                # Mode command strings recognized by DVSwitch Mobile, pyUC & USRP clients
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 3, 0, USRP_TYPE_TEXT, f"TG:{primary_tg_val}\x00".encode("ascii")), addr)
+
+                                # TLV Tag 5 (Remote Command) mode=DMR and *DMR
+                                cmd_mode1 = b"mode=DMR"
+                                tlv_mode1 = struct.pack("BB", 5, len(cmd_mode1)) + cmd_mode1
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 4, 0, USRP_TYPE_TEXT, tlv_mode1), addr)
+
+                                cmd_mode2 = b"*DMR"
+                                tlv_mode2 = struct.pack("BB", 5, len(cmd_mode2)) + cmd_mode2
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 5, 0, USRP_TYPE_TEXT, tlv_mode2), addr)
+
+                                # 3. Send full INFO JSON declaring DMR mode and active talkgroup
+                                info_dict = {
+                                    "ab": "Analog_Bridge",
+                                    "tlv": {
+                                        "ambe_mode": "DMR",
+                                        "ambe_size": 72,
+                                        "ip": "127.0.0.1",
+                                        "rx_port": 31100,
+                                        "tx_port": 31103
+                                    },
+                                    "digital": {
+                                        "call": self.current_operator_callsign or "N1NJA",
+                                        "gw": int(self.config.get("server_dmr_id", 5109999)),
+                                        "rpt": int(self.config.get("server_dmr_id", 5109999)),
+                                        "tg": primary_tg_val,
+                                        "ts": self.current_tx_slot or 2,
+                                        "cc": int(self.config.get("color_code", 1))
+                                    },
+                                    "usrp": {
+                                        "rx_port": USRP_AUDIO_PORT,
+                                        "tx_port": USRP_AUDIO_PORT
+                                    },
+                                    "last_tune": str(primary_tg_val)
+                                }
+                                info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 6, 0, USRP_TYPE_TEXT, info_bytes), addr)
+                                logger.info(f"🎯 Automatically set mode -> DMR (TG {primary_tg_val}) for DVSwitch client {addr}")
+                            except Exception as ex:
+                                logger.debug(f"Auto DMR mode push note: {ex}")
                         continue
 
                     if payload.startswith(b"PING"):
