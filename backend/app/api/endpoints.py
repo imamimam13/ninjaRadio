@@ -301,6 +301,21 @@ async def spawn_bridge_worker(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to communicate with Core Engine: {e}")
 
+@router.post("/workers/primary/tune")
+async def tune_primary_bridge(payload: dict):
+    """Retunes the Primary Analog_Bridge to a new default Talkgroup (Zero-restart)."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.post("http://core:5000/api/workers/primary/tune", json=payload)
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail=f"Core error: {resp.text}")
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with Core Engine: {e}")
+
 @router.delete("/workers/{worker_id}")
 async def delete_bridge_worker(worker_id: str):
     """Stops and removes an on-demand Analog_Bridge worker."""

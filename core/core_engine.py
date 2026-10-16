@@ -856,6 +856,27 @@ usrpGain = 1.00
         logger.info(f"✓ Stopped and removed on-demand Analog_Bridge worker '{worker_id}'")
         return True
 
+    def retune_primary_bridge(self, tg: int, slot: int = 2) -> dict:
+        """Dynamically retunes the primary Analog_Bridge to a new talkgroup without restart."""
+        self.current_tx_tg = tg
+        self.current_tx_slot = slot
+        self.config["primary_tg"] = tg
+        self.config["primary_slot"] = slot
+        self.save_config()
+        self.send_set_info_to_ab(
+            src=int(self.config.get("server_dmr_id", 1022057)),
+            callsign=self.config.get("server_callsign", "BD62BOT"),
+            tg=tg,
+            slot=slot
+        )
+        logger.info(f"📻 Retuned Primary Analog_Bridge to TG {tg} (Slot {slot})")
+        return {
+            "status": "SUCCESS",
+            "message": f"Primary Gateway berhasil dialihkan ke TG {tg} (Slot {slot})",
+            "tg": tg,
+            "slot": slot
+        }
+
     async def run_worker_pcm_rx_loop(self, worker_id: str):
         """Asynchronously receives decoded PCM from an on-demand worker socket."""
         w = self.bridge_workers.get(worker_id)
@@ -2210,6 +2231,20 @@ async def api_spawn_worker(payload: dict):
         return res
     except Exception as e:
         logger.error(f"Error spawning worker: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workers/primary/tune")
+async def api_tune_primary(payload: dict):
+    """Dynamically retunes the primary Analog_Bridge to a new default Talkgroup (Zero-restart)."""
+    tg = int(payload.get("tg", 0))
+    slot = int(payload.get("slot", 2))
+    if tg <= 0 or tg > 16777215:
+        raise HTTPException(status_code=400, detail="Nomor Talkgroup tidak valid.")
+    try:
+        res = engine_mgr.retune_primary_bridge(tg=tg, slot=slot)
+        return res
+    except Exception as e:
+        logger.error(f"Error tuning primary bridge: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/workers/{worker_id}")

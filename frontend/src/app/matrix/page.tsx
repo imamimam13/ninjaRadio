@@ -22,7 +22,8 @@ import {
   Server,
   Trash2,
   RefreshCw,
-  Flame
+  Flame,
+  Edit2
 } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
 
@@ -67,6 +68,12 @@ export default function MatrixPage() {
   const [spawnSlot, setSpawnSlot] = useState(2);
   const [isSpawning, setIsSpawning] = useState(false);
   const [workerMsg, setWorkerMsg] = useState<{ text: string; isError: boolean } | null>(null);
+
+  // Primary Bridge Retune State
+  const [showTuneModal, setShowTuneModal] = useState(false);
+  const [tunePrimaryTg, setTunePrimaryTg] = useState(1025);
+  const [tunePrimarySlot, setTunePrimarySlot] = useState(2);
+  const [isTuning, setIsTuning] = useState(false);
 
   // New Route Form
   const [name, setName] = useState("");
@@ -233,6 +240,50 @@ export default function MatrixPage() {
       }
     } catch (err: any) {
       setWorkerMsg({ text: `Error: ${err.message}`, isError: true });
+    }
+  };
+
+  const handleOpenTunePrimary = (currentTg: number, currentSlot: number) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdmin();
+      return;
+    }
+    setTunePrimaryTg(currentTg);
+    setTunePrimarySlot(currentSlot);
+    setShowTuneModal(true);
+  };
+
+  const handleTunePrimary = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tunePrimaryTg || tunePrimaryTg <= 0) return;
+    setIsTuning(true);
+    setWorkerMsg(null);
+    try {
+      const res = await fetch("/api/workers/primary/tune", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tg: Number(tunePrimaryTg), slot: Number(tunePrimarySlot) }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "SUCCESS") {
+        setWorkerMsg({
+          text: `Primary Bridge berhasil dialihkan ke TG ${tunePrimaryTg} (Slot ${tunePrimarySlot}) secara real-time!`,
+          isError: false,
+        });
+        setShowTuneModal(false);
+        fetchWorkers();
+        beepPlayer?.playTalkGrant();
+      } else {
+        setWorkerMsg({
+          text: `Gagal mengubah TG: ${data.detail || data.message || "Error"}`,
+          isError: true,
+        });
+        beepPlayer?.playRogerBeep();
+      }
+    } catch (err: any) {
+      setWorkerMsg({ text: `Gagal: ${err.message}`, isError: true });
+    } finally {
+      setIsTuning(false);
     }
   };
 
@@ -525,9 +576,19 @@ export default function MatrixPage() {
                     </span>
                   </div>
                   {worker.is_primary ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
-                      PERMANENT
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => handleOpenTunePrimary(worker.tg, worker.slot)}
+                        className="p-1 px-2.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 text-[11px] font-mono font-bold flex items-center gap-1 transition-all"
+                        title="Ubah Target TG Primary Bridge"
+                      >
+                        <Edit2 className="w-3 h-3 text-cyan-400" />
+                        Ubah TG
+                      </button>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                        PRIMARY
+                      </span>
+                    </div>
                   ) : (
                     <button
                       onClick={() => handleStopWorker(worker.id, worker.tg)}
@@ -612,6 +673,78 @@ export default function MatrixPage() {
                   className="flex-1 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl font-black text-xs shadow-lg"
                 >
                   Buka Kunci
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL UBAH TG PRIMARY BRIDGE */}
+      {showTuneModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#101726] border-2 border-cyan-500/70 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-cyan-900/50 pb-2">
+              <div>
+                <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                  <Edit2 className="w-4 h-4 text-cyan-400" />
+                  Ubah Talkgroup Primary Bridge
+                </h3>
+                <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                  Alihkan default Talkgroup Analog_Bridge secara dinamis tanpa restart daemon (Zero-Restart).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTuneModal(false)}
+                className="text-slate-500 hover:text-white font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleTunePrimary} className="space-y-3 font-mono text-xs">
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">
+                  Nomor Talkgroup (TG) Sasaran
+                </label>
+                <input
+                  type="number"
+                  required
+                  autoFocus
+                  placeholder="Contoh: 1025, 510, 5109"
+                  value={tunePrimaryTg}
+                  onChange={(e) => setTunePrimaryTg(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-amber-300 font-bold focus:border-cyan-400 outline-none text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Timeslot (TS)</label>
+                <select
+                  value={tunePrimarySlot}
+                  onChange={(e) => setTunePrimarySlot(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300 font-bold focus:border-cyan-400 outline-none"
+                >
+                  <option value={1}>Slot 1 (Wide Area / Peering)</option>
+                  <option value={2}>Slot 2 (Local / Nusantara)</option>
+                </select>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-cyan-950">
+                <button
+                  type="button"
+                  onClick={() => setShowTuneModal(false)}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isTuning}
+                  className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 text-slate-950 font-heading font-black rounded-xl shadow-lg shadow-cyan-500/25 transition-all"
+                >
+                  {isTuning ? "Mengalihkan..." : "Simpan & Terapkan"}
                 </button>
               </div>
             </form>
