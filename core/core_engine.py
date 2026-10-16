@@ -296,6 +296,14 @@ class DVSwitchCoreManager:
             pass
         return self.config
 
+    def save_config(self):
+        try:
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving {CONFIG_PATH}: {e}")
+
     def generate_configs(self):
         cfg = self.config
         peers = cfg.get("peering", [])
