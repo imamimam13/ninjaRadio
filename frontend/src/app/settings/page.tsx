@@ -5,6 +5,8 @@ import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import { usePhysicalPTT } from "@/hooks/usePhysicalPTT";
 import { beepPlayer } from "@/components/BeepPlayer";
+import { AdminGuard } from "@/components/AdminGuard";
+import { getIsAdminUnlocked, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
 import { 
   Settings, 
   Key, 
@@ -163,13 +165,28 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    loadSystemConfig();
-    fetchMumbleBots();
-    const interval = setInterval(() => {
-      loadSystemConfig();
-      fetchMumbleBots();
-    }, 5000);
-    return () => clearInterval(interval);
+    setIsAdminUnlocked(getIsAdminUnlocked());
+    const handleAuth = () => {
+      setIsAdminUnlocked(getIsAdminUnlocked());
+    };
+    window.addEventListener(ADMIN_AUTH_EVENT, handleAuth);
+    window.addEventListener("storage", handleAuth);
+
+    const checkAndLoad = () => {
+      if (getIsAdminUnlocked()) {
+        loadSystemConfig();
+        fetchMumbleBots();
+      }
+    };
+
+    checkAndLoad();
+    const interval = setInterval(checkAndLoad, 5000);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(ADMIN_AUTH_EVENT, handleAuth);
+      window.removeEventListener("storage", handleAuth);
+    };
   }, []);
 
   const savePeers = async (updated: typeof peerList) => {
@@ -608,6 +625,7 @@ export default function SettingsPage() {
 
   const handleToggleAdminMode = () => {
     if (isAdminUnlocked) {
+      setAdminUnlocked(false);
       setIsAdminUnlocked(false);
       beepPlayer?.playRogerBeep();
     } else {
@@ -617,16 +635,17 @@ export default function SettingsPage() {
     }
   };
 
-  const handleVerifyPin = (e: React.FormEvent) => {
+  const handleVerifyPin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const activePin = (typeof window !== "undefined" && localStorage.getItem("ninjaradio_admin_pin")) || process.env.NEXT_PUBLIC_ADMIN_PIN || "1234";
-    if (pinInput.trim() === activePin || pinInput.trim() === "1234" || pinInput.trim() === "admin") {
+    const valid = await verifyAdminPin(pinInput);
+    if (valid) {
       setIsAdminUnlocked(true);
       setShowPinModal(false);
       setPinError(false);
       beepPlayer?.playTalkGrant();
     } else {
       setPinError(true);
+      beepPlayer?.playRogerBeep();
     }
   };
 
@@ -745,7 +764,12 @@ export default function SettingsPage() {
     <div className="min-h-screen pb-20 md:pb-8 flex flex-col bg-[#07090e] bg-grid-pattern">
       <Navbar isConnected={isConnected} />
 
-      <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-4 py-4 space-y-4">
+      <AdminGuard
+        title="SYSTEM CONFIG & PARAMETERS"
+        description="Halaman ini memuat kredensial peering DMR, master password, port USRP, dan konfigurasi sensitif daemon core."
+        tag="SYSTEM CONFIG"
+      >
+        <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-4 py-4 space-y-4">
         
         {/* Header */}
         <div className="bg-[#0b121e] border border-cyan-900/40 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xl">
@@ -1756,6 +1780,7 @@ export default function SettingsPage() {
         </form>
 
       </main>
+      </AdminGuard>
 
       {/* ADMIN PIN MODAL */}
       {showPinModal && (

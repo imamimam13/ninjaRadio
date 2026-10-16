@@ -17,6 +17,9 @@ import {
   Settings
 } from "lucide-react";
 
+import { AdminGuard } from "@/components/AdminGuard";
+import { getIsAdminUnlocked, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
+
 interface ChannelMapping {
   channel: string;
   tg: number;
@@ -97,16 +100,25 @@ export default function MumlaPage() {
   };
 
   useEffect(() => {
-    fetchTelemetry();
-    fetchBots();
-    const interval = setInterval(() => {
-      fetchTelemetry();
-      fetchBots();
-    }, 3000);
-    return () => clearInterval(interval);
+    const checkAndFetch = () => {
+      if (getIsAdminUnlocked()) {
+        fetchTelemetry();
+        fetchBots();
+      }
+    };
+
+    checkAndFetch();
+    const interval = setInterval(checkAndFetch, 3000);
+    window.addEventListener(ADMIN_AUTH_EVENT, checkAndFetch);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(ADMIN_AUTH_EVENT, checkAndFetch);
+    };
   }, []);
 
   const handleManualRefresh = () => {
+    if (!getIsAdminUnlocked()) return;
     setRefreshing(true);
     fetchTelemetry();
     fetchBots();
@@ -122,7 +134,12 @@ export default function MumlaPage() {
     <div className="min-h-screen bg-[#070b12] text-slate-100 flex flex-col font-sans pb-20 md:pb-8 selection:bg-cyan-500 selection:text-black">
       <Navbar isConnected={isConnected} />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+      <AdminGuard
+        title="MUMLA / MUMBLE VOIP GATEWAY"
+        description="Halaman ini memuat konfigurasi VoIP Mumble, channel-to-talkgroup mapping, dan kredensial bot bridge."
+        tag="VOIP MUMBLE CORE"
+      >
+        <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
         {/* Header Section */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#0b121e]/80 backdrop-blur-md p-5 rounded-2xl border border-cyan-900/30 shadow-xl">
           <div className="flex items-center gap-4">
@@ -460,6 +477,7 @@ export default function MumlaPage() {
           </div>
         </div>
       </main>
+      </AdminGuard>
     </div>
   );
 }
