@@ -2060,7 +2060,7 @@ usrpAGC = -20,10,100
                 port = int(p.get("port", 62031))
                 if not host:
                     continue
-                peer_key = f"{host}:{port}"
+                peer_key = str(p.get("id") or f"{host}:{port}")
                 active_keys.add(peer_key)
 
                 if peer_key not in self.peer_clients:
