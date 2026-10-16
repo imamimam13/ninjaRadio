@@ -37,6 +37,7 @@ services:
     environment:
       - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
     volumes:
+      - ./core:/app
       - ninjaradio_data:/app/data
     networks:
       - ninjaradio_net
