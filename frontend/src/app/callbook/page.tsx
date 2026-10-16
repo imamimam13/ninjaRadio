@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
-import { Users, Search, Plus, MapPin, Building, ShieldCheck, ShieldAlert, Shield, ShieldX, Radio, Upload, Download, Check, AlertCircle, Lock, Edit2, Trash2, Sliders, Settings2 } from "lucide-react";
+import { Users, Search, Plus, MapPin, Building, ShieldCheck, ShieldAlert, Shield, ShieldX, Radio, Upload, Download, Check, AlertCircle, Lock, Edit2, Trash2, Sliders, Settings2, Copy } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
 
 interface CallbookItem {
@@ -76,6 +76,20 @@ export default function CallbookPage() {
   const [batchFilterOrg, setBatchFilterOrg] = useState("ALL");
   const [batchPrefix, setBatchPrefix] = useState("BD");
   const [isBatchLoading, setIsBatchLoading] = useState(false);
+
+  // Export user.json Modal State
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+
+  const handleCopyUrl = (url: string) => {
+    if (typeof window !== "undefined") {
+      const fullUrl = `${window.location.origin}${url}`;
+      navigator.clipboard.writeText(fullUrl);
+      setCopiedUrl(url);
+      beepPlayer?.playTalkGrant();
+      setTimeout(() => setCopiedUrl(null), 2500);
+    }
+  };
 
   // Import CSV/JSON Modal state
   const [showImportModal, setShowImportModal] = useState(false);
@@ -451,7 +465,16 @@ export default function CallbookPage() {
               className="flex items-center gap-1.5 px-3.5 py-2 bg-[#05080f] border border-cyan-900/60 hover:border-cyan-400 text-cyan-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
             >
               <Upload className="w-4 h-4 text-cyan-400" />
-              <span>Import CSV / JSON</span>
+              <span>Import</span>
+            </button>
+
+            <button
+              onClick={() => setShowExportModal(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#05080f] border border-emerald-700/60 hover:border-emerald-400 text-emerald-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+              title="Unduh user.json per group / organisasi"
+            >
+              <Download className="w-4 h-4 text-emerald-400" />
+              <span>Unduh user.json</span>
             </button>
 
             <button
@@ -1458,6 +1481,151 @@ export default function CallbookPage() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      {/* EXPORT USER.JSON PER GROUP MODAL */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0b121e] border border-emerald-900/60 rounded-2xl p-5 max-w-2xl w-full space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-emerald-900/40 pb-3">
+              <div>
+                <h3 className="font-heading font-black text-base text-white flex items-center gap-2">
+                  <Download className="w-5 h-5 text-emerald-400" />
+                  UNDUH USER.JSON PER GROUP CALLSIGN
+                </h3>
+                <p className="text-xs font-mono text-slate-400 mt-0.5">
+                  Format standar RadioID / DVSwitch untuk CPS AnyTone, OpenGD77, DVSwitch Mobile, atau server DMR.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                className="text-slate-400 hover:text-white font-mono text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2.5 max-h-[60vh] overflow-y-auto pr-1">
+              {[
+                {
+                  code: "BRIDI",
+                  name: "BRIDI (Digital Amateur Radio)",
+                  desc: "DMR ID khusus callsign BD & Amatir BRIDI",
+                  file: "bridi.user.json",
+                  csvFile: "bridi.user.csv",
+                  color: "border-cyan-800 bg-cyan-950/30 text-cyan-300"
+                },
+                {
+                  code: "ORARI",
+                  name: "ORARI (Amatir Radio Indonesia)",
+                  desc: "Callsign YB, YC, YD, YE (IAR Resmi)",
+                  file: "orari.user.json",
+                  csvFile: "orari.user.csv",
+                  color: "border-emerald-800 bg-emerald-950/30 text-emerald-300"
+                },
+                {
+                  code: "RAPI",
+                  name: "RAPI (Radio Antar Penduduk Indonesia)",
+                  desc: "Callsign JZ & 10-28 ID",
+                  file: "rapi.user.json",
+                  csvFile: "rapi.user.csv",
+                  color: "border-amber-800 bg-amber-950/30 text-amber-300"
+                },
+                {
+                  code: "CB-11M",
+                  name: "CB 11 Meter Indonesia",
+                  desc: "Callsign Citizen Band & RPU 11M",
+                  file: "cb.user.json",
+                  csvFile: "cb.user.csv",
+                  color: "border-indigo-800 bg-indigo-950/30 text-indigo-300"
+                },
+                {
+                  code: "KOMUNITAS",
+                  name: "Komunitas / Relawan & SAR",
+                  desc: "Relawan bencana, SAR, & radio komunitas",
+                  file: "komunitas.user.json",
+                  csvFile: "komunitas.user.csv",
+                  color: "border-purple-800 bg-purple-950/30 text-purple-300"
+                },
+                {
+                  code: "ALL",
+                  name: "Semua Pengguna (Global Database)",
+                  desc: "Seluruh pengguna terdaftar di NinjaRadio",
+                  file: "all.user.json",
+                  csvFile: "all.user.csv",
+                  color: "border-slate-700 bg-slate-900/60 text-white"
+                },
+              ].map((item) => {
+                const jsonPath = `/callbook/${item.file}`;
+                const csvPath = `/callbook/${item.csvFile}`;
+                const isCopied = copiedUrl === jsonPath;
+
+                return (
+                  <div
+                    key={item.code}
+                    className={`p-3.5 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition-all ${item.color}`}
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm">{item.name}</span>
+                        <code className="text-[10px] px-1.5 py-0.5 rounded bg-black/40 font-mono">
+                          {item.file}
+                        </code>
+                      </div>
+                      <p className="text-[11px] font-mono text-slate-400">{item.desc}</p>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 self-end sm:self-center">
+                      <a
+                        href={jsonPath}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center gap-1 transition-all shadow"
+                        title="Buka / Unduh JSON"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>JSON</span>
+                      </a>
+
+                      <a
+                        href={csvPath}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 font-mono text-xs font-bold flex items-center gap-1 transition-all"
+                        title="Unduh CSV untuk CPS Radio"
+                      >
+                        <span>CSV</span>
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={() => handleCopyUrl(jsonPath)}
+                        className={`px-2.5 py-1.5 rounded-lg font-mono text-xs font-bold flex items-center gap-1 transition-all border ${
+                          isCopied
+                            ? "bg-cyan-500 text-slate-950 border-cyan-400"
+                            : "bg-slate-900 hover:bg-slate-800 text-cyan-300 border-cyan-800/80"
+                        }`}
+                        title="Salin Full URL"
+                      >
+                        {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{isCopied ? "Tersalin!" : "Salin Link"}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-mono font-bold"
+              >
+                Tutup
+              </button>
+            </div>
           </div>
         </div>
       )}

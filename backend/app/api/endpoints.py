@@ -197,6 +197,90 @@ async def batch_update_callbook(
     )
     return result
 
+@router.get("/callbook/export/{filename}")
+@router.get("/callbook/{filename}")
+async def export_callbook_file(
+    filename: str,
+    session: AsyncSession = Depends(get_db)
+):
+    """
+    Exports callbook entries per organization or globally in JSON or CSV.
+    Supports formats like:
+      - bridi.user.json, orari.user.json, rapi.user.json, cb.user.json, komunitas.user.json
+      - user.json, users.json, all.user.json
+      - bridi.user.csv, orari.user.csv, user.csv
+    """
+    import json
+    import io
+    import csv
+
+    clean = filename.strip().lower()
+    is_csv = clean.endswith(".csv")
+    is_json = clean.endswith(".json")
+    if not (is_csv or is_json):
+        is_json = True
+
+    base = clean.replace(".json", "").replace(".csv", "")
+    for suffix in [".user", ".users", "_user", "_users"]:
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+
+    if base in ["all", "user", "users", "global", ""]:
+        org_code = "ALL"
+    elif base in ["cb", "cb11m", "cb-11m"]:
+        org_code = "CB-11M"
+    else:
+        org_code = base.upper()
+
+    entries = await CallbookService.get_entries_by_organization(session, org_code=org_code)
+    users_list = []
+    for e in entries:
+        names = (e.name or "").strip().split(" ", 1)
+        fname = names[0] if names else ""
+        surname = names[1] if len(names) > 1 else ""
+        users_list.append({
+            "id": e.dmr_id,
+            "dmr_id": e.dmr_id,
+            "callsign": e.callsign,
+            "name": e.name,
+            "fname": fname,
+            "surname": surname,
+            "city": e.city or "",
+            "state": e.province_state or "Indonesia",
+            "country": e.country or "Indonesia",
+            "remarks": e.remarks or "",
+            "organization": e.organization,
+            "organization_id": e.organization_id or e.callsign,
+            "default_tg": e.default_tg or 510,
+            "allowed_tgs_override": e.allowed_tgs_override
+        })
+
+    if is_csv:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Radio ID", "Callsign", "Name", "City", "State", "Country", "Remarks", "Organization", "Default TG"])
+        for u in users_list:
+            writer.writerow([
+                u["dmr_id"], u["callsign"], u["name"], u["city"], u["state"], u["country"], u["remarks"], u["organization"], u["default_tg"]
+            ])
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"inline; filename={filename}"}
+        )
+
+    response_payload = {
+        "count": len(users_list),
+        "organization": org_code,
+        "users": users_list,
+        "results": users_list
+    }
+    return Response(
+        content=json.dumps(response_payload, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f"inline; filename={filename}"}
+    )
+
 # ----------------- Organizations Registry -----------------
 
 @router.get("/organizations")

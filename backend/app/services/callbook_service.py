@@ -174,6 +174,18 @@ class CallbookService:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_entries_by_organization(session: AsyncSession, org_code: Optional[str] = None) -> List[CallbookEntry]:
+        stmt = select(CallbookEntry)
+        if org_code and org_code.upper() not in ["ALL", "USER", "USERS", "GLOBAL"]:
+            clean_org = org_code.strip().upper()
+            if clean_org in ["CB", "CB11M"]:
+                clean_org = "CB-11M"
+            stmt = stmt.where(CallbookEntry.organization == clean_org)
+        stmt = stmt.order_by(CallbookEntry.callsign)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
     async def get_by_dmr_id(session: AsyncSession, dmr_id: int) -> Optional[CallbookEntry]:
         stmt = select(CallbookEntry).where(CallbookEntry.dmr_id == dmr_id)
         result = await session.execute(stmt)
