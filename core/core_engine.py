@@ -165,47 +165,56 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
         pass
     return True, "Fallback"
 
-def is_tg_bridged_to_peer(tg: int, peer_name: str = "") -> bool:
+def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: list = None) -> bool:
     """
-    Checks SQLite bridge_routes to determine if a talkgroup is actively bridged
-    to a peer DMR network or mode. Local traffic stays local unless bridged.
+    100% Self-Serve Peer & Matrix Routing Engine:
+    1. If the route for `tg` is explicitly turned OFF (is_active = 0) in TG Matrix, drop it.
+    2. If the peer is configured with `subscribedTgs` containing `tg`, auto-approve immediately!
+    3. If there is an active route in TG Matrix for `tg`, approve immediately!
+    4. Otherwise, if peer has no explicit restrictions, allow DMR traffic.
     """
     db_path = "/app/data/ninjaradio.db"
-    if not os.path.exists(db_path):
-        return True
-    try:
-        import sqlite3
-        with sqlite3.connect(db_path, timeout=1.0) as conn:
-            cursor = conn.cursor()
-            if peer_name:
-                p_clean = peer_name.strip().upper()
-                p_strip = p_clean.replace("DMR", "").replace("NET", "").replace("-", "").replace("_", "").replace(" ", "")
+    
+    # Rule 1: Check if explicitly muted / disabled in TG Matrix
+    if os.path.exists(db_path):
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
                 cursor.execute("""
                     SELECT id FROM bridge_routes 
-                    WHERE is_active = 1 
+                    WHERE is_active = 0 
                       AND (source_tg = ? OR target_tg = ?)
-                      AND (
-                          ? LIKE '%' || UPPER(name) || '%' 
-                          OR UPPER(name) LIKE '%' || ? || '%'
-                          OR ? LIKE '%' || replace(UPPER(name), ' ', '') || '%'
-                          OR replace(UPPER(name), ' ', '') LIKE '%' || ? || '%'
-                          OR (UPPER(source_mode) = 'DMR' AND UPPER(target_mode) = 'DMR')
-                      )
                     LIMIT 1
-                """, (tg, tg, p_clean, p_clean, p_clean, p_strip))
-                row = cursor.fetchone()
-                return row is not None
-            else:
+                """, (tg, tg))
+                if cursor.fetchone() is not None:
+                    return False
+        except Exception:
+            pass
+
+    # Rule 2: If peer client explicitly subscribed to this TG in Settings, it is APPROVED automatically!
+    if client_subscribed_tgs and tg in client_subscribed_tgs:
+        return True
+
+    # Rule 3: Check if there is an active bridge route in database
+    if os.path.exists(db_path):
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
                 cursor.execute("""
                     SELECT id FROM bridge_routes 
                     WHERE is_active = 1 
                       AND (source_tg = ? OR target_tg = ?)
                     LIMIT 1
                 """, (tg, tg))
-                return cursor.fetchone() is not None
-    except Exception:
-        pass
-    return False
+                if cursor.fetchone() is not None:
+                    return True
+        except Exception:
+            pass
+
+    # Rule 4: Default allow for connected DMR peers
+    return True
 
 DEFAULT_CONFIG = {
     "server_callsign": os.getenv("SERVER_CALLSIGN", "N1NJA"),
@@ -2018,7 +2027,7 @@ usrpAGC = -20,10,100
             if raw_packet and self.peer_clients:
                 for peer_key, client in list(self.peer_clients.items()):
                     if client.state == "CONNECTED":
-                        if is_tg_bridged_to_peer(self.current_rx_tg, client.name):
+                        if is_tg_bridged_to_peer(self.current_rx_tg, client.name, getattr(client, "subscribed_tgs", [])):
                             client.send_raw_dmrd(raw_packet)
                             logger.info(f"🚀 [BRIDGE-FORWARD] TG {self.current_rx_tg} forwarded to upstream peer '{client.name}' (Src: {self.current_rx_src})")
 
@@ -2113,8 +2122,8 @@ usrpAGC = -20,10,100
             if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id):
                 return
 
-            # 2. Check TG Matrix bridging: drop incoming peer traffic if route is not active
-            if not is_tg_bridged_to_peer(dst_tg, network_name):
+            # 2. Check TG Matrix bridging: drop incoming peer traffic ONLY if explicitly disabled
+            if not is_tg_bridged_to_peer(dst_tg, network_name, [dst_tg]):
                 return
 
             # 3. Forward DMRD frame to our local DMR Master Server
