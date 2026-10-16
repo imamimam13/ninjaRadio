@@ -24,6 +24,9 @@ import {
   X
 } from "lucide-react";
 
+import { AdminGuard } from "@/components/AdminGuard";
+import { getIsAdminUnlocked, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
+
 interface HotspotClient {
   ip: string;
   port: number;
@@ -128,12 +131,24 @@ export default function ServerDmrPage() {
   };
 
   useEffect(() => {
-    fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 2500);
-    return () => clearInterval(interval);
+    const checkAndFetch = () => {
+      if (getIsAdminUnlocked()) {
+        fetchTelemetry();
+      }
+    };
+
+    checkAndFetch();
+    const interval = setInterval(checkAndFetch, 2500);
+    window.addEventListener(ADMIN_AUTH_EVENT, checkAndFetch);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(ADMIN_AUTH_EVENT, checkAndFetch);
+    };
   }, []);
 
   const handleManualRefresh = () => {
+    if (!getIsAdminUnlocked()) return;
     setRefreshing(true);
     fetchTelemetry();
   };
@@ -148,7 +163,12 @@ export default function ServerDmrPage() {
     <div className="min-h-screen bg-[#070b12] text-slate-100 flex flex-col font-sans pb-20 md:pb-8 selection:bg-cyan-500 selection:text-black">
       <Navbar isConnected={isConnected} />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+      <AdminGuard
+        title="DMR MASTER GATEWAY"
+        description="Halaman ini memuat konfigurasi repeater DMR internal, upstream peering rahasia, dan hotspot terdaftar."
+        tag="CORE DMR MASTER"
+      >
+        <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
         {/* Header Section */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#0b121e]/80 backdrop-blur-md p-5 rounded-2xl border border-cyan-900/30 shadow-xl">
           <div className="flex items-center gap-4">
@@ -500,6 +520,7 @@ export default function ServerDmrPage() {
           </div>
         </div>
       </main>
+      </AdminGuard>
     </div>
   );
 }

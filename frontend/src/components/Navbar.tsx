@@ -1,33 +1,130 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radio, Activity, Network, BookOpen, Users, Settings, Volume2, Shield, Wifi, Cpu, Terminal } from "lucide-react";
+import { 
+  Radio, 
+  Activity, 
+  Network, 
+  BookOpen, 
+  Users, 
+  Settings, 
+  Volume2, 
+  Cpu, 
+  Terminal, 
+  Lock, 
+  Unlock, 
+  KeyRound, 
+  AlertCircle, 
+  X 
+} from "lucide-react";
+import { getIsAdminUnlocked, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
+import { beepPlayer } from "@/components/BeepPlayer";
 
 export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
   const pathname = usePathname();
 
-  const navItems = [
+  // Admin Auth State
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setIsAdminUnlocked(getIsAdminUnlocked());
+
+    const handleAuthChange = () => {
+      setIsAdminUnlocked(getIsAdminUnlocked());
+    };
+
+    window.addEventListener(ADMIN_AUTH_EVENT, handleAuthChange);
+    window.addEventListener("storage", handleAuthChange);
+
+    return () => {
+      window.removeEventListener(ADMIN_AUTH_EVENT, handleAuthChange);
+      window.removeEventListener("storage", handleAuthChange);
+    };
+  }, []);
+
+  const handleToggleAdmin = () => {
+    if (isAdminUnlocked) {
+      setAdminUnlocked(false);
+      setIsAdminUnlocked(false);
+      beepPlayer?.playRogerBeep();
+    } else {
+      setPinInput("");
+      setPinError(false);
+      setShowPinModal(true);
+    }
+  };
+
+  const handleVerifyPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pinInput.trim()) return;
+
+    setSubmitting(true);
+    setPinError(false);
+
+    const valid = await verifyAdminPin(pinInput);
+    setSubmitting(false);
+
+    if (valid) {
+      setIsAdminUnlocked(true);
+      setShowPinModal(false);
+      beepPlayer?.playTalkGrant();
+    } else {
+      setPinError(true);
+      beepPlayer?.playRogerBeep();
+    }
+  };
+
+  // Public menu items
+  const baseNavItems = [
     { href: "/", label: "NOC", icon: Activity, tag: "LIVE" },
     { href: "/radio", label: "RADIO POCKET", icon: Radio, highlight: true, tag: "PWA" },
-    { href: "/serverdmr", label: "DMR MASTER", icon: Cpu, tag: "62031" },
-    { href: "/dvswitch", label: "DVSWITCH", icon: Terminal, tag: "32345" },
-    { href: "/mumla", label: "MUMLA", icon: Volume2, tag: "VOIP" },
     { href: "/matrix", label: "TG MATRIX", icon: Network },
     { href: "/logbook", label: "QSO LOG", icon: BookOpen },
     { href: "/callbook", label: "CALLBOOK", icon: Users },
-    { href: "/settings", label: "CONFIG", icon: Settings },
   ];
 
-  const mobileNavItems = [
-    { href: "/", label: "NOC", icon: Activity },
-    { href: "/radio", label: "RADIO", icon: Radio },
-    { href: "/serverdmr", label: "DMR", icon: Cpu },
-    { href: "/dvswitch", label: "DVSWITCH", icon: Terminal },
-    { href: "/mumla", label: "MUMLA", icon: Volume2 },
-    { href: "/settings", label: "CONFIG", icon: Settings },
+  // Protected tabs - ONLY visible when admin is unlocked!
+  const protectedNavItems = [
+    { href: "/serverdmr", label: "DMR MASTER", icon: Cpu, tag: "62031", isProtected: true },
+    { href: "/dvswitch", label: "DVSWITCH", icon: Terminal, tag: "32345", isProtected: true },
+    { href: "/mumla", label: "MUMLA", icon: Volume2, tag: "VOIP", isProtected: true },
+    { href: "/settings", label: "CONFIG", icon: Settings, tag: "SYSTEM", isProtected: true },
   ];
+
+  const navItems = isAdminUnlocked
+    ? [
+        baseNavItems[0], // NOC
+        baseNavItems[1], // RADIO POCKET
+        ...protectedNavItems, // DMR MASTER, DVSWITCH, MUMLA, CONFIG (Only when Admin is unlocked!)
+        baseNavItems[2], // TG MATRIX
+        baseNavItems[3], // QSO LOG
+        baseNavItems[4], // CALLBOOK
+      ]
+    : baseNavItems;
+
+  const mobileNavItems = isAdminUnlocked
+    ? [
+        { href: "/", label: "NOC", icon: Activity },
+        { href: "/radio", label: "RADIO", icon: Radio },
+        { href: "/serverdmr", label: "DMR", icon: Cpu },
+        { href: "/dvswitch", label: "DVS", icon: Terminal },
+        { href: "/mumla", label: "MUMLA", icon: Volume2 },
+        { href: "/matrix", label: "MATRIX", icon: Network },
+        { href: "/settings", label: "CONFIG", icon: Settings },
+      ]
+    : [
+        { href: "/", label: "NOC", icon: Activity },
+        { href: "/radio", label: "RADIO", icon: Radio },
+        { href: "/matrix", label: "MATRIX", icon: Network },
+        { href: "/logbook", label: "LOG", icon: BookOpen },
+        { href: "/callbook", label: "CALLBOOK", icon: Users },
+      ];
 
   return (
     <>
@@ -70,6 +167,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
+              const isProtected = (item as any).isProtected;
               return (
                 <Link
                   key={item.href}
@@ -79,16 +177,22 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
                       ? item.highlight
                         ? "bg-gradient-to-r from-cyan-500 to-emerald-400 text-slate-950 shadow-[0_0_15px_rgba(6,182,212,0.4)]"
                         : "bg-cyan-950/70 text-cyan-300 border border-cyan-700/60 shadow-[0_0_10px_rgba(6,182,212,0.2)]"
-                      : "text-slate-400 hover:text-cyan-300 hover:bg-slate-800/60"
+                      : isProtected
+                        ? "text-amber-400 hover:text-amber-300 hover:bg-amber-950/30"
+                        : "text-slate-400 hover:text-cyan-300 hover:bg-slate-800/60"
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                   <span>{item.label}</span>
-                  {item.tag && !isActive && (
+                  {isProtected ? (
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-amber-950/60 text-amber-300 border border-amber-800/50">
+                      ADMIN
+                    </span>
+                  ) : item.tag && !isActive ? (
                     <span className="text-[9px] px-1 py-0.2 rounded bg-slate-800 text-cyan-400 border border-slate-700">
                       {item.tag}
                     </span>
-                  )}
+                  ) : null}
                 </Link>
               );
             })}
@@ -99,6 +203,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
+              const isProtected = (item as any).isProtected;
               return (
                 <Link
                   key={item.href}
@@ -106,7 +211,9 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
                   className={`relative flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider whitespace-nowrap transition-all ${
                     isActive
                       ? "bg-cyan-950/70 text-cyan-300 border border-cyan-700/60"
-                      : "text-slate-400 hover:text-cyan-300"
+                      : isProtected
+                        ? "text-amber-400 hover:text-amber-300"
+                        : "text-slate-400 hover:text-cyan-300"
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
@@ -116,7 +223,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
             })}
           </nav>
 
-          {/* Tactical Telemetry & Connection Pill */}
+          {/* Tactical Telemetry & Admin Lock Controls */}
           <div className="flex items-center gap-2">
             <Link
               href="/radio"
@@ -125,7 +232,31 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
               <Radio className="w-3.5 h-3.5" />
               <span>RADIO POCKET</span>
             </Link>
+
+            {/* Admin PIN Unlock / Lock Toggle Pill */}
+            <button
+              onClick={handleToggleAdmin}
+              title={isAdminUnlocked ? "Kunci Admin (Sembunyikan tab server sensitif)" : "Buka Kunci PIN Admin"}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
+                isAdminUnlocked
+                  ? "bg-emerald-950/40 border-emerald-500/50 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.25)] hover:bg-rose-950/50 hover:border-rose-500/50 hover:text-rose-300"
+                  : "bg-[#0b121e] border-slate-800 text-slate-400 hover:text-cyan-300 hover:border-cyan-800/60"
+              }`}
+            >
+              {isAdminUnlocked ? (
+                <>
+                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">ADMIN</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="hidden sm:inline">ADMIN</span>
+                </>
+              )}
+            </button>
             
+            {/* Core Online Pill */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-[#0b121e] rounded-xl border border-cyan-900/40 text-xs font-mono">
               <span
                 className={`w-2.5 h-2.5 rounded-full ${
@@ -141,6 +272,73 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
           </div>
         </div>
       </header>
+
+      {/* Admin Unlock PIN Modal */}
+      {showPinModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-[#0b121e] border border-cyan-500/40 rounded-2xl w-full max-w-sm p-6 shadow-[0_0_40px_rgba(6,182,212,0.25)] relative overflow-hidden">
+            <button
+              onClick={() => setShowPinModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800/50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                <KeyRound className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="font-heading font-black text-base text-white">Menu Admin Terkunci</h3>
+                <p className="text-xs font-mono text-slate-400">Buka akses tab DMR MASTER, DVSWITCH, & MUMLA</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleVerifyPin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono text-slate-300 mb-1.5">
+                  PIN Keamanan Admin:
+                </label>
+                <input
+                  type="password"
+                  autoFocus
+                  placeholder="Masukkan PIN (default: 1234)"
+                  value={pinInput}
+                  onChange={(e) => {
+                    setPinInput(e.target.value);
+                    setPinError(false);
+                  }}
+                  className="w-full px-4 py-2.5 bg-[#060a12] border border-cyan-900/60 rounded-xl font-mono text-center text-sm text-cyan-300 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 tracking-widest"
+                />
+              </div>
+
+              {pinError && (
+                <div className="flex items-center gap-1.5 text-xs font-mono text-rose-400 bg-rose-950/30 border border-rose-900/50 rounded-lg p-2">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>PIN Admin salah! Akses ditolak.</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowPinModal(false)}
+                  className="flex-1 py-2 px-3 rounded-xl border border-slate-700 hover:bg-slate-800 text-xs font-mono text-slate-300 transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting || !pinInput.trim()}
+                  className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-slate-950 font-heading font-black text-xs tracking-wider transition-all shadow-md shadow-cyan-500/20 disabled:opacity-50"
+                >
+                  {submitting ? "Memverifikasi..." : "Buka Akses"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Bottom Floating Nav for Small Screen Devices */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#070b12]/95 backdrop-blur-lg border-t border-cyan-900/40 px-2 py-1.5">

@@ -26,6 +26,7 @@ import {
   Edit2
 } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
+import { getIsAdminUnlocked, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
 
 interface RouteItem {
   id: number;
@@ -128,15 +129,28 @@ export default function MatrixPage() {
   };
 
   useEffect(() => {
+    setIsAdminUnlocked(getIsAdminUnlocked());
+    const handleAuth = () => {
+      setIsAdminUnlocked(getIsAdminUnlocked());
+    };
+    window.addEventListener(ADMIN_AUTH_EVENT, handleAuth);
+    window.addEventListener("storage", handleAuth);
+
     fetchRoutes();
     fetchWorkers();
     const interval = setInterval(fetchWorkers, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(ADMIN_AUTH_EVENT, handleAuth);
+      window.removeEventListener("storage", handleAuth);
+    };
   }, []);
 
   const handleToggleAdmin = () => {
     if (isAdminUnlocked) {
+      setAdminUnlocked(false);
       setIsAdminUnlocked(false);
+      beepPlayer?.playRogerBeep();
     } else {
       setPinInput("");
       setPinError(false);
@@ -144,15 +158,16 @@ export default function MatrixPage() {
     }
   };
 
-  const handleVerifyPin = (e: React.FormEvent) => {
+  const handleVerifyPin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const activePin = (typeof window !== "undefined" && localStorage.getItem("ninjaradio_admin_pin")) || process.env.NEXT_PUBLIC_ADMIN_PIN || "1234";
-    if (pinInput.trim() === activePin || pinInput.trim() === "1234" || pinInput.trim() === "admin") {
+    const valid = await verifyAdminPin(pinInput);
+    if (valid) {
       setIsAdminUnlocked(true);
       setShowPinModal(false);
       beepPlayer?.playTalkGrant();
     } else {
       setPinError(true);
+      beepPlayer?.playRogerBeep();
     }
   };
 
