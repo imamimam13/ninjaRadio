@@ -238,47 +238,54 @@ async def export_callbook_file(
         names = (e.name or "").strip().split(" ", 1)
         fname = names[0] if names else ""
         surname = names[1] if len(names) > 1 else ""
+        radio_id_val = int(e.dmr_id) if (e.dmr_id is not None and str(e.dmr_id).isdigit()) else 0
         users_list.append({
-            "id": e.dmr_id,
-            "dmr_id": e.dmr_id,
-            "callsign": e.callsign,
-            "name": e.name,
+            "radio_id": radio_id_val,
+            "callsign": (e.callsign or "").strip().upper(),
+            "name": (e.name or "").strip(),
             "fname": fname,
             "surname": surname,
             "city": e.city or "",
             "state": e.province_state or "Indonesia",
             "country": e.country or "Indonesia",
             "remarks": e.remarks or "",
-            "organization": e.organization,
-            "organization_id": e.organization_id or e.callsign,
-            "default_tg": e.default_tg or 510,
-            "allowed_tgs_override": e.allowed_tgs_override
+            "id": radio_id_val,
+            "dmr_id": radio_id_val
         })
 
     if is_csv:
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Radio ID", "Callsign", "Name", "City", "State", "Country", "Remarks", "Organization", "Default TG"])
+        writer.writerow(["RADIO_ID", "CALLSIGN", "FIRST_NAME", "LAST_NAME", "CITY", "STATE", "COUNTRY"])
         for u in users_list:
             writer.writerow([
-                u["dmr_id"], u["callsign"], u["name"], u["city"], u["state"], u["country"], u["remarks"], u["organization"], u["default_tg"]
+                u["radio_id"],
+                u["callsign"],
+                u["fname"],
+                u["surname"],
+                u["city"],
+                u["state"],
+                u["country"]
             ])
         return Response(
             content=output.getvalue(),
             media_type="text/csv",
-            headers={"Content-Disposition": f"inline; filename={filename}"}
+            headers={
+                "Content-Disposition": f"inline; filename={filename}",
+                "Access-Control-Allow-Origin": "*"
+            }
         )
 
     response_payload = {
-        "count": len(users_list),
-        "organization": org_code,
-        "users": users_list,
-        "results": users_list
+        "users": users_list
     }
     return Response(
         content=json.dumps(response_payload, indent=2),
         media_type="application/json",
-        headers={"Content-Disposition": f"inline; filename={filename}"}
+        headers={
+            "Content-Disposition": f"inline; filename={filename}",
+            "Access-Control-Allow-Origin": "*"
+        }
     )
 
 # ----------------- Organizations Registry -----------------
