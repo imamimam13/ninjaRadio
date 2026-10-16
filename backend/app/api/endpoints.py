@@ -11,7 +11,7 @@ from backend.app.core.config import settings
 from backend.app.models.schemas import (
     QsoLogResponse, QsoLogCreate,
     CallbookResponse, CallbookCreate,
-    BridgeRouteResponse, BridgeRouteCreate,
+    BridgeRouteResponse, BridgeRouteCreate, BridgeRouteUpdate,
     ServerStatus, LastHeardItem, PttTransmitRequest, PinVerifyRequest,
     OrganizationCreateRequest, OrganizationResponse, OrganizationRuleUpdate
 )
@@ -481,6 +481,27 @@ async def toggle_matrix_route(
     if not entry:
         raise HTTPException(status_code=404, detail="Route not found")
     return entry
+
+@router.put("/matrix/{route_id}", response_model=BridgeRouteResponse)
+async def update_matrix_route(
+    route_id: int,
+    data: BridgeRouteUpdate,
+    session: AsyncSession = Depends(get_db)
+):
+    entry = await BridgeService.update_route(session, route_id, data)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return entry
+
+@router.delete("/matrix/{route_id}")
+async def delete_matrix_route(
+    route_id: int,
+    session: AsyncSession = Depends(get_db)
+):
+    success = await BridgeService.delete_route(session, route_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return {"status": "SUCCESS", "message": f"Bridge route {route_id} berhasil dihapus"}
 
 TG_NAMES = {
     510: "Indo National DMR",

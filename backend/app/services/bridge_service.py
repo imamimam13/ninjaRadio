@@ -1,8 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
 from backend.app.core.database import BridgeRoute
-from backend.app.models.schemas import BridgeRouteCreate
+from backend.app.models.schemas import BridgeRouteCreate, BridgeRouteUpdate
+from typing import List, Optional
 
 INITIAL_ROUTES = [
     {"name": "DMR 510 <-> YSF Indo Room", "source_mode": "DMR", "source_tg": 510, "source_slot": 1, "target_mode": "YSF", "target_tg": 51000, "target_slot": 1, "is_active": True, "bidirectional": True},
@@ -47,3 +47,28 @@ class BridgeService:
             await session.commit()
             await session.refresh(entry)
         return entry
+
+    @staticmethod
+    async def update_route(session: AsyncSession, route_id: int, data: BridgeRouteUpdate) -> Optional[BridgeRoute]:
+        stmt = select(BridgeRoute).where(BridgeRoute.id == route_id)
+        result = await session.execute(stmt)
+        entry = result.scalar_one_or_none()
+        if not entry:
+            return None
+        for key, value in data.model_dump(exclude_unset=True).items():
+            if value is not None:
+                setattr(entry, key, value)
+        await session.commit()
+        await session.refresh(entry)
+        return entry
+
+    @staticmethod
+    async def delete_route(session: AsyncSession, route_id: int) -> bool:
+        stmt = select(BridgeRoute).where(BridgeRoute.id == route_id)
+        result = await session.execute(stmt)
+        entry = result.scalar_one_or_none()
+        if not entry:
+            return False
+        await session.delete(entry)
+        await session.commit()
+        return True

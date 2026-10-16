@@ -91,6 +91,18 @@ export default function MatrixPage() {
   const [targetMode, setTargetMode] = useState("YSF");
   const [targetTg, setTargetTg] = useState(51000);
 
+  // Edit Route State
+  const [editingRoute, setEditingRoute] = useState<RouteItem | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editSourceMode, setEditSourceMode] = useState("DMR");
+  const [editSourceTg, setEditSourceTg] = useState(510);
+  const [editSourceSlot, setEditSourceSlot] = useState(1);
+  const [editTargetMode, setEditTargetMode] = useState("YSF");
+  const [editTargetTg, setEditTargetTg] = useState(51000);
+  const [editTargetSlot, setEditTargetSlot] = useState(1);
+  const [editBidirectional, setEditBidirectional] = useState(true);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
   const fetchRoutes = () => {
     fetch("/api/matrix")
       .then((res) => res.json())
@@ -192,6 +204,74 @@ export default function MatrixPage() {
       }
     } catch {
       // Error
+    }
+  };
+
+  const handleOpenEditRoute = (route: RouteItem) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdmin();
+      return;
+    }
+    setEditingRoute(route);
+    setEditName(route.name);
+    setEditSourceMode(route.source_mode);
+    setEditSourceTg(route.source_tg);
+    setEditSourceSlot(route.source_slot || 1);
+    setEditTargetMode(route.target_mode);
+    setEditTargetTg(route.target_tg);
+    setEditTargetSlot(route.target_slot || 1);
+    setEditBidirectional(route.bidirectional ?? true);
+  };
+
+  const handleSaveEditRoute = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRoute || !editName) return;
+    setIsSavingEdit(true);
+    try {
+      const res = await fetch(`/api/matrix/${editingRoute.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editName,
+          source_mode: editSourceMode,
+          source_tg: Number(editSourceTg),
+          source_slot: Number(editSourceSlot),
+          target_mode: editTargetMode,
+          target_tg: Number(editTargetTg),
+          target_slot: Number(editTargetSlot),
+          bidirectional: editBidirectional,
+        }),
+      });
+      if (res.ok) {
+        fetchRoutes();
+        setEditingRoute(null);
+        beepPlayer?.playTalkGrant();
+      } else {
+        alert("Gagal menyimpan perubahan bridge.");
+      }
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleDeleteRoute = async (id: number, routeName: string) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdmin();
+      return;
+    }
+    if (!confirm(`Apakah Anda yakin ingin menghapus jembatan "${routeName}"?`)) return;
+    try {
+      const res = await fetch(`/api/matrix/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setRoutes((prev) => prev.filter((r) => r.id !== id));
+        beepPlayer?.playRogerBeep();
+      } else {
+        alert("Gagal menghapus jembatan.");
+      }
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
     }
   };
 
@@ -461,24 +541,43 @@ export default function MatrixPage() {
               }`}
             >
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${route.is_active ? "bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" : "bg-slate-600"}`} />
-                  <span className="font-heading font-black text-sm text-white">{route.name}</span>
+                <div className="flex items-center gap-2 min-w-0 pr-2">
+                  <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${route.is_active ? "bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" : "bg-slate-600"}`} />
+                  <span className="font-heading font-black text-sm text-white truncate">{route.name}</span>
                 </div>
-                <button
-                  onClick={() => toggleRoute(route.id)}
-                  className="flex items-center gap-1 text-xs font-mono font-bold"
-                >
-                  {route.is_active ? (
-                    <span className="flex items-center gap-1 text-emerald-400">
-                      <ToggleRight className="w-7 h-7 text-emerald-400" /> ONLINE
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 text-slate-500">
-                      <ToggleLeft className="w-7 h-7 text-slate-500" /> OFF
-                    </span>
-                  )}
-                </button>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => handleOpenEditRoute(route)}
+                    className="p-1 px-2 rounded-lg bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 text-xs font-mono font-bold flex items-center gap-1 transition-all"
+                    title="Edit Bridge"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-cyan-400" />
+                    <span className="hidden sm:inline">Edit</span>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteRoute(route.id, route.name)}
+                    className="p-1 px-2 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-800 text-rose-300 text-xs font-mono font-bold flex items-center gap-1 transition-all"
+                    title="Hapus Bridge"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                    <span className="hidden sm:inline">Hapus</span>
+                  </button>
+                  <button
+                    onClick={() => toggleRoute(route.id)}
+                    className="flex items-center gap-1 text-xs font-mono font-bold ml-1"
+                    title={route.is_active ? "Matikan Bridge" : "Aktifkan Bridge"}
+                  >
+                    {route.is_active ? (
+                      <span className="flex items-center gap-1 text-emerald-400">
+                        <ToggleRight className="w-7 h-7 text-emerald-400" /> ONLINE
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-slate-500">
+                        <ToggleLeft className="w-7 h-7 text-slate-500" /> OFF
+                      </span>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Route Path Patch Bay */}
@@ -825,6 +924,125 @@ export default function MatrixPage() {
                   className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 text-slate-950 font-heading font-black rounded-xl shadow-lg shadow-cyan-500/25 transition-all"
                 >
                   {isTuning ? "Mengalihkan..." : "Simpan & Terapkan"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL EDIT BRIDGE */}
+      {editingRoute && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#101726] border-2 border-cyan-500/70 rounded-3xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-cyan-900/50 pb-2">
+              <div>
+                <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                  <Edit2 className="w-4 h-4 text-cyan-400" />
+                  Edit Jembatan Cross-Network
+                </h3>
+                <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                  Ubah parameter TalkGroup dan Mode jembatan #{editingRoute.id}
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingRoute(null)}
+                className="text-slate-400 hover:text-white font-mono text-xs px-2 py-1 rounded-lg bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditRoute} className="space-y-3.5">
+              <div>
+                <label className="text-[11px] font-mono text-slate-400 block mb-1">Nama Jembatan:</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-cyan-400 outline-none"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono text-cyan-400 block uppercase">Source Mode & TG</label>
+                  <select
+                    value={editSourceMode}
+                    onChange={(e) => setEditSourceMode(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-cyan-300 font-mono mb-1.5"
+                  >
+                    <option>DMR</option>
+                    <option>YSF</option>
+                    <option>P25</option>
+                    <option>ANALOG</option>
+                    <option>CB</option>
+                    <option>MUMBLE</option>
+                  </select>
+                  <input
+                    type="number"
+                    value={editSourceTg}
+                    onChange={(e) => setEditSourceTg(Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-cyan-400 outline-none"
+                    placeholder="Src TG"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono text-purple-400 block uppercase">Target Mode & TG</label>
+                  <select
+                    value={editTargetMode}
+                    onChange={(e) => setEditTargetMode(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-purple-300 font-mono mb-1.5"
+                  >
+                    <option>YSF</option>
+                    <option>D-STAR</option>
+                    <option>P25</option>
+                    <option>ANALOG</option>
+                    <option>CB</option>
+                    <option>DMR</option>
+                    <option>MUMBLE</option>
+                  </select>
+                  <input
+                    type="number"
+                    value={editTargetTg}
+                    onChange={(e) => setEditTargetTg(Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-purple-400 outline-none"
+                    placeholder="Tgt TG"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="editBidi"
+                  checked={editBidirectional}
+                  onChange={(e) => setEditBidirectional(e.target.checked)}
+                  className="rounded bg-slate-900 border-slate-700 text-cyan-500"
+                />
+                <label htmlFor="editBidi" className="text-xs font-mono text-slate-300 cursor-pointer">
+                  Bidirectional Routing (2 Arah)
+                </label>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-cyan-900/40">
+                <button
+                  type="button"
+                  onClick={() => setEditingRoute(null)}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs rounded-xl"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="flex-1 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-heading font-black text-xs rounded-xl shadow-lg shadow-cyan-500/20 disabled:opacity-50"
+                >
+                  {isSavingEdit ? "Menyimpan..." : "Simpan Perubahan"}
                 </button>
               </div>
             </form>
