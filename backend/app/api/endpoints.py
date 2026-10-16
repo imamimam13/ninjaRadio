@@ -216,12 +216,13 @@ async def export_callbook_file(
 
     clean = filename.strip().lower()
     is_csv = clean.endswith(".csv")
+    is_dat = clean.endswith(".dat")
     is_json = clean.endswith(".json")
-    if not (is_csv or is_json):
+    if not (is_csv or is_dat or is_json):
         is_json = True
 
-    base = clean.replace(".json", "").replace(".csv", "")
-    for suffix in [".user", ".users", "_user", "_users"]:
+    base = clean.replace(".json", "").replace(".csv", "").replace(".dat", "")
+    for suffix in [".user", ".users", "_user", "_users", ".dmrids", "_dmrids", "dmrids"]:
         if base.endswith(suffix):
             base = base[:-len(suffix)]
 
@@ -252,6 +253,28 @@ async def export_callbook_file(
             "id": radio_id_val,
             "dmr_id": radio_id_val
         })
+
+    if is_dat:
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter='\t')
+        for u in users_list:
+            writer.writerow([
+                u["radio_id"],
+                u["callsign"],
+                u["name"],
+                u["surname"],
+                u["city"],
+                u["state"],
+                u["country"]
+            ])
+        return Response(
+            content=output.getvalue(),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f"inline; filename={filename}",
+                "Access-Control-Allow-Origin": "*"
+            }
+        )
 
     if is_csv:
         output = io.StringIO()

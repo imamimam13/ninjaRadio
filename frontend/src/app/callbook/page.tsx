@@ -1518,6 +1518,7 @@ export default function CallbookPage() {
                     desc: org.description || `Database Callbook ${org.name || org.code}`,
                     file: `${slug}.user.json`,
                     csvFile: `${slug}.user.csv`,
+                    datFile: `${slug}.DMRIds.dat`,
                     color: "border-cyan-800/80 bg-cyan-950/20 text-cyan-300"
                   };
                 }),
@@ -1527,11 +1528,13 @@ export default function CallbookPage() {
                   desc: "Seluruh pengguna terdaftar di NinjaRadio",
                   file: "all.user.json",
                   csvFile: "all.user.csv",
+                  datFile: "all.DMRIds.dat",
                   color: "border-slate-700 bg-slate-900/60 text-white"
                 },
               ].map((item) => {
                 const jsonPath = `/callbook/${item.file}`;
                 const csvPath = `/callbook/${item.csvFile}`;
+                const datPath = `/callbook/${item.datFile}`;
                 const isCopied = copiedUrl === jsonPath;
 
                 return (
@@ -1549,13 +1552,13 @@ export default function CallbookPage() {
                       <p className="text-[11px] font-mono text-slate-400">{item.desc}</p>
                     </div>
 
-                    <div className="flex items-center gap-1.5 self-end sm:self-center">
+                    <div className="flex items-center gap-1.5 self-end sm:self-center flex-wrap">
                       <a
                         href={jsonPath}
                         target="_blank"
                         rel="noreferrer"
                         className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center gap-1 transition-all shadow"
-                        title="Buka / Unduh JSON"
+                        title="Buka / Unduh JSON (Z3DMR, Droid-Star)"
                       >
                         <Download className="w-3.5 h-3.5" />
                         <span>JSON</span>
@@ -1566,9 +1569,19 @@ export default function CallbookPage() {
                         target="_blank"
                         rel="noreferrer"
                         className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 font-mono text-xs font-bold flex items-center gap-1 transition-all"
-                        title="Unduh CSV untuk CPS Radio"
+                        title="Unduh CSV untuk CPS Radio AnyTone / OpenGD77"
                       >
                         <span>CSV</span>
+                      </a>
+
+                      <a
+                        href={datPath}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2.5 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/60 font-mono text-xs font-bold flex items-center gap-1 transition-all"
+                        title="Unduh DMRIds.dat untuk Hotspot Pi-Star / MMDVMHost"
+                      >
+                        <span>Pi-Star (.dat)</span>
                       </a>
 
                       <button
