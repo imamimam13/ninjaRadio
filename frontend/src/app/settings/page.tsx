@@ -47,6 +47,14 @@ export default function SettingsPage() {
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState(false);
 
+  // Change Admin PIN State
+  const [showChangePinModal, setShowChangePinModal] = useState(false);
+  const [oldPinInput, setOldPinInput] = useState("");
+  const [newPinInput, setNewPinInput] = useState("");
+  const [changePinError, setChangePinError] = useState<string | null>(null);
+  const [changePinSuccess, setChangePinSuccess] = useState<string | null>(null);
+  const [isChangingPin, setIsChangingPin] = useState(false);
+
   // 1. General Server Identity
   const [serverCallsign, setServerCallsign] = useState("N1NJA");
   const [serverDmrId, setServerDmrId] = useState(5109999);
@@ -622,6 +630,37 @@ export default function SettingsPage() {
     }
   };
 
+  const handleChangePin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!oldPinInput || !newPinInput) return;
+    setIsChangingPin(true);
+    setChangePinError(null);
+    setChangePinSuccess(null);
+    try {
+      const res = await fetch("/api/auth/change-pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old_pin: oldPinInput, new_pin: newPinInput }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "SUCCESS") {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("ninjaradio_admin_pin", newPinInput);
+        }
+        setChangePinSuccess("✓ PIN Admin berhasil diperbarui!");
+        beepPlayer?.playTalkGrant();
+        setTimeout(() => setShowChangePinModal(false), 2000);
+      } else {
+        setChangePinError(data.detail || "Gagal mengubah PIN. Pastikan PIN lama benar.");
+        beepPlayer?.playRogerBeep();
+      }
+    } catch (err: any) {
+      setChangePinError(`Error: ${err.message}`);
+    } finally {
+      setIsChangingPin(false);
+    }
+  };
+
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdminUnlocked) {
@@ -748,6 +787,23 @@ export default function SettingsPage() {
               {isAdminUnlocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
               <span>{isAdminUnlocked ? "Kunci Kembali Admin" : "Buka Mode Edit Admin"}</span>
             </button>
+
+            {isAdminUnlocked && (
+              <button
+                type="button"
+                onClick={() => {
+                  setOldPinInput("");
+                  setNewPinInput("");
+                  setChangePinError(null);
+                  setChangePinSuccess(null);
+                  setShowChangePinModal(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-[#05080f] hover:bg-slate-900 border border-amber-500/60 text-amber-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+              >
+                <Key className="w-3.5 h-3.5 text-amber-400" />
+                <span>Ganti PIN</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -2412,6 +2468,91 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   className="flex-1 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white rounded-xl font-black text-xs shadow-lg shadow-purple-500/20"
                 >
                   Pindahkan Bot Sekarang
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL GANTI PIN ADMIN */}
+      {showChangePinModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#101726] border-2 border-amber-500/70 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-amber-900/50 pb-2">
+              <div>
+                <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                  <Key className="w-4 h-4 text-amber-400" />
+                  Ganti PIN Keamanan Admin
+                </h3>
+                <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                  Ubah kode PIN untuk mengunci menu admin, izin transmit, dan konfigurasi sistem.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowChangePinModal(false)}
+                className="text-slate-500 hover:text-white font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {changePinSuccess && (
+              <div className="p-3 bg-emerald-950/60 border border-emerald-800 rounded-xl text-xs font-mono text-emerald-300 animate-pulse">
+                {changePinSuccess}
+              </div>
+            )}
+            {changePinError && (
+              <div className="p-3 bg-rose-950/60 border border-rose-800 rounded-xl text-xs font-mono text-rose-300">
+                {changePinError}
+              </div>
+            )}
+
+            <form onSubmit={handleChangePin} className="space-y-3 font-mono text-xs">
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">
+                  PIN Lama / Saat Ini <span className="text-amber-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  placeholder="Masukkan PIN lama (default: 1234)"
+                  value={oldPinInput}
+                  onChange={(e) => setOldPinInput(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-amber-400 rounded-xl text-white tracking-widest outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">
+                  PIN Baru (Minimal 4 Karakter) <span className="text-amber-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Masukkan PIN baru"
+                  value={newPinInput}
+                  onChange={(e) => setNewPinInput(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-amber-400 rounded-xl text-amber-300 font-bold tracking-widest outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowChangePinModal(false)}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isChangingPin}
+                  className="flex-1 py-2 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 font-heading font-black rounded-xl shadow-lg shadow-amber-500/25 transition-all"
+                >
+                  {isChangingPin ? "Menyimpan..." : "Simpan PIN Baru"}
                 </button>
               </div>
             </form>
