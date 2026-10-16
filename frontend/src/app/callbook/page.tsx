@@ -1510,46 +1510,17 @@ export default function CallbookPage() {
 
             <div className="space-y-2.5 max-h-[60vh] overflow-y-auto pr-1">
               {[
-                {
-                  code: "BRIDI",
-                  name: "BRIDI (Digital Amateur Radio)",
-                  desc: "DMR ID khusus callsign BD & Amatir BRIDI",
-                  file: "bridi.user.json",
-                  csvFile: "bridi.user.csv",
-                  color: "border-cyan-800 bg-cyan-950/30 text-cyan-300"
-                },
-                {
-                  code: "ORARI",
-                  name: "ORARI (Amatir Radio Indonesia)",
-                  desc: "Callsign YB, YC, YD, YE (IAR Resmi)",
-                  file: "orari.user.json",
-                  csvFile: "orari.user.csv",
-                  color: "border-emerald-800 bg-emerald-950/30 text-emerald-300"
-                },
-                {
-                  code: "RAPI",
-                  name: "RAPI (Radio Antar Penduduk Indonesia)",
-                  desc: "Callsign JZ & 10-28 ID",
-                  file: "rapi.user.json",
-                  csvFile: "rapi.user.csv",
-                  color: "border-amber-800 bg-amber-950/30 text-amber-300"
-                },
-                {
-                  code: "CB-11M",
-                  name: "CB 11 Meter Indonesia",
-                  desc: "Callsign Citizen Band & RPU 11M",
-                  file: "cb.user.json",
-                  csvFile: "cb.user.csv",
-                  color: "border-indigo-800 bg-indigo-950/30 text-indigo-300"
-                },
-                {
-                  code: "KOMUNITAS",
-                  name: "Komunitas / Relawan & SAR",
-                  desc: "Relawan bencana, SAR, & radio komunitas",
-                  file: "komunitas.user.json",
-                  csvFile: "komunitas.user.csv",
-                  color: "border-purple-800 bg-purple-950/30 text-purple-300"
-                },
+                ...organizations.map((org) => {
+                  const slug = (org.code || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+                  return {
+                    code: org.code,
+                    name: org.name || org.code,
+                    desc: org.description || `Database Callbook ${org.name || org.code}`,
+                    file: `${slug}.user.json`,
+                    csvFile: `${slug}.user.csv`,
+                    color: "border-cyan-800/80 bg-cyan-950/20 text-cyan-300"
+                  };
+                }),
                 {
                   code: "ALL",
                   name: "Semua Pengguna (Global Database)",
