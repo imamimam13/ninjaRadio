@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from typing import List, Optional, Dict, Any
 import os
 import csv
@@ -180,7 +180,12 @@ class CallbookService:
             clean_org = org_code.strip().upper()
             if clean_org in ["CB", "CB11M"]:
                 clean_org = "CB-11M"
-            stmt = stmt.where(CallbookEntry.organization == clean_org)
+            stmt = stmt.where(
+                or_(
+                    func.upper(CallbookEntry.organization) == clean_org,
+                    CallbookEntry.organization.ilike(clean_org)
+                )
+            )
         stmt = stmt.order_by(CallbookEntry.callsign)
         result = await session.execute(stmt)
         return list(result.scalars().all())
