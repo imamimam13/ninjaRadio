@@ -304,6 +304,31 @@ export default function DashboardPage() {
                       {isMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />}
                       <span>{isMuted ? "SPEAKER: MUTE" : "SPEAKER: ON"}</span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newTg = selectedTgFilter === activeTx.talkgroup ? null : activeTx.talkgroup;
+                        setSelectedTgFilter(newTg);
+                        if (newTg) {
+                          beepPlayer?.playTalkGrant();
+                        } else {
+                          beepPlayer?.playRogerBeep();
+                        }
+                      }}
+                      className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                        selectedTgFilter === activeTx.talkgroup
+                          ? "bg-amber-950/80 border border-amber-500/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.35)]"
+                          : "bg-slate-900/80 border border-slate-700 text-slate-300 hover:text-cyan-300 hover:border-cyan-600"
+                      }`}
+                      title={
+                        selectedTgFilter === activeTx.talkgroup
+                          ? "Audio saat ini terkunci di TG ini. Klik untuk membuka kunci (dengarkan semua TG)."
+                          : `Kunci audio hanya pada TG ${activeTx.talkgroup}`
+                      }
+                    >
+                      <span>{selectedTgFilter === activeTx.talkgroup ? "🔒 LOCK TG ACTIVE" : "🔓 LOCK TG"}</span>
+                    </button>
                   </div>
                   <div className="flex items-baseline gap-3 mt-1.5">
                     <h2 className="text-3xl sm:text-4xl font-heading font-black text-white tracking-wider">
@@ -536,15 +561,30 @@ export default function DashboardPage() {
               );
             })}
             {selectedTgFilter !== null ? (
-              <span className="ml-auto text-[10px] text-amber-300 font-bold bg-amber-950/60 border border-amber-800/80 px-2.5 py-0.5 rounded-full shrink-0 flex items-center gap-1 shadow-sm">
-                <span>🔊</span>
-                <span>Lock Audio: TG {selectedTgFilter}</span>
-              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTgFilter(null);
+                  beepPlayer?.playRogerBeep();
+                }}
+                className="ml-auto text-[11px] text-amber-300 font-bold bg-amber-950/80 hover:bg-rose-950/90 border border-amber-600/80 hover:border-rose-500/80 px-3 py-1 rounded-lg shrink-0 flex items-center gap-1.5 shadow-sm transition-all cursor-pointer group"
+                title="Audio saat ini terkunci hanya pada TG ini. Klik di sini untuk membuka kunci (Dengarkan semua TG)"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                <span>🔒 Lock Audio: TG {selectedTgFilter}</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-900/80 group-hover:bg-rose-900 text-amber-200 group-hover:text-rose-200 font-mono flex items-center gap-1 ml-1 border border-amber-700/60 group-hover:border-rose-600/60">
+                  <span>✕</span>
+                  <span>Buka Kunci</span>
+                </span>
+              </button>
             ) : (
-              <span className="ml-auto text-[10px] text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-800/80 px-2.5 py-0.5 rounded-full shrink-0 flex items-center gap-1 shadow-sm">
-                <span>🔊</span>
-                <span>Audio: Semua TG</span>
-              </span>
+              <div 
+                className="ml-auto text-[11px] text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-800/80 px-3 py-1 rounded-lg shrink-0 flex items-center gap-1.5 shadow-sm"
+                title="Audio terbuka: Mendengarkan seluruh Talkgroup"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>🔊 Audio: Semua TG (Terbuka)</span>
+              </div>
             )}
           </div>
 
