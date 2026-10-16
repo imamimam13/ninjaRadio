@@ -105,11 +105,9 @@ async def init_db():
             pass
         # Set default organization talkgroups policy & prefixes
         try:
-            await conn.execute(text("UPDATE organizations SET allowed_tgs = '5100,9990' WHERE UPPER(code) = 'KOMUNITAS' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
+            await conn.execute(text("UPDATE organizations SET allowed_tgs = '*' WHERE UPPER(code) IN ('ORARI', 'BRIDI', 'SENKOM', 'KRAPDMR', 'KOMUNITAS')"))
             await conn.execute(text("UPDATE organizations SET allowed_tgs = '5109,9990' WHERE UPPER(code) = 'RAPI' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
             await conn.execute(text("UPDATE organizations SET allowed_tgs = '5108,9990' WHERE UPPER(code) = 'CB-11M' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
-            await conn.execute(text("UPDATE organizations SET allowed_tgs = '5100,9990' WHERE UPPER(code) = 'BRIDI' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
-            await conn.execute(text("UPDATE organizations SET allowed_tgs = '*' WHERE UPPER(code) = 'ORARI'"))
             # Default callsign prefix routing per organization
             await conn.execute(text("UPDATE organizations SET callsign_prefixes = 'YB,YC,YD,YE,7A,7B,7C,7D,7E,7F,7G,7H,7I,8A,8B,8C,8D,8E,8F,8G,8H,8I' WHERE UPPER(code) = 'ORARI' AND (callsign_prefixes IS NULL OR callsign_prefixes = '')"))
             await conn.execute(text("UPDATE organizations SET callsign_prefixes = 'BD,BD62' WHERE UPPER(code) = 'BRIDI' AND (callsign_prefixes IS NULL OR callsign_prefixes = '')"))
