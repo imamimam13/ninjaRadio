@@ -27,11 +27,11 @@ class CallbookService:
         result = await session.execute(stmt)
         if not result.scalar_one_or_none():
             defaults = [
-                {"code": "ORARI", "name": "ORARI", "description": "Organisasi Amatir Radio Indonesia", "allowed_tgs": "*", "allow_tx": True},
-                {"code": "BRIDI", "name": "BRIDI", "description": "BrandMeister & Digital Amateur Radio Indonesia", "allowed_tgs": "*", "allow_tx": True},
-                {"code": "RAPI", "name": "RAPI", "description": "Radio Antar Penduduk Indonesia", "allowed_tgs": "5109,9990", "allow_tx": True},
-                {"code": "CB-11M", "name": "CB 11M", "description": "Citizen Band 11 Meter Indonesia", "allowed_tgs": "5108,9990", "allow_tx": True},
-                {"code": "KOMUNITAS", "name": "Komunitas / SAR", "description": "Relawan, SAR, & Radio Komunitas", "allowed_tgs": "5100,9990", "allow_tx": True},
+                {"code": "ORARI", "name": "ORARI", "description": "Organisasi Amatir Radio Indonesia", "allowed_tgs": "*", "callsign_prefixes": "YB,YC,YD,YE,7A,7B,7C,7D,7E,7F,7G,7H,7I,8A,8B,8C,8D,8E,8F,8G,8H,8I", "allow_tx": True},
+                {"code": "BRIDI", "name": "BRIDI", "description": "BrandMeister & Digital Amateur Radio Indonesia", "allowed_tgs": "5100,9990", "callsign_prefixes": "BD,BD62", "allow_tx": True},
+                {"code": "RAPI", "name": "RAPI", "description": "Radio Antar Penduduk Indonesia", "allowed_tgs": "5109,9990", "callsign_prefixes": "JZ", "allow_tx": True},
+                {"code": "CB-11M", "name": "CB 11M", "description": "Citizen Band 11 Meter Indonesia", "allowed_tgs": "5108,9990", "callsign_prefixes": "11M,CB", "allow_tx": True},
+                {"code": "KOMUNITAS", "name": "Komunitas / SAR", "description": "Relawan, SAR, & Radio Komunitas", "allowed_tgs": "5100,9990", "callsign_prefixes": "*", "allow_tx": True},
             ]
             for item in defaults:
                 session.add(Organization(**item))
@@ -45,7 +45,13 @@ class CallbookService:
         return list(result.scalars().all())
 
     @staticmethod
-    async def update_organization_rule(session: AsyncSession, code: str, allowed_tgs: str, allow_tx: bool = True) -> Optional[Organization]:
+    async def update_organization_rule(
+        session: AsyncSession,
+        code: str,
+        allowed_tgs: str,
+        allow_tx: bool = True,
+        callsign_prefixes: Optional[str] = None
+    ) -> Optional[Organization]:
         await CallbookService.seed_initial_organizations(session)
         stmt = select(Organization).where(Organization.code == code.strip().upper())
         result = await session.execute(stmt)
@@ -53,9 +59,62 @@ class CallbookService:
         if org:
             org.allowed_tgs = allowed_tgs.strip()
             org.allow_tx = allow_tx
+            if callsign_prefixes is not None:
+                org.callsign_prefixes = callsign_prefixes.strip().upper()
             await session.commit()
             await session.refresh(org)
             return org
+        return None
+
+    @staticmethod
+    async def grant_user_permission(session: AsyncSession, identifier: str, allowed_tgs: str) -> Optional[CallbookEntry]:
+        """
+        Grants talkgroups permission to a user by callsign or DMR ID.
+        If user does not exist in callbook, an entry is created.
+        """
+        ident = identifier.strip().upper()
+        cb = None
+        if ident.isdigit():
+            cb = await CallbookService.get_by_dmr_id(session, int(ident))
+        if not cb:
+            cb = await CallbookService.get_by_callsign(session, ident)
+
+        rule = allowed_tgs.strip()
+        if cb:
+            cb.allowed_tgs_override = rule
+            await session.commit()
+            await session.refresh(cb)
+            return cb
+        else:
+            dmr_id_val = int(ident) if ident.isdigit() else (5100000 + (abs(hash(ident)) % 90000))
+            new_entry = CallbookEntry(
+                dmr_id=dmr_id_val,
+                callsign=ident,
+                name=f"Operator {ident}",
+                organization="BRIDI" if ident.startswith("BD") else ("ORARI" if ident.startswith(("YB", "YC", "YD", "YE")) else "KOMUNITAS"),
+                allowed_tgs_override=rule
+            )
+            session.add(new_entry)
+            await session.commit()
+            await session.refresh(new_entry)
+            return new_entry
+
+    @staticmethod
+    async def revoke_user_permission(session: AsyncSession, identifier: str) -> Optional[CallbookEntry]:
+        """
+        Revokes specific talkgroups permission override, reverting to organization rules.
+        """
+        ident = identifier.strip().upper()
+        cb = None
+        if ident.isdigit():
+            cb = await CallbookService.get_by_dmr_id(session, int(ident))
+        if not cb:
+            cb = await CallbookService.get_by_callsign(session, ident)
+        if cb:
+            cb.allowed_tgs_override = None
+            await session.commit()
+            await session.refresh(cb)
+            return cb
         return None
 
     @staticmethod
@@ -63,8 +122,8 @@ class CallbookService:
         """
         Validates whether the operator is allowed to transmit on target_tg.
         Returns (is_allowed: bool, reason_or_category: str).
+        Zero hardcoded prefixes: everything resolved dynamically from DB.
         """
-        # Always allow Echo/Parrot test TG 9990
         if target_tg == 9990:
             return True, "Echo Test"
 
@@ -72,69 +131,61 @@ class CallbookService:
         if not call_upper or call_upper in ["SWL-MONITOR", "MONITOR", "LISTENER", "GUEST", "TAMU"] or dmr_id == 0:
             return False, "Mode Monitor (SWL) tidak memiliki izin memancar. Gunakan profil berlisensi atau PIN Operator."
 
-        # Find callbook entry
+        # 1. Find callbook entry
         cb = None
         if dmr_id > 0:
             cb = await CallbookService.get_by_dmr_id(session, dmr_id)
         if not cb and call_upper:
             cb = await CallbookService.get_by_callsign(session, call_upper)
 
-        # User-specific override if present
+        # 2. Check user-specific override if present
         if cb and cb.allowed_tgs_override:
             rule_str = cb.allowed_tgs_override.strip()
             if rule_str == "*":
-                return True, cb.organization or "User"
+                return True, cb.organization or "User Override (*)"
             allowed_list = [int(x.strip()) for x in rule_str.split(",") if x.strip().isdigit()]
             if target_tg in allowed_list:
-                return True, cb.organization or "User"
+                return True, cb.organization or "User Override"
             else:
                 return False, f"Operator {call_upper} hanya memiliki izin khusus pada TG: {rule_str}"
 
-        org_code = cb.organization.upper() if (cb and cb.organization) else None
-
-        # If not in callbook, resolve organization from callsign prefix or fallback
-        if not org_code:
-            if call_upper.startswith(("YB", "YC", "YD", "YE", "BD", "N1NJA", "TEST-OP")):
-                org_code = "ORARI"
-            elif call_upper.startswith("JZ"):
-                org_code = "RAPI"
-            else:
-                org_code = "KOMUNITAS"
-
-        # Lookup organization rule in DB
+        # 3. Dynamic lookup of Organization from database
         await CallbookService.seed_initial_organizations(session)
-        stmt = select(Organization).where(Organization.code == org_code)
-        res = await session.execute(stmt)
-        org = res.scalar_one_or_none()
+        orgs = await CallbookService.get_all_organizations(session)
 
-        if not org:
-            if org_code in ["ORARI", "BRIDI"]:
-                return True, org_code
-            elif org_code == "RAPI":
-                if target_tg in [5109, 9990]:
-                    return True, "RAPI"
-                return False, f"Stasiun RAPI ({call_upper}) tidak diizinkan memancar di TG {target_tg}. Gunakan TG 5109."
-            elif org_code == "CB-11M":
-                if target_tg in [5108, 9990]:
-                    return True, "CB-11M"
-                return False, f"Stasiun CB-11M ({call_upper}) tidak diizinkan memancar di TG {target_tg}. Gunakan TG 5108."
-            else:
-                if target_tg in [5100, 9990]:
-                    return True, "KOMUNITAS"
-                return False, f"Stasiun Komunitas ({call_upper}) tidak diizinkan memancar di TG {target_tg} (Khusus Amatir). Gunakan TG 5100."
+        org_code = cb.organization.upper() if (cb and cb.organization) else None
+        target_org = None
+        if org_code:
+            target_org = next((o for o in orgs if o.code.upper() == org_code), None)
 
-        if not org.allow_tx:
-            return False, f"Organisasi {org.name} saat ini diset Monitor Only oleh Sysop."
+        # 4. If not assigned to an organization, dynamically match callsign prefixes from DB
+        if not target_org:
+            fallback_org = None
+            for o in orgs:
+                prefixes = [p.strip().upper() for p in (o.callsign_prefixes or "").split(",") if p.strip()]
+                if "*" in prefixes:
+                    fallback_org = o
+                if any(call_upper.startswith(p) for p in prefixes if p != "*"):
+                    target_org = o
+                    break
+            if not target_org:
+                target_org = fallback_org or (orgs[0] if orgs else None)
 
-        rule = (org.allowed_tgs or "*").strip()
+        if not target_org:
+            return False, f"Tidak ada aturan organisasi untuk stasiun {call_upper}"
+
+        if not target_org.allow_tx:
+            return False, f"Organisasi {target_org.name} saat ini diset Monitor Only oleh Sysop."
+
+        rule = (target_org.allowed_tgs or "*").strip()
         if rule == "*":
-            return True, org.name
+            return True, target_org.name
 
         allowed_tgs = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
         if target_tg in allowed_tgs:
-            return True, org.name
+            return True, target_org.name
 
-        return False, f"Organisasi {org.name} ({call_upper}) hanya diizinkan memancar di TG [{rule}]. Akses ke TG {target_tg} diblokir oleh TX Firewall."
+        return False, f"Stasiun {call_upper} ({target_org.name}) hanya diizinkan di TG [{rule}]. Akses ke TG {target_tg} diblokir oleh TX Firewall."
 
     @staticmethod
     async def add_organization(session: AsyncSession, code: str, name: str, description: str = "") -> Organization:

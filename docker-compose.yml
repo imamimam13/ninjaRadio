@@ -79,7 +79,7 @@ services:
       - mumble-server
       - core
     volumes:
-      - ninjaradio_data:/app/data:ro
+      - ninjaradio_data:/app/data
     networks:
       ninjaradio_net:
         aliases:

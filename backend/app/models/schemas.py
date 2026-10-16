@@ -119,11 +119,13 @@ class OrganizationCreateRequest(BaseModel):
     code: Optional[str] = None
     description: Optional[str] = ""
     allowed_tgs: Optional[str] = "*"
+    callsign_prefixes: Optional[str] = ""
     allow_tx: Optional[bool] = True
 
 class OrganizationRuleUpdate(BaseModel):
     pin: str
     allowed_tgs: str
+    callsign_prefixes: Optional[str] = None
     allow_tx: Optional[bool] = True
 
 class OrganizationResponse(BaseModel):
@@ -132,6 +134,7 @@ class OrganizationResponse(BaseModel):
     code: str
     description: Optional[str] = ""
     allowed_tgs: Optional[str] = "*"
+    callsign_prefixes: Optional[str] = ""
     allow_tx: Optional[bool] = True
     is_default: Optional[bool] = False
 

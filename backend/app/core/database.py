@@ -69,6 +69,7 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     description: Mapped[str] = mapped_column(String(255), default="")
     allowed_tgs: Mapped[str] = mapped_column(String(255), default="*") # e.g. "5100,9990" or "*"
+    callsign_prefixes: Mapped[str] = mapped_column(String(255), default="") # e.g. "YB,YC" or "BD,BD62"
     allow_tx: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -90,6 +91,10 @@ async def init_db():
         except Exception:
             pass
         try:
+            await conn.execute(text("ALTER TABLE organizations ADD COLUMN callsign_prefixes VARCHAR(255) DEFAULT ''"))
+        except Exception:
+            pass
+        try:
             await conn.execute(text("ALTER TABLE organizations ADD COLUMN allow_tx BOOLEAN DEFAULT 1"))
         except Exception:
             pass
@@ -98,12 +103,19 @@ async def init_db():
             await conn.execute(text("UPDATE callbook SET organization = 'BRIDI' WHERE callsign LIKE 'BD%' AND organization = 'KOMUNITAS'"))
         except Exception:
             pass
-        # Set default organization talkgroups policy
+        # Set default organization talkgroups policy & prefixes
         try:
             await conn.execute(text("UPDATE organizations SET allowed_tgs = '5100,9990' WHERE UPPER(code) = 'KOMUNITAS' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
             await conn.execute(text("UPDATE organizations SET allowed_tgs = '5109,9990' WHERE UPPER(code) = 'RAPI' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
             await conn.execute(text("UPDATE organizations SET allowed_tgs = '5108,9990' WHERE UPPER(code) = 'CB-11M' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
-            await conn.execute(text("UPDATE organizations SET allowed_tgs = '*' WHERE UPPER(code) IN ('ORARI', 'BRIDI')"))
+            await conn.execute(text("UPDATE organizations SET allowed_tgs = '5100,9990' WHERE UPPER(code) = 'BRIDI' AND (allowed_tgs IS NULL OR allowed_tgs = '*')"))
+            await conn.execute(text("UPDATE organizations SET allowed_tgs = '*' WHERE UPPER(code) = 'ORARI'"))
+            # Default callsign prefix routing per organization
+            await conn.execute(text("UPDATE organizations SET callsign_prefixes = 'YB,YC,YD,YE,7A,7B,7C,7D,7E,7F,7G,7H,7I,8A,8B,8C,8D,8E,8F,8G,8H,8I' WHERE UPPER(code) = 'ORARI' AND (callsign_prefixes IS NULL OR callsign_prefixes = '')"))
+            await conn.execute(text("UPDATE organizations SET callsign_prefixes = 'BD,BD62' WHERE UPPER(code) = 'BRIDI' AND (callsign_prefixes IS NULL OR callsign_prefixes = '')"))
+            await conn.execute(text("UPDATE organizations SET callsign_prefixes = 'JZ' WHERE UPPER(code) = 'RAPI' AND (callsign_prefixes IS NULL OR callsign_prefixes = '')"))
+            await conn.execute(text("UPDATE organizations SET callsign_prefixes = '11M,CB' WHERE UPPER(code) = 'CB-11M' AND (callsign_prefixes IS NULL OR callsign_prefixes = '')"))
+            await conn.execute(text("UPDATE organizations SET callsign_prefixes = '*' WHERE UPPER(code) = 'KOMUNITAS' AND (callsign_prefixes IS NULL OR callsign_prefixes = '')"))
         except Exception:
             pass
 

@@ -354,13 +354,14 @@ async def create_organization(
 
 @router.get("/firewall/rules")
 async def get_firewall_rules(session: AsyncSession = Depends(get_db)):
-    """Returns talkgroup permission rules for all registered organizations."""
+    """Returns talkgroup permission rules and callsign prefixes for all registered organizations."""
     orgs = await CallbookService.get_all_organizations(session)
     return [
         {
             "code": o.code,
             "name": o.name,
             "allowed_tgs": getattr(o, "allowed_tgs", "*") or "*",
+            "callsign_prefixes": getattr(o, "callsign_prefixes", "") or "",
             "allow_tx": getattr(o, "allow_tx", True) if getattr(o, "allow_tx", None) is not None else True,
             "description": o.description
         }
@@ -373,7 +374,7 @@ async def update_firewall_rule(
     payload: OrganizationRuleUpdate,
     session: AsyncSession = Depends(get_db)
 ):
-    """Updates allowed talkgroups and TX permission for an organization (PIN protected)."""
+    """Updates allowed talkgroups, callsign prefixes, and TX permission for an organization (PIN protected)."""
     admin_pin = get_admin_pin()
     if str(payload.pin).strip() != admin_pin:
         raise HTTPException(status_code=403, detail="PIN Admin salah! Akses ditolak.")
@@ -382,7 +383,8 @@ async def update_firewall_rule(
         session,
         code=org_code,
         allowed_tgs=payload.allowed_tgs,
-        allow_tx=payload.allow_tx if payload.allow_tx is not None else True
+        allow_tx=payload.allow_tx if payload.allow_tx is not None else True,
+        callsign_prefixes=payload.callsign_prefixes
     )
     if not org:
         raise HTTPException(status_code=404, detail="Organisasi tidak ditemukan.")
@@ -392,6 +394,7 @@ async def update_firewall_rule(
             "code": org.code,
             "name": org.name,
             "allowed_tgs": org.allowed_tgs,
+            "callsign_prefixes": org.callsign_prefixes,
             "allow_tx": org.allow_tx
         }
     }

@@ -200,6 +200,269 @@ def resolve_mumble_identity(username: str) -> tuple:
     clean_call = re.sub(r'[^A-Za-z0-9]', '', clean_name)[:8].upper() or f"MUM{virtual_id%1000:03d}"
     return virtual_id, clean_call
 
+last_tx_reject_alerts = {}
+
+def check_mumble_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tuple:
+    """
+    Dynamically checks if Mumble user is permitted to transmit on target_tg.
+    Zero hardcoded prefixes: evaluates callbook overrides, then organizations table.
+    """
+    if target_tg == 9990:
+        return True, "Echo Test"
+    db_path = "/app/data/ninjaradio.db"
+    if not os.path.exists(db_path):
+        return True, "Default (No DB)"
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.5) as conn:
+            cursor = conn.cursor()
+            call_upper = (callsign or "").strip().upper()
+            cursor.execute("SELECT organization, allowed_tgs_override FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, call_upper))
+            row = cursor.fetchone()
+            if row and row[1]:
+                override = str(row[1]).strip()
+                if override == "*":
+                    return True, "User Override (*)"
+                allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
+                if target_tg in allowed:
+                    return True, "User Override"
+                return False, f"Hanya diizinkan di TG: {override}"
+
+            org_code = row[0] if (row and row[0]) else None
+
+            # Fetch organizations to match dynamic callsign prefixes
+            cursor.execute("SELECT code, allowed_tgs, allow_tx, callsign_prefixes FROM organizations")
+            org_rows = cursor.fetchall()
+
+            target_org_row = None
+            if org_code:
+                for orow in org_rows:
+                    if str(orow[0]).upper() == org_code.upper():
+                        target_org_row = orow
+                        break
+
+            if not target_org_row and org_rows:
+                fallback_org_row = None
+                for orow in org_rows:
+                    raw_prefixes = str(orow[3] or "")
+                    prefixes = [p.strip().upper() for p in raw_prefixes.split(",") if p.strip()]
+                    if "*" in prefixes:
+                        fallback_org_row = orow
+                    if any(call_upper.startswith(p) for p in prefixes if p != "*"):
+                        target_org_row = orow
+                        break
+                if not target_org_row:
+                    target_org_row = fallback_org_row or org_rows[0]
+
+            if not target_org_row:
+                return False, f"Tidak ada aturan organisasi untuk {call_upper}"
+
+            org_c, allowed_tgs, allow_tx, _ = target_org_row
+            if not allow_tx:
+                return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
+            rule = (allowed_tgs or "*").strip()
+            if rule == "*":
+                return True, org_c
+            allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+            if target_tg in allowed:
+                return True, org_c
+            return False, f"Organisasi {org_c} hanya diizinkan di TG [{rule}]"
+    except Exception as e:
+        logger.debug(f"check_mumble_tx_permission error: {e}")
+    return True, "Fallback"
+
+def update_user_permission_in_db(identifier: str, allowed_tgs_str: str) -> bool:
+    """Updates or provisions a user in ninjaradio.db with special TG override (invoked by SuperUser)."""
+    db_path = "/app/data/ninjaradio.db"
+    if not os.path.exists(db_path):
+        return False
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=2.0) as conn:
+            cursor = conn.cursor()
+            ident = identifier.strip().upper()
+            cursor.execute("SELECT id, dmr_id, callsign FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (int(ident) if ident.isdigit() else 0, ident))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("UPDATE callbook SET allowed_tgs_override = ? WHERE id = ?", (allowed_tgs_str, row[0]))
+            else:
+                dmr_id_val = int(ident) if ident.isdigit() else (5100000 + (abs(hash(ident)) % 90000))
+                org = "BRIDI" if ident.startswith("BD") else ("ORARI" if ident.startswith(("YB", "YC", "YD", "YE")) else "KOMUNITAS")
+                cursor.execute(
+                    "INSERT INTO callbook (dmr_id, callsign, name, organization, allowed_tgs_override) VALUES (?, ?, ?, ?, ?)",
+                    (dmr_id_val, ident, f"Operator {ident}", org, allowed_tgs_str)
+                )
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"update_user_permission_in_db error: {e}")
+        return False
+
+def revoke_user_permission_in_db(identifier: str) -> bool:
+    """Revokes special TG override in ninjaradio.db, reverting user to org policy."""
+    db_path = "/app/data/ninjaradio.db"
+    if not os.path.exists(db_path):
+        return False
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=2.0) as conn:
+            cursor = conn.cursor()
+            ident = identifier.strip().upper()
+            cursor.execute("UPDATE callbook SET allowed_tgs_override = NULL WHERE dmr_id = ? OR UPPER(callsign) = ?", (int(ident) if ident.isdigit() else 0, ident))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"revoke_user_permission_in_db error: {e}")
+        return False
+
+def handle_incoming_text_message(mumble_instance, message, current_bot_tg=None):
+    """Processes interactive text commands in Mumble chat from SuperUser or operators."""
+    actor_id = getattr(message, "actor", None)
+    raw_text = (getattr(message, "message", "") or "").strip()
+    if not actor_id or not raw_text:
+        return
+    sender_user = mumble_instance.users.get(actor_id)
+    if not sender_user:
+        return
+    uname = sender_user.get("name", "")
+    if uname.startswith("NinjaBot-"):
+        return
+
+    # Strip HTML tags if Mumla sends HTML formatting
+    clean_text = re.sub(r"<[^>]+>", "", raw_text).strip()
+    if not clean_text.startswith("!"):
+        return
+
+    parts = clean_text.split()
+    cmd = parts[0].lower()
+    args = parts[1:]
+
+    is_superuser = (uname == "SuperUser" or sender_user.get("user_id") == 0)
+
+    # 1. !help
+    if cmd in ["!help", "!bantuan"]:
+        help_msg = (
+            "<b>📻 NinjaRadio Mumla Gateway Commands:</b><br/>"
+            "• <code>!req &lt;TG&gt;</code> : Ajukan izin TX di Talkgroup tertentu (misal: <code>!req 1025</code>)<br/>"
+            "• <code>!check [user]</code> : Cek status izin Talkgroup aktif<br/>"
+        )
+        if is_superuser:
+            help_msg += (
+                "<br/><b>👑 Khusus SuperUser / Admin:</b><br/>"
+                "• <code>!grant &lt;user&gt; &lt;TG&gt;</code> : Berikan izin TX (contoh: <code>!grant BD62AA 1025</code> atau <code>!grant BD62AA *</code>)<br/>"
+                "• <code>!revoke &lt;user&gt;</code> : Cabut hak khusus user (kembali ke default)<br/>"
+            )
+        try:
+            sender_user.send_text_message(help_msg)
+        except Exception:
+            pass
+
+    # 2. !req / !request
+    elif cmd in ["!req", "!request", "!izin"]:
+        target_tg_str = args[0] if args else (str(current_bot_tg) if current_bot_tg else "1025")
+        _, user_call = resolve_mumble_identity(uname)
+        reply = f"✓ Permintaan izin TX di TG {target_tg_str} telah dicatat. Menunggu persetujuan SuperUser."
+        try:
+            sender_user.send_text_message(reply)
+        except Exception:
+            pass
+
+        # Broadcast notification to SuperUser if online
+        su_notified = False
+        for u in list(mumble_instance.users.values()):
+            u_name = u.get("name", "")
+            if u_name == "SuperUser" or u.get("user_id") == 0:
+                try:
+                    alert = (
+                        f"📢 <b>Permintaan Izin TX Masuk:</b><br/>"
+                        f"• User: <b>{uname}</b> (Callsign: <b>{user_call}</b>)<br/>"
+                        f"• Target TG: <b>{target_tg_str}</b><br/>"
+                        f"👉 Balas: <code>!grant {user_call} {target_tg_str}</code> untuk menyetujui."
+                    )
+                    u.send_text_message(alert)
+                    su_notified = True
+                except Exception:
+                    pass
+        logger.info(f"[Mumble-Req] User '{uname}' ({user_call}) requested TX on TG {target_tg_str} (SuperUser notified: {su_notified})")
+
+    # 3. !grant (SuperUser only)
+    elif cmd in ["!grant", "!izinkan", "!approve"]:
+        if not is_superuser:
+            try:
+                sender_user.send_text_message("⛔ Akses Ditolak: Hanya SuperUser yang dapat memberikan izin.")
+            except Exception:
+                pass
+            return
+        if len(args) < 2:
+            try:
+                sender_user.send_text_message("⚠️ Format salah! Gunakan: <code>!grant &lt;callsign/ID&gt; &lt;TG&gt;</code> (misal: <code>!grant BD62AA 1025</code> atau <code>!grant BD62AA *</code>)")
+            except Exception:
+                pass
+            return
+
+        target_ident = args[0].upper()
+        target_tgs = args[1].strip()
+        success = update_user_permission_in_db(target_ident, target_tgs)
+        if success:
+            try:
+                sender_user.send_text_message(f"✓ <b>Berhasil!</b> Stasiun <b>{target_ident}</b> kini diizinkan memancar di TG <b>[{target_tgs}]</b>.")
+            except Exception:
+                pass
+            # Notify the target user if online in Mumble
+            for u in list(mumble_instance.users.values()):
+                _, u_call = resolve_mumble_identity(u.get("name", ""))
+                if u_call == target_ident or u.get("name", "").upper() == target_ident:
+                    try:
+                        u.send_text_message(f"🎉 <b>Izin TX Diterima!</b> SuperUser telah menyetujui akses Anda untuk TalkGroup [{target_tgs}]. Anda sekarang dapat memancar.")
+                    except Exception:
+                        pass
+            logger.info(f"[Mumble-SuperUser] ✓ SuperUser granted {target_ident} access to TG {target_tgs}")
+        else:
+            try:
+                sender_user.send_text_message(f"❌ Gagal memperbarui database untuk {target_ident}.")
+            except Exception:
+                pass
+
+    # 4. !revoke (SuperUser only)
+    elif cmd in ["!revoke", "!cabut"]:
+        if not is_superuser:
+            try:
+                sender_user.send_text_message("⛔ Akses Ditolak: Hanya SuperUser yang dapat mencabut izin.")
+            except Exception:
+                pass
+            return
+        if not args:
+            try:
+                sender_user.send_text_message("⚠️ Format: <code>!revoke &lt;callsign/ID&gt;</code>")
+            except Exception:
+                pass
+            return
+        target_ident = args[0].upper()
+        success = revoke_user_permission_in_db(target_ident)
+        if success:
+            try:
+                sender_user.send_text_message(f"✓ Hak khusus stasiun <b>{target_ident}</b> telah dicabut. User kembali ke aturan default organisasi.")
+            except Exception:
+                pass
+            logger.info(f"[Mumble-SuperUser] ✓ SuperUser revoked special override for {target_ident}")
+        else:
+            try:
+                sender_user.send_text_message(f"❌ Gagal mencabut izin {target_ident}.")
+            except Exception:
+                pass
+
+    # 5. !check
+    elif cmd in ["!check", "!cek", "!status"]:
+        target_ident = args[0].upper() if args else None
+        if not target_ident:
+            _, target_ident = resolve_mumble_identity(uname)
+        is_ok, reason = check_mumble_tx_permission(0, target_ident, current_bot_tg or 510)
+        status_icon = "🟢" if is_ok else "🔴"
+        try:
+            sender_user.send_text_message(f"{status_icon} Status Stasiun <b>{target_ident}</b> pada TG {current_bot_tg or 510}:<br/>{reason}")
+        except Exception:
+            pass
+
 class MumbleGatewayBot:
     """Dedicated bot instance for a single Mumble channel & DMR Talkgroup pair."""
 
@@ -302,6 +565,24 @@ class MumbleGatewayBot:
 
                     user_dmr_id, user_callsign = resolve_mumble_identity(uname)
 
+                    # Dynamic Server-Side TX Firewall Check (zero hardcoded rules)
+                    is_allowed, reason = check_mumble_tx_permission(user_dmr_id, user_callsign, self.tg)
+                    if not is_allowed:
+                        now = time.time()
+                        sess_id = user.get("session", 0)
+                        if now - last_tx_reject_alerts.get(sess_id, 0) > 6.0:
+                            last_tx_reject_alerts[sess_id] = now
+                            msg = (
+                                f"⚠️ <b>TX Ditolak:</b> Anda ({user_callsign}) belum memiliki izin memancar di TalkGroup {self.tg}.<br/>"
+                                f"Ketik <code>!req {self.tg}</code> di chat untuk meminta izin ke SuperUser."
+                            )
+                            try:
+                                user.send_text_message(msg)
+                            except Exception:
+                                pass
+                            logger.warning(f"[{self.bot_user}] 🛑 Blocked TX from '{uname}' ({user_callsign}) on TG {self.tg}: {reason}")
+                        return
+
                     try:
                         # Downsample 48kHz -> 8kHz PCM (decimate by 6)
                         samples_48k = np.frombuffer(pcm_48k, dtype=np.int16)
@@ -327,6 +608,11 @@ class MumbleGatewayBot:
                         logger.debug(f"[{self.bot_user}] Error streaming sound chunk: {ex}")
 
                 self.mumble.callbacks.set_callback(mumble_constants.PYMUMBLE_CLBK_SOUNDRECEIVED, sound_received_handler)
+
+                def text_received_handler(message):
+                    handle_incoming_text_message(self.mumble, message, current_bot_tg=self.tg)
+
+                self.mumble.callbacks.set_callback(mumble_constants.PYMUMBLE_CLBK_TEXTMESSAGERECEIVED, text_received_handler)
                 self.mumble.start()
                 self.mumble.is_ready()
                 logger.info(f"[{self.bot_user}] ✓ Connected to Mumble server!")
