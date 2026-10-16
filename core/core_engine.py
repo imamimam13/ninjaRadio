@@ -692,8 +692,13 @@ Send={AB_AMBE_RX_PORT}
         })
 
         for w_id, w in list(self.bridge_workers.items()):
-            proc = w.get("proc")
-            is_alive = proc is not None and proc.poll() is None
+            ab_p = w.get("ab_proc")
+            mmdvm_p = w.get("mmdvm_proc")
+            md380_p = w.get("md380_proc")
+            ab_alive = ab_p is not None and ab_p.poll() is None
+            mmdvm_alive = mmdvm_p is not None and mmdvm_p.poll() is None
+            md380_alive = md380_p is not None and md380_p.poll() is None
+            is_alive = ab_alive and (mmdvm_alive or mmdvm_p is None)
             workers.append({
                 "id": w_id,
                 "name": w.get("name", f"TG {w.get('tg')}"),
@@ -701,6 +706,15 @@ Send={AB_AMBE_RX_PORT}
                 "slot": w.get("slot", 2),
                 "usrp_rx_port": w.get("usrp_rx_port"),
                 "usrp_tx_port": w.get("usrp_tx_port"),
+                "ambe_rx_port": w.get("ambe_rx_port"),
+                "ambe_tx_port": w.get("ambe_tx_port"),
+                "emu_port": w.get("emu_port"),
+                "mmdvm_local_port": w.get("mmdvm_local_port"),
+                "components": {
+                    "analog_bridge": "RUNNING" if ab_alive else "STOPPED",
+                    "mmdvm_bridge": "RUNNING" if mmdvm_alive else "STOPPED",
+                    "md380_emu": "RUNNING" if md380_alive else "STOPPED"
+                },
                 "status": "RUNNING" if is_alive else "STOPPED",
                 "is_primary": False,
                 "rx_packets": w.get("rx_packets", 0),
@@ -710,20 +724,23 @@ Send={AB_AMBE_RX_PORT}
         return workers
 
     async def spawn_bridge_worker(self, tg: int, slot: int = 2, name: str = "") -> dict:
-        """Spawns an on-demand Analog_Bridge worker for a specific talkgroup (Metode B)."""
+        """Spawns an on-demand Full-Stack Trio (md380-emu + MMDVM_Bridge + Analog_Bridge) for a specific talkgroup."""
         w_id = f"worker_tg_{tg}_{slot}"
         if w_id in self.bridge_workers:
             w = self.bridge_workers[w_id]
-            if w.get("proc") and w["proc"].poll() is None:
+            ab_p = w.get("ab_proc")
+            if ab_p and ab_p.poll() is None:
                 return {
                     "status": "ALREADY_RUNNING",
-                    "message": f"Worker Analog_Bridge untuk TG {tg} (Slot {slot}) sudah aktif.",
+                    "message": f"Worker Full-Stack untuk TG {tg} (Slot {slot}) sudah aktif.",
                     "worker": {
-                        "id": w_id, "name": w.get("name"), "tg": tg, "slot": slot, "pid": w["proc"].pid, "status": "RUNNING"
+                        "id": w_id, "name": w.get("name"), "tg": tg, "slot": slot, "pid": ab_p.pid, "status": "RUNNING"
                     }
                 }
 
         ab_bin = find_binary("Analog_Bridge")
+        md380_bin = find_binary("md380-emu")
+        mmdvm_bin = find_binary("MMDVM_Bridge")
         if not ab_bin:
             raise RuntimeError("Analog_Bridge binary not found")
 
@@ -737,18 +754,155 @@ Send={AB_AMBE_RX_PORT}
         usrp_tx = 32001 + (idx * 10)
         ambe_rx = 31100 + (idx * 10)
         ambe_tx = 31103 + (idx * 10)
+        emu_port = 2470 + idx
+        mmdvm_local = 62032 + idx
 
+        server_dmr_id = int(self.config.get("server_dmr_id", 5109999))
+        repeater_id = f"{server_dmr_id}{idx:02d}"
+        callsign = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
+        master_host = self.config.get("master_host", "127.0.0.1")
+        master_port = int(self.config.get("master_port", self.config.get("hotspot_port", DMR_MASTER_PORT)))
+        master_password = str(self.config.get("master_password", self.config.get("hotspot_password", "ninjaradio_pass")))
+
+        os.makedirs("/var/log/dvswitch", exist_ok=True)
+        os.makedirs("/app/data", exist_ok=True)
+
+        # Detect qemu if running ARM binary on x86_64
+        qemu_bin = None
+        for qp in ["/opt/md380-emu/qemu-arm-static", "/usr/bin/qemu-arm-static", "/usr/local/bin/qemu-arm-static"]:
+            if os.path.exists(qp) and os.access(qp, os.X_OK):
+                qemu_bin = qp
+                break
+
+        # 1. Start md380-emu dedicated vocoder daemon on emu_port
+        md380_proc = None
+        if md380_bin:
+            is_arm = False
+            try:
+                with open(md380_bin, "rb") as bf:
+                    hdr = bf.read(20)
+                    if len(hdr) >= 20 and hdr[4] == 1 and (hdr[18] == 40 or hdr[18] == 0x28):
+                        is_arm = True
+            except Exception:
+                pass
+            md380_cmd = [qemu_bin, md380_bin, "-S", str(emu_port)] if (is_arm and qemu_bin) else [md380_bin, "-S", str(emu_port)]
+            md380_log = open(f"/var/log/dvswitch/md380_emu_{w_id}.log", "a")
+            try:
+                md380_proc = subprocess.Popen(md380_cmd, cwd="/opt/md380-emu" if os.path.isdir("/opt/md380-emu") else "/app", stdout=md380_log, stderr=md380_log)
+                logger.info(f"✓ Started worker md380-emu on port {emu_port} (PID: {md380_proc.pid})")
+            except Exception as e:
+                logger.error(f"Failed to start worker md380-emu: {e}")
+
+        # 2. Write DVSwitch routing ini & MMDVM_Bridge.ini for this worker
+        dvswitch_ini_path = f"/app/data/DVSwitch_{w_id}.ini"
+        dvswitch_content = f"""; Auto-generated by NinjaRadio for Worker TG {tg} Slot {slot}
+[DMR]
+Address = 127.0.0.1
+TXPort = {ambe_rx}
+RXPort = {ambe_tx}
+txPort = {ambe_rx}
+rxPort = {ambe_tx}
+Slot = {slot}
+slot = {slot}
+ExportTG = 0
+exportTG = 0
+hangTimerInFrames = 0
+talkerAlias = %callsign %location %description
+"""
+        with open(dvswitch_ini_path, "w", encoding="utf-8") as f:
+            f.write(dvswitch_content)
+
+        mmdvm_ini_path = f"/app/data/MMDVM_Bridge_{w_id}.ini"
+        mmdvm_content = f"""; Auto-generated by NinjaRadio for Worker TG {tg} Slot {slot}
+[General]
+Callsign={callsign}
+Id={repeater_id}
+Timeout=180
+Duplex=0
+RxFrequency=438800000
+TxFrequency=438800000
+Power=25
+ColorCode=1
+
+[Info]
+RXFrequency=438800000
+TXFrequency=438800000
+Power=25
+Latitude=0.0
+Longitude=0.0
+Height=0
+Location=NinjaRadio
+Description=NinjaRadio Worker TG {tg}
+URL=www.ninjaradio.local
+
+[Log]
+DisplayLevel=1
+FileLevel=2
+FilePath=/var/log/dvswitch
+FileRoot=MMDVM_{w_id}
+
+[Modem]
+Port=/dev/null
+RSSIMappingFile=/dev/null
+Trace=0
+Debug=0
+
+[DMR]
+Enable=1
+Beacons=0
+Id={repeater_id}
+ColorCode=1
+EmbeddedLCOnly=1
+DumpTAData=0
+SelfOnly=0
+CallHang=3
+TXHang=3
+
+[DMR Network]
+Enable=1
+Type=Gateway
+Address={master_host}
+Port={master_port}
+Jitter=500
+Local={mmdvm_local}
+Password={master_password}
+Slot1=1
+Slot2=1
+ModeHang=3
+Debug=1
+
+[AMBE]
+Enable=1
+Address=127.0.0.1
+Port={ambe_tx}
+Send={ambe_rx}
+"""
+        with open(mmdvm_ini_path, "w", encoding="utf-8") as f:
+            f.write(mmdvm_content)
+
+        mmdvm_proc = None
+        if mmdvm_bin:
+            try:
+                env = os.environ.copy()
+                env["DVSWITCH"] = dvswitch_ini_path
+                mmdvm_log = open(f"/var/log/dvswitch/MMDVM_Bridge_{w_id}.log", "a")
+                mmdvm_cwd = "/opt/MMDVM_Bridge" if os.path.isdir("/opt/MMDVM_Bridge") else "/app/data"
+                mmdvm_proc = subprocess.Popen([mmdvm_bin, mmdvm_ini_path], cwd=mmdvm_cwd, env=env, stdout=mmdvm_log, stderr=mmdvm_log)
+                logger.info(f"✓ Started worker MMDVM_Bridge (ID: {repeater_id}, NetPort: {mmdvm_local}, PID: {mmdvm_proc.pid})")
+            except Exception as e:
+                logger.error(f"Failed to start worker MMDVM_Bridge: {e}")
+
+        # 3. Write Analog_Bridge.ini and start Analog_Bridge
         ini_path = f"/app/data/Analog_Bridge_{w_id}.ini"
         log_path = f"/var/log/dvswitch/Analog_Bridge_{w_id}.log"
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-
-        ini_content = f"""; Auto-generated On-Demand Worker for TG {tg} Slot {slot}
+        ini_content = f"""; Auto-generated On-Demand Full-Stack Worker for TG {tg} Slot {slot}
 [GENERAL]
 logLevel = 2
 exportMetadata = true
 subscriberFile = /var/lib/dvswitch/subscriber_ids.csv
 decoderFallBack = true
-useEmulator = false
+useEmulator = true
+emulatorAddress = 127.0.0.1:{emu_port}
 outputAudioDevice = /dev/null
 inputAudioDevice = /dev/null
 useMicrophone = false
@@ -759,9 +913,9 @@ address = 127.0.0.1
 txPort = {ambe_tx}
 rxPort = {ambe_rx}
 ambeMode = DMR
-minTxTimeMS = 2500
-gatewayDmrId = 5109999
-repeaterID = 5109999{idx:02d}
+minTxTimeMS = 0
+gatewayDmrId = {server_dmr_id}
+repeaterID = {repeater_id}
 txTg = {tg}
 txTs = {slot}
 colorCode = 1
@@ -770,19 +924,15 @@ colorCode = 1
 address = 127.0.0.1
 txPort = {usrp_tx}
 rxPort = {usrp_rx}
-usrpAudio = AUDIO_USE_BPF
-tlvAudio = AUDIO_USE_BPF
+usrpAudio = AUDIO_USE_GAIN
+tlvAudio = AUDIO_USE_GAIN
 usrpGain = 1.00
+tlvGain = 1.00
+usrpAGC = -20,10,100
 """
         with open(ini_path, "w", encoding="utf-8") as f:
             f.write(ini_content)
 
-        # Qemu detection if running ARM binary on x86_64
-        qemu_bin = None
-        for qp in ["/opt/md380-emu/qemu-arm-static", "/usr/bin/qemu-arm-static", "/usr/local/bin/qemu-arm-static"]:
-            if os.path.exists(qp) and os.access(qp, os.X_OK):
-                qemu_bin = qp
-                break
         is_arm = False
         try:
             with open(ab_bin, "rb") as bf:
@@ -795,7 +945,7 @@ usrpGain = 1.00
         cmd = [qemu_bin, ab_bin, ini_path] if (is_arm and qemu_bin) else [ab_bin, ini_path]
         log_f = open(log_path, "a")
         ab_cwd = "/opt/Analog_Bridge" if os.path.isdir("/opt/Analog_Bridge") else "/app/data"
-        proc = subprocess.Popen(cmd, cwd=ab_cwd, stdout=log_f, stderr=log_f)
+        ab_proc = subprocess.Popen(cmd, cwd=ab_cwd, stdout=log_f, stderr=log_f)
 
         # Create worker UDP socket for PCM RX
         rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -805,7 +955,7 @@ usrpGain = 1.00
 
         worker_entry = {
             "id": w_id,
-            "name": name or f"Dynamic Bridge TG {tg}",
+            "name": name or f"Dynamic Trio TG {tg}",
             "tg": tg,
             "slot": slot,
             "index": idx,
@@ -813,7 +963,11 @@ usrpGain = 1.00
             "usrp_tx_port": usrp_tx,
             "ambe_rx_port": ambe_rx,
             "ambe_tx_port": ambe_tx,
-            "proc": proc,
+            "emu_port": emu_port,
+            "mmdvm_local_port": mmdvm_local,
+            "ab_proc": ab_proc,
+            "mmdvm_proc": mmdvm_proc,
+            "md380_proc": md380_proc,
             "rx_sock": rx_sock,
             "rx_packets": 0,
             "tx_packets": 0,
@@ -826,10 +980,10 @@ usrpGain = 1.00
         task = loop.create_task(self.run_worker_pcm_rx_loop(w_id))
         self.worker_rx_tasks[w_id] = task
 
-        logger.info(f"✓ Spawned on-demand Analog_Bridge worker '{w_id}' for TG {tg} (Ports: RX={usrp_rx}, TX={usrp_tx}, PID={proc.pid})")
+        logger.info(f"✓ Spawned Full-Stack Trio worker '{w_id}' for TG {tg} (Ports: USRP={usrp_rx}/{usrp_tx}, AMBE={ambe_rx}/{ambe_tx}, Emu={emu_port}, MMDVM={mmdvm_local}, PID={ab_proc.pid})")
         return {
             "status": "SUCCESS",
-            "message": f"Worker Analog_Bridge untuk TG {tg} (Slot {slot}) berhasil dijalankan.",
+            "message": f"Worker Full-Stack Trio (Analog + MMDVM + Emu) untuk TG {tg} (Slot {slot}) berhasil dijalankan.",
             "worker": {
                 "id": w_id,
                 "name": worker_entry["name"],
@@ -837,13 +991,17 @@ usrpGain = 1.00
                 "slot": slot,
                 "usrp_rx_port": usrp_rx,
                 "usrp_tx_port": usrp_tx,
-                "pid": proc.pid,
+                "ambe_rx_port": ambe_rx,
+                "ambe_tx_port": ambe_tx,
+                "emu_port": emu_port,
+                "mmdvm_local_port": mmdvm_local,
+                "pid": ab_proc.pid,
                 "status": "RUNNING"
             }
         }
 
     def stop_bridge_worker(self, worker_id: str) -> bool:
-        """Stops and frees an on-demand Analog_Bridge worker."""
+        """Stops and frees an on-demand worker stack (AB + MMDVM + md380)."""
         w = self.bridge_workers.get(worker_id)
         if not w:
             return False
@@ -856,18 +1014,19 @@ usrpGain = 1.00
                 sock.close()
             except Exception:
                 pass
-        proc = w.get("proc")
-        if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=1.0)
-            except Exception:
+        for p_key in ["ab_proc", "mmdvm_proc", "md380_proc"]:
+            proc = w.get(p_key)
+            if proc:
                 try:
-                    proc.kill()
+                    proc.terminate()
+                    proc.wait(timeout=1.0)
                 except Exception:
-                    pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
         del self.bridge_workers[worker_id]
-        logger.info(f"✓ Stopped and removed on-demand Analog_Bridge worker '{worker_id}'")
+        logger.info(f"✓ Stopped and removed on-demand Full-Stack worker '{worker_id}'")
         return True
 
     def retune_primary_bridge(self, tg: int, slot: int = 2) -> dict:
@@ -1922,6 +2081,8 @@ usrpGain = 1.00
             except Exception:
                 pass
         self.stop_bridge_daemons()
+        for w_id in list(self.bridge_workers.keys()):
+            self.stop_bridge_worker(w_id)
         if self.md380_proc:
             try:
                 self.md380_proc.terminate()
