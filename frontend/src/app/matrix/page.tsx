@@ -202,18 +202,25 @@ export default function MatrixPage() {
         body: JSON.stringify({ tg: Number(spawnTg), slot: Number(spawnSlot) }),
       });
       const data = await res.json();
-      if (data.status === "SUCCESS") {
+      if (res.ok && (data.status === "SUCCESS" || data.status === "SPAWNED")) {
         setWorkerMsg({
           text: `Worker Analog_Bridge untuk TG ${spawnTg} (Slot ${spawnSlot}) berhasil dijalankan! (PID: ${data.worker?.pid || "active"})`,
           isError: false,
         });
         fetchWorkers();
         beepPlayer?.playTalkGrant();
+      } else if (res.ok && data.status === "ALREADY_RUNNING") {
+        setWorkerMsg({
+          text: data.message || `Worker Analog_Bridge untuk TG ${spawnTg} (Slot ${spawnSlot}) sudah aktif.`,
+          isError: false,
+        });
+        fetchWorkers();
       } else {
         setWorkerMsg({
-          text: `Gagal menjalankan worker: ${data.message || data.error || "Terjadi kesalahan"}`,
+          text: `Gagal menjalankan worker: ${data.detail || data.message || data.error || "Terjadi kesalahan"}`,
           isError: true,
         });
+        beepPlayer?.playRogerBeep();
       }
     } catch (err: any) {
       setWorkerMsg({ text: `Gagal terhubung ke backend: ${err.message}`, isError: true });

@@ -715,9 +715,13 @@ Send={AB_AMBE_RX_PORT}
         if w_id in self.bridge_workers:
             w = self.bridge_workers[w_id]
             if w.get("proc") and w["proc"].poll() is None:
-                return {"status": "ALREADY_RUNNING", "worker": {
-                    "id": w_id, "name": w.get("name"), "tg": tg, "slot": slot, "status": "RUNNING"
-                }}
+                return {
+                    "status": "ALREADY_RUNNING",
+                    "message": f"Worker Analog_Bridge untuk TG {tg} (Slot {slot}) sudah aktif.",
+                    "worker": {
+                        "id": w_id, "name": w.get("name"), "tg": tg, "slot": slot, "pid": w["proc"].pid, "status": "RUNNING"
+                    }
+                }
 
         ab_bin = find_binary("Analog_Bridge")
         if not ab_bin:
@@ -824,7 +828,8 @@ usrpGain = 1.00
 
         logger.info(f"✓ Spawned on-demand Analog_Bridge worker '{w_id}' for TG {tg} (Ports: RX={usrp_rx}, TX={usrp_tx}, PID={proc.pid})")
         return {
-            "status": "SPAWNED",
+            "status": "SUCCESS",
+            "message": f"Worker Analog_Bridge untuk TG {tg} (Slot {slot}) berhasil dijalankan.",
             "worker": {
                 "id": w_id,
                 "name": worker_entry["name"],
@@ -832,6 +837,7 @@ usrpGain = 1.00
                 "slot": slot,
                 "usrp_rx_port": usrp_rx,
                 "usrp_tx_port": usrp_tx,
+                "pid": proc.pid,
                 "status": "RUNNING"
             }
         }
