@@ -46,6 +46,15 @@ interface BridgeWorker {
   slot: number;
   usrp_rx_port: number;
   usrp_tx_port: number;
+  ambe_rx_port?: number;
+  ambe_tx_port?: number;
+  emu_port?: number;
+  mmdvm_local_port?: number;
+  components?: {
+    analog_bridge: string;
+    mmdvm_bridge: string;
+    md380_emu: string;
+  };
   pid: number | null;
   status: string;
   is_primary: boolean;
@@ -629,6 +638,24 @@ export default function MatrixPage() {
                       {worker.status.toUpperCase()} {worker.pid ? `(${worker.pid})` : ""}
                     </span>
                   </div>
+                </div>
+
+                {/* Full-Stack Trio Breakdown (AB + MMDVM + Emu) */}
+                <div className="mt-2 pt-2 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-1 text-[10px] font-mono">
+                  <div className="flex items-center gap-1">
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60 font-bold">
+                      AB
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-800/60 font-bold">
+                      MMDVM
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800/60 font-bold">
+                      Vocoder
+                    </span>
+                  </div>
+                  <span className="text-slate-400">
+                    {worker.emu_port ? `Emu:${worker.emu_port}` : "Emu:2470"} • {worker.mmdvm_local_port ? `Net:${worker.mmdvm_local_port}` : "Net:62032"}
+                  </span>
                 </div>
               </div>
             ))}
