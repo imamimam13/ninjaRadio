@@ -172,20 +172,27 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "") -> bool:
     """
     db_path = "/app/data/ninjaradio.db"
     if not os.path.exists(db_path):
-        return False
+        return True
     try:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
             if peer_name:
-                p_clean = f"%{peer_name.strip().upper()}%"
+                p_clean = peer_name.strip().upper()
+                p_strip = p_clean.replace("DMR", "").replace("NET", "").replace("-", "").replace("_", "").replace(" ", "")
                 cursor.execute("""
                     SELECT id FROM bridge_routes 
                     WHERE is_active = 1 
                       AND (source_tg = ? OR target_tg = ?)
-                      AND (UPPER(name) LIKE ? OR UPPER(source_mode) LIKE ? OR UPPER(target_mode) LIKE ?)
+                      AND (
+                          ? LIKE '%' || UPPER(name) || '%' 
+                          OR UPPER(name) LIKE '%' || ? || '%'
+                          OR ? LIKE '%' || replace(UPPER(name), ' ', '') || '%'
+                          OR replace(UPPER(name), ' ', '') LIKE '%' || ? || '%'
+                          OR (UPPER(source_mode) = 'DMR' AND UPPER(target_mode) = 'DMR')
+                      )
                     LIMIT 1
-                """, (tg, tg, p_clean, p_clean, p_clean))
+                """, (tg, tg, p_clean, p_clean, p_clean, p_strip))
                 row = cursor.fetchone()
                 return row is not None
             else:
@@ -786,7 +793,7 @@ Send={AB_AMBE_RX_PORT}
         mmdvm_local = 62032 + idx
 
         server_dmr_id = int(self.config.get("server_dmr_id", 5109999))
-        repeater_id = f"{server_dmr_id}{idx:02d}"
+        repeater_id = f"{server_dmr_id}{idx + 1:02d}"
         callsign = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
         master_host = self.config.get("master_host", "127.0.0.1")
         master_port = int(self.config.get("master_port", self.config.get("hotspot_port", DMR_MASTER_PORT)))
@@ -2013,6 +2020,7 @@ usrpAGC = -20,10,100
                     if client.state == "CONNECTED":
                         if is_tg_bridged_to_peer(self.current_rx_tg, client.name):
                             client.send_raw_dmrd(raw_packet)
+                            logger.info(f"🚀 [BRIDGE-FORWARD] TG {self.current_rx_tg} forwarded to upstream peer '{client.name}' (Src: {self.current_rx_src})")
 
             # Dispatch traffic notification to backend for live monitor & web clients
             traffic_event = {
