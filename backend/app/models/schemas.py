@@ -64,6 +64,17 @@ class BridgeRouteBase(BaseModel):
 class BridgeRouteCreate(BridgeRouteBase):
     pass
 
+class BridgeRouteUpdate(BaseModel):
+    name: Optional[str] = None
+    source_mode: Optional[str] = None
+    source_tg: Optional[int] = None
+    source_slot: Optional[int] = None
+    target_mode: Optional[str] = None
+    target_tg: Optional[int] = None
+    target_slot: Optional[int] = None
+    is_active: Optional[bool] = None
+    bidirectional: Optional[bool] = None
+
 class BridgeRouteResponse(BridgeRouteBase):
     id: int
 
