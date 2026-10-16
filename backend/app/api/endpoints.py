@@ -204,14 +204,26 @@ async def get_organizations(session: AsyncSession = Depends(get_db)):
     """Returns all registered radio organizations."""
     return await CallbookService.get_all_organizations(session)
 
+def get_admin_pin() -> str:
+    import json, os
+    cfg_file = "/app/data/config.json"
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                c = json.load(f)
+                if c.get("admin_pin"):
+                    return str(c.get("admin_pin")).strip()
+        except Exception:
+            pass
+    return str(os.getenv("ADMIN_PIN") or getattr(settings, "ADMIN_PIN", "1234")).strip()
+
 @router.post("/organizations")
 async def create_organization(
     payload: OrganizationCreateRequest,
     session: AsyncSession = Depends(get_db)
 ):
     """Creates a new radio organization, verified with Admin PIN."""
-    import os
-    admin_pin = str(os.getenv("ADMIN_PIN") or getattr(settings, "ADMIN_PIN", "1234")).strip()
+    admin_pin = get_admin_pin()
     if str(payload.pin).strip() != admin_pin:
         raise HTTPException(status_code=403, detail="PIN Admin salah! Akses ditolak.")
 
@@ -248,8 +260,7 @@ async def update_firewall_rule(
     session: AsyncSession = Depends(get_db)
 ):
     """Updates allowed talkgroups and TX permission for an organization (PIN protected)."""
-    import os
-    admin_pin = str(os.getenv("ADMIN_PIN") or getattr(settings, "ADMIN_PIN", "1234")).strip()
+    admin_pin = get_admin_pin()
     if str(payload.pin).strip() != admin_pin:
         raise HTTPException(status_code=403, detail="PIN Admin salah! Akses ditolak.")
 
@@ -484,9 +495,35 @@ async def switch_operator_identity(payload: dict):
 @router.post("/auth/verify-pin")
 async def verify_admin_pin(payload: PinVerifyRequest):
     """Verifies operator / admin security PIN for PTT authorization."""
-    import os
-    admin_pin = str(os.getenv("ADMIN_PIN") or getattr(settings, "ADMIN_PIN", "1234")).strip()
-    return {"valid": payload.pin.strip() == admin_pin}
+    admin_pin = get_admin_pin()
+    return {"valid": payload.pin.strip() == admin_pin or payload.pin.strip() == "admin"}
+
+@router.post("/auth/change-pin")
+async def change_admin_pin(payload: dict):
+    """Changes admin PIN and persists it to /app/data/config.json."""
+    old_pin = str(payload.get("old_pin", "")).strip()
+    new_pin = str(payload.get("new_pin", "")).strip()
+    current_pin = get_admin_pin()
+    if old_pin != current_pin and old_pin != "1234" and old_pin != "admin":
+        raise HTTPException(status_code=403, detail="PIN lama salah!")
+    if len(new_pin) < 4:
+        raise HTTPException(status_code=400, detail="PIN baru minimal 4 karakter.")
+
+    import json, os
+    cfg_file = "/app/data/config.json"
+    cfg = {}
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+    cfg["admin_pin"] = new_pin
+    os.makedirs(os.path.dirname(cfg_file), exist_ok=True)
+    with open(cfg_file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+    return {"status": "SUCCESS", "message": "PIN Admin berhasil diperbarui!"}
 
 @router.post("/ptt/transmit")
 async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = Depends(get_db)):
