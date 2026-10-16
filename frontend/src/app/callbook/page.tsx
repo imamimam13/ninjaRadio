@@ -32,6 +32,7 @@ interface FirewallRule {
   code: string;
   name: string;
   allowed_tgs: string;
+  callsign_prefixes?: string;
   allow_tx: boolean;
   description?: string;
 }
@@ -64,6 +65,7 @@ export default function CallbookPage() {
   const [firewallPin, setFirewallPin] = useState("");
   const [editingOrgCode, setEditingOrgCode] = useState<string | null>(null);
   const [ruleAllowedTgs, setRuleAllowedTgs] = useState("*");
+  const [ruleCallsignPrefixes, setRuleCallsignPrefixes] = useState("");
   const [ruleAllowTx, setRuleAllowTx] = useState(true);
   const [firewallError, setFirewallError] = useState<string | null>(null);
   const [firewallSuccess, setFirewallSuccess] = useState<string | null>(null);
@@ -343,6 +345,7 @@ export default function CallbookPage() {
   const handleStartEditRule = (rule: FirewallRule) => {
     setEditingOrgCode(rule.code);
     setRuleAllowedTgs(rule.allowed_tgs || "*");
+    setRuleCallsignPrefixes(rule.callsign_prefixes || "");
     setRuleAllowTx(rule.allow_tx !== false);
     setFirewallError(null);
     setFirewallSuccess(null);
@@ -361,6 +364,7 @@ export default function CallbookPage() {
         body: JSON.stringify({
           pin: firewallPin,
           allowed_tgs: ruleAllowedTgs.trim() || "*",
+          callsign_prefixes: ruleCallsignPrefixes.trim(),
           allow_tx: ruleAllowTx,
         }),
       });
@@ -1385,6 +1389,22 @@ export default function CallbookPage() {
                   </span>
                 </div>
 
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">
+                    Awalan Callsign Otomatis (Prefixes)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: BD,BD62 atau YB,YC atau *"
+                    value={ruleCallsignPrefixes}
+                    onChange={(e) => setRuleCallsignPrefixes(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-rose-900/80 rounded-xl text-cyan-300 font-mono font-bold focus:border-rose-400 outline-none uppercase"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    Daftar awalan callsign untuk routing otomatis ke organisasi ini, dipisah koma (misal: BD,BD62 atau * untuk umum).
+                  </span>
+                </div>
+
                 <div className="flex items-center gap-3 pt-1">
                   <label className="flex items-center gap-2 cursor-pointer text-slate-300">
                     <input
@@ -1457,12 +1477,19 @@ export default function CallbookPage() {
                               </span>
                             )}
                           </div>
-                          <div className="text-[11px] text-slate-400">
-                            Izin TG:{" "}
-                            {rule.allowed_tgs === "*" ? (
-                              <span className="text-cyan-300 font-bold">Semua Talkgroup (*)</span>
-                            ) : (
-                              <span className="text-amber-300 font-bold">TG {rule.allowed_tgs}</span>
+                          <div className="text-[11px] text-slate-400 flex items-center gap-2 flex-wrap">
+                            <span>
+                              Izin TG:{" "}
+                              {rule.allowed_tgs === "*" ? (
+                                <span className="text-cyan-300 font-bold">Semua Talkgroup (*)</span>
+                              ) : (
+                                <span className="text-amber-300 font-bold">TG {rule.allowed_tgs}</span>
+                              )}
+                            </span>
+                            {rule.callsign_prefixes && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-cyan-400 font-mono">
+                                Prefiks: {rule.callsign_prefixes}
+                              </span>
                             )}
                           </div>
                         </div>

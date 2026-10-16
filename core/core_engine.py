@@ -110,41 +110,57 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT organization, allowed_tgs_override FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, (callsign or "").upper()))
+            call_upper = (callsign or "").strip().upper()
+            cursor.execute("SELECT organization, allowed_tgs_override FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, call_upper))
             row = cursor.fetchone()
-            org_code = "ORARI"
-            if row:
-                org_code = row[0] or "ORARI"
-                override = row[1]
-                if override:
-                    if override.strip() == "*":
-                        return True, org_code
-                    allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
-                    if target_tg in allowed:
-                        return True, org_code
-                    return False, f"User override forbids TG {target_tg}"
-            else:
-                call_upper = (callsign or "").upper()
-                if call_upper.startswith(("YB", "YC", "YD", "YE", "BD", "N1NJA", "TEST-OP")):
-                    org_code = "ORARI"
-                elif call_upper.startswith("JZ"):
-                    org_code = "RAPI"
-                else:
-                    org_code = "KOMUNITAS"
-
-            cursor.execute("SELECT allowed_tgs, allow_tx FROM organizations WHERE UPPER(code) = ?", (org_code.upper(),))
-            org_row = cursor.fetchone()
-            if org_row:
-                allowed_tgs, allow_tx = org_row
-                if not allow_tx:
-                    return False, f"Organization {org_code} is monitor-only"
-                rule = (allowed_tgs or "*").strip()
-                if rule == "*":
-                    return True, org_code
-                allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+            if row and row[1]:
+                override = row[1].strip()
+                if override == "*":
+                    return True, "User Override (*)"
+                allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
                 if target_tg in allowed:
-                    return True, org_code
-                return False, f"Organization {org_code} not authorized for TG {target_tg}"
+                    return True, "User Override"
+                return False, f"Operator {call_upper} hanya memiliki izin khusus pada TG: {override}"
+
+            org_code = row[0] if (row and row[0]) else None
+
+            # Fetch all organizations to dynamically resolve prefix matching (zero hardcoding)
+            cursor.execute("SELECT code, allowed_tgs, allow_tx, callsign_prefixes FROM organizations")
+            org_rows = cursor.fetchall()
+
+            target_org_row = None
+            if org_code:
+                for orow in org_rows:
+                    if str(orow[0]).upper() == org_code.upper():
+                        target_org_row = orow
+                        break
+
+            if not target_org_row and org_rows:
+                fallback_org_row = None
+                for orow in org_rows:
+                    raw_prefixes = str(orow[3] or "")
+                    prefixes = [p.strip().upper() for p in raw_prefixes.split(",") if p.strip()]
+                    if "*" in prefixes:
+                        fallback_org_row = orow
+                    if any(call_upper.startswith(p) for p in prefixes if p != "*"):
+                        target_org_row = orow
+                        break
+                if not target_org_row:
+                    target_org_row = fallback_org_row or org_rows[0]
+
+            if not target_org_row:
+                return False, f"Organisasi tidak ditemukan untuk {call_upper}"
+
+            org_c, allowed_tgs, allow_tx, _ = target_org_row
+            if not allow_tx:
+                return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
+            rule = (allowed_tgs or "*").strip()
+            if rule == "*":
+                return True, org_c
+            allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+            if target_tg in allowed:
+                return True, org_c
+            return False, f"Stasiun {call_upper} ({org_c}) hanya diizinkan di TG [{rule}]. Akses ke TG {target_tg} diblokir."
     except Exception:
         pass
     return True, "Fallback"
