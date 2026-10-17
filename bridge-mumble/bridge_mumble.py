@@ -8,6 +8,8 @@ import logging
 import json
 import re
 import numpy as np
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, unquote
 
 logging.basicConfig(
     level=logging.INFO,
@@ -123,8 +125,266 @@ def ensure_channels_created():
                 logger.info(f"✓ Channel '{room_name}' already exists.")
         su.stop()
         time.sleep(0.8)
+        persist_live_channels_cache(get_live_murmur_channels())
     except Exception as e:
         logger.warning(f"SuperUser channel initialization warning: {e}")
+
+def get_live_murmur_channels():
+    """Returns list of all active non-root channels currently in Murmur."""
+    for bot in list(GATEWAY_POOL.values()):
+        if getattr(bot, "mumble", None) and getattr(bot.mumble, "channels", None):
+            res = []
+            for ch in list(bot.mumble.channels.values()):
+                try:
+                    cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
+                    cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+                    parent = ch["parent"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "parent", 0)
+                    if cid is not None and cname and int(cid) != 0:
+                        res.append({"id": int(cid), "name": str(cname), "parent": int(parent)})
+                except Exception:
+                    pass
+            if res:
+                return res
+
+    # Fallback to connecting as SuperUser
+    try:
+        import pymumble_py3 as pymumble
+        superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
+        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
+        su.start()
+        su.is_ready()
+        time.sleep(0.5)
+        res = []
+        for ch in list(su.channels.values()):
+            try:
+                cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
+                cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+                parent = ch["parent"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "parent", 0)
+                if cid is not None and cname and int(cid) != 0:
+                    res.append({"id": int(cid), "name": str(cname), "parent": int(parent)})
+            except Exception:
+                pass
+        su.stop()
+        return res
+    except Exception as e:
+        logger.debug(f"get_live_murmur_channels SuperUser fallback error: {e}")
+        return []
+
+def create_murmur_channel(name: str, parent: int = 0) -> bool:
+    import pymumble_py3 as pymumble
+    superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
+    logger.info(f"Connecting as SuperUser to create channel '{name}' in Murmur...")
+    try:
+        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
+        su.start()
+        su.is_ready()
+        time.sleep(0.8)
+        exists = False
+        for ch in list(su.channels.values()):
+            cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+            if str(cname) == str(name):
+                exists = True
+                break
+        if not exists:
+            su.channels.new_channel(parent, name, temporary=False)
+            logger.info(f"✓ SuperUser permanently created channel '{name}' in Murmur")
+            time.sleep(0.4)
+        su.stop()
+        time.sleep(0.5)
+        return True
+    except Exception as e:
+        logger.error(f"SuperUser failed to create channel '{name}': {e}")
+        return False
+
+def delete_murmur_channel(name_or_id: str) -> bool:
+    import pymumble_py3 as pymumble
+    superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
+    logger.info(f"Connecting as SuperUser to delete channel '{name_or_id}' from Murmur...")
+    try:
+        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
+        su.start()
+        su.is_ready()
+        time.sleep(0.8)
+        deleted = False
+        for ch in list(su.channels.values()):
+            cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
+            cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+            if (str(cid) == str(name_or_id) or str(cname) == str(name_or_id)):
+                if cid is not None and int(cid) != 0:
+                    try:
+                        ch.remove()
+                    except Exception:
+                        su.channels.remove_channel(int(cid))
+                    logger.info(f"✓ SuperUser permanently removed channel '{cname}' (ID: {cid}) from Murmur")
+                    deleted = True
+                    time.sleep(0.4)
+                    break
+        su.stop()
+        time.sleep(0.5)
+        return deleted
+    except Exception as e:
+        logger.error(f"SuperUser failed to delete channel '{name_or_id}': {e}")
+        return False
+
+def persist_live_channels_cache(channels):
+    cache_path = "/app/data/mumble_live_channels.json"
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(channels, f, indent=2)
+    except Exception:
+        pass
+
+def update_config_room(name: str, tg: int):
+    if not os.path.exists(CONFIG_PATH):
+        return
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        rooms = list(cfg.get("mumble_rooms", []))
+        found = False
+        for r in rooms:
+            if (r.get("name") or r.get("channel")) == name:
+                r["targetTg"] = tg
+                r["tg"] = tg
+                found = True
+                break
+        if not found:
+            rooms.append({
+                "id": f"room_{name}",
+                "name": name,
+                "channel": name,
+                "targetTg": tg,
+                "tg": tg,
+                "slot": 1 if tg in [510, 5108, 91, 1023] else 2,
+                "description": f"DMR TG {tg}",
+                "isActive": True
+            })
+        cfg["mumble_rooms"] = rooms
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.debug(f"Error updating config for room {name}: {e}")
+
+def remove_config_room(name: str):
+    if not os.path.exists(CONFIG_PATH):
+        return
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        rooms = [r for r in cfg.get("mumble_rooms", []) if (r.get("name") or r.get("channel")) != name]
+        cfg["mumble_rooms"] = rooms
+        bots = [b for b in cfg.get("mumble_bots", []) if b.get("channel") != name]
+        cfg["mumble_bots"] = bots
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.debug(f"Error removing config for room {name}: {e}")
+
+class BridgeApiHandler(BaseHTTPRequestHandler):
+    usrp_socket = None
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path in ("/channels", "/channels/"):
+            live_chs = get_live_murmur_channels()
+            persist_live_channels_cache(live_chs)
+            mappings = load_room_mappings()
+            result = []
+            for ch in live_chs:
+                cname = ch["name"]
+                tg = mappings.get(cname)
+                if tg is None:
+                    m = re.search(r"(\d+)", cname)
+                    tg = int(m.group(1)) if m else 510
+                result.append({
+                    "id": f"room_{cname}",
+                    "channel_id": ch["id"],
+                    "name": cname,
+                    "channel": cname,
+                    "targetTg": tg,
+                    "tg": tg,
+                    "slot": 1 if tg in [510, 5108, 91, 1023] else 2,
+                    "description": f"Murmur Channel {cname} (TG {tg})",
+                    "isActive": True
+                })
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "SUCCESS", "channels": result, "raw_channels": live_chs}).encode("utf-8"))
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path in ("/channels", "/channels/"):
+            content_len = int(self.headers.get("Content-Length", 0))
+            post_body = self.rfile.read(content_len)
+            try:
+                data = json.loads(post_body.decode("utf-8"))
+                name = str(data.get("name") or data.get("channel") or "").strip().replace(" ", "-")
+                if not name:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "name is required"}')
+                    return
+                parent = int(data.get("parent", 0))
+                tg = int(data.get("targetTg") or data.get("tg") or 510)
+                create_murmur_channel(name, parent)
+                update_config_room(name, tg)
+                if self.usrp_socket:
+                    sync_gateway_bots(self.usrp_socket)
+                live_chs = get_live_murmur_channels()
+                persist_live_channels_cache(live_chs)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "SUCCESS", "channel": name, "channels": live_chs}).encode("utf-8"))
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/channels/"):
+            ch_name = unquote(parsed.path.replace("/channels/", "").strip())
+            if ch_name:
+                deleted = delete_murmur_channel(ch_name)
+                remove_config_room(ch_name)
+                if self.usrp_socket:
+                    sync_gateway_bots(self.usrp_socket)
+                live_chs = get_live_murmur_channels()
+                persist_live_channels_cache(live_chs)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "SUCCESS", "deleted": deleted, "channel": ch_name, "channels": live_chs}).encode("utf-8"))
+                return
+
+        self.send_response(404)
+        self.end_headers()
+
+def run_bridge_http_server(usrp_sock):
+    server_address = ("0.0.0.0", 12347)
+    class HandlerWithSock(BridgeApiHandler):
+        usrp_socket = usrp_sock
+    try:
+        httpd = ThreadingHTTPServer(server_address, HandlerWithSock)
+        logger.info("✓ Started Mumble Bridge HTTP Control API on port 12347")
+        httpd.serve_forever()
+    except Exception as e:
+        logger.warning(f"Could not start Bridge HTTP server: {e}")
 
 TLV_TAG_SET_INFO = 0x08
 
@@ -868,6 +1128,9 @@ def main():
     # 4. Start USRP Listener thread (for DMR RX audio into Mumble)
     t = threading.Thread(target=run_usrp_listener, args=(GATEWAY_POOL,), daemon=True)
     t.start()
+
+    # 5. Start HTTP Control API for Live Channel Management (Port 12347)
+    threading.Thread(target=run_bridge_http_server, args=(usrp_sock,), daemon=True).start()
 
     # Keep alive loop
     try:

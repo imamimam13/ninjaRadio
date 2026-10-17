@@ -1379,9 +1379,83 @@ async def get_mumla_telemetry():
         "channels": mappings
     }
 
+@router.get("/mumla/channels")
+async def get_mumla_channels():
+    """Fetches real live channels directly from Mumble (Murmur) server."""
+    import httpx
+    import json
+    import os
+    import re
+
+    # 1. Try querying bridge-mumble internal HTTP API
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            resp = await client.get("http://mumble-bridge:12347/channels")
+            if resp.status_code == 200:
+                data = resp.json()
+                if "channels" in data and isinstance(data["channels"], list) and len(data["channels"]) > 0:
+                    return {"status": "SUCCESS", "source": "mumble_live", "channels": data["channels"]}
+    except Exception:
+        pass
+
+    # 2. Fallback to /app/data/mumble_live_channels.json if available
+    live_cache_path = "/app/data/mumble_live_channels.json"
+    if os.path.exists(live_cache_path):
+        try:
+            with open(live_cache_path, "r", encoding="utf-8") as f:
+                raw_chs = json.load(f)
+                if isinstance(raw_chs, list) and len(raw_chs) > 0:
+                    config_path = "/app/data/config.json"
+                    saved_mappings = {}
+                    if os.path.exists(config_path):
+                        with open(config_path, "r", encoding="utf-8") as cf:
+                            cdata = json.load(cf)
+                            for r in cdata.get("mumble_rooms", []):
+                                saved_mappings[r.get("name") or r.get("channel")] = r
+                    channels = []
+                    for ch in raw_chs:
+                        cname = ch.get("name")
+                        if not cname:
+                            continue
+                        m = saved_mappings.get(cname, {})
+                        tg = m.get("targetTg") or m.get("tg")
+                        if tg is None:
+                            num_match = re.search(r"(\d+)", cname)
+                            tg = int(num_match.group(1)) if num_match else 510
+                        channels.append({
+                            "id": m.get("id") or f"room_{cname}",
+                            "name": cname,
+                            "channel": cname,
+                            "targetTg": int(tg),
+                            "tg": int(tg),
+                            "slot": m.get("slot", 2),
+                            "description": m.get("description") or f"DMR TG {tg}",
+                            "isActive": m.get("isActive", True)
+                        })
+                    return {"status": "SUCCESS", "source": "live_cache", "channels": channels}
+        except Exception:
+            pass
+
+    # 3. Fallback to config.json
+    config_path = "/app/data/config.json"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "mumble_rooms" in data and isinstance(data["mumble_rooms"], list) and len(data["mumble_rooms"]) > 0:
+                    return {"status": "SUCCESS", "source": "config", "channels": data["mumble_rooms"]}
+        except Exception:
+            pass
+
+    return {"status": "SUCCESS", "source": "default", "channels": DEFAULT_MUMBLE_ROOMS}
+
 @router.post("/mumla/channels")
 async def save_mumla_channels(payload: dict):
-    """Saves user-defined Mumble channel to DMR talkgroup mappings to /app/data/config.json."""
+    """Saves user-defined Mumble channel to DMR talkgroup mappings and creates in Murmur."""
+    import httpx
+    import json
+    import os
+
     channels = payload.get("channels", [])
     if not isinstance(channels, list):
         raise HTTPException(status_code=400, detail="Invalid channels payload")
@@ -1413,6 +1487,18 @@ async def save_mumla_channels(payload: dict):
     if not cleaned_channels:
         raise HTTPException(status_code=400, detail="No valid channels provided")
 
+    # 1. Forward to mumble-bridge to create channels in Murmur as SuperUser
+    for ch in cleaned_channels:
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                await client.post("http://mumble-bridge:12347/channels", json={
+                    "name": ch["name"],
+                    "targetTg": ch["targetTg"]
+                })
+        except Exception:
+            pass
+
+    # 2. Save into /app/data/config.json
     config_path = "/app/data/config.json"
     data = {}
     if os.path.exists(config_path):
@@ -1433,6 +1519,63 @@ async def save_mumla_channels(payload: dict):
         "status": "SUCCESS",
         "message": f"Saved {len(cleaned_channels)} Mumble channels. Bridge bot is synchronizing...",
         "channels": cleaned_channels
+    }
+
+@router.delete("/mumla/channels/{channel_name}")
+async def delete_mumla_channel(channel_name: str):
+    """Permanently deletes a channel from Murmur server and config.json."""
+    import httpx
+    import json
+    import os
+
+    clean_name = channel_name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Channel name required")
+
+    # 1. Forward to mumble-bridge internal HTTP API to delete from Murmur
+    bridge_deleted = False
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.delete(f"http://mumble-bridge:12347/channels/{clean_name}")
+            if resp.status_code == 200:
+                bridge_deleted = True
+    except Exception:
+        pass
+
+    # 2. Remove from /app/data/config.json
+    config_path = "/app/data/config.json"
+    remaining_channels = []
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            rooms = [r for r in data.get("mumble_rooms", []) if (r.get("name") or r.get("channel")) != clean_name]
+            bots = [b for b in data.get("mumble_bots", []) if b.get("channel") != clean_name]
+            data["mumble_rooms"] = rooms
+            data["mumble_bots"] = bots
+            remaining_channels = rooms
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to update config: {e}")
+
+    # 3. Clean from live cache if present
+    live_cache_path = "/app/data/mumble_live_channels.json"
+    if os.path.exists(live_cache_path):
+        try:
+            with open(live_cache_path, "r", encoding="utf-8") as f:
+                live = json.load(f)
+            live = [ch for ch in live if ch.get("name") != clean_name]
+            with open(live_cache_path, "w", encoding="utf-8") as f:
+                json.dump(live, f, indent=2)
+        except Exception:
+            pass
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Channel '{clean_name}' successfully removed from Mumble server and config",
+        "bridge_deleted": bridge_deleted,
+        "channels": remaining_channels
     }
 
 # ----------------- Mumla Bot Management -----------------
