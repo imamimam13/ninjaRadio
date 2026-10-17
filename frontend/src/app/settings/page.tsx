@@ -33,7 +33,8 @@ import {
   Copy,
   Edit2,
   Bot,
-  ArrowRightLeft
+  ArrowRightLeft,
+  RefreshCw
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -420,7 +421,38 @@ export default function SettingsPage() {
   const [newRoomTg, setNewRoomTg] = useState(510);
   const [newRoomDesc, setNewRoomDesc] = useState("");
 
-  // Load saved mumble rooms from localStorage
+  const [isLoadingRooms, setIsLoadingRooms] = useState(false);
+  const [isCustomBotChannel, setIsCustomBotChannel] = useState(false);
+  const [isCustomMoveChannel, setIsCustomMoveChannel] = useState(false);
+
+  const fetchMumbleRooms = async () => {
+    setIsLoadingRooms(true);
+    try {
+      const res = await fetch("/api/mumla/channels");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.channels) && data.channels.length > 0) {
+          const formatted: MumbleRoomBridge[] = data.channels.map((c: any, idx: number) => ({
+            id: c.id || `mroom_${idx}`,
+            name: c.name || c.channel,
+            targetTg: Number(c.targetTg !== undefined ? c.targetTg : c.tg) || 510,
+            description: c.description || `DMR TG ${c.targetTg || c.tg || 510}`,
+            isActive: c.isActive !== false
+          }));
+          setMumbleRooms(formatted);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("ninjaradio_mumble_rooms", JSON.stringify(formatted));
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch mumble channels:", e);
+    } finally {
+      setIsLoadingRooms(false);
+    }
+  };
+
+  // Load live mumble rooms and bots from server on mount
   useEffect(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("ninjaradio_mumble_rooms");
@@ -431,6 +463,8 @@ export default function SettingsPage() {
         } catch {}
       }
     }
+    fetchMumbleRooms();
+    fetchMumbleBots();
   }, []);
 
   const [mumbleBots, setMumbleBots] = useState<Array<{
@@ -465,7 +499,6 @@ export default function SettingsPage() {
     if (typeof window !== "undefined") {
       localStorage.setItem("ninjaradio_mumble_rooms", JSON.stringify(updated));
     }
-    // Also save channels to /api/mumla/channels so Murmur creates the rooms live!
     try {
       await fetch("/api/mumla/channels", {
         method: "POST",
@@ -483,6 +516,7 @@ export default function SettingsPage() {
           }))
         })
       });
+      fetchMumbleRooms();
     } catch {}
   };
 
@@ -492,6 +526,7 @@ export default function SettingsPage() {
       return;
     }
     const def = mumbleRooms.length > 0 ? mumbleRooms[0] : null;
+    setIsCustomBotChannel(false);
     setNewBotName("");
     setNewBotChannel(def ? def.name : "NinjaRadio-Nasional");
     setNewBotTg(def ? def.targetTg : 510);
@@ -587,31 +622,75 @@ export default function SettingsPage() {
     setShowAddMumbleModal(true);
   };
 
-  const handleAddMumbleRoom = (e: React.FormEvent) => {
+  const handleAddMumbleRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomName.trim()) return;
 
+    const cleanName = newRoomName.trim().replace(/\s+/g, "-");
+    const cleanTg = Number(newRoomTg) || 510;
+    const cleanDesc = newRoomDesc.trim() || `DMR TG ${cleanTg}`;
+
+    let updatedRooms: MumbleRoomBridge[] = [];
     if (editingMumbleRoomId) {
-      const updated = mumbleRooms.map((r) =>
+      updatedRooms = mumbleRooms.map((r) =>
         r.id === editingMumbleRoomId
           ? {
               ...r,
-              name: newRoomName.trim(),
-              targetTg: Number(newRoomTg) || 510,
-              description: newRoomDesc.trim() || "Mumble Room Bridge",
+              name: cleanName,
+              targetTg: cleanTg,
+              description: cleanDesc,
             }
           : r
       );
-      saveMumbleRooms(updated);
     } else {
       const newRoom: MumbleRoomBridge = {
         id: `mroom_${Date.now()}`,
-        name: newRoomName.trim(),
-        targetTg: Number(newRoomTg) || 510,
-        description: newRoomDesc.trim() || "Mumble Room Bridge",
+        name: cleanName,
+        targetTg: cleanTg,
+        description: cleanDesc,
         isActive: true,
       };
-      saveMumbleRooms([...mumbleRooms, newRoom]);
+      updatedRooms = [...mumbleRooms.filter(r => r.name !== cleanName), newRoom];
+    }
+
+    setMumbleRooms(updatedRooms);
+    try {
+      const res = await fetch("/api/mumla/channels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channels: updatedRooms.map(r => ({
+            id: r.id,
+            name: r.name,
+            channel: r.name,
+            targetTg: r.targetTg,
+            tg: r.targetTg,
+            slot: 2,
+            description: r.description,
+            isActive: r.isActive
+          }))
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.channels)) {
+          const formatted: MumbleRoomBridge[] = data.channels.map((c: any, idx: number) => ({
+            id: c.id || `mroom_${idx}`,
+            name: c.name || c.channel,
+            targetTg: Number(c.targetTg !== undefined ? c.targetTg : c.tg) || 510,
+            description: c.description || `DMR TG ${c.targetTg || c.tg || 510}`,
+            isActive: c.isActive !== false
+          }));
+          setMumbleRooms(formatted);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("ninjaradio_mumble_rooms", JSON.stringify(formatted));
+          }
+        }
+      }
+      fetchMumbleRooms();
+      fetchMumbleBots();
+    } catch (e) {
+      console.error("Failed to save mumble channels:", e);
     }
 
     setShowAddMumbleModal(false);
@@ -626,9 +705,36 @@ export default function SettingsPage() {
     saveMumbleRooms(updated);
   };
 
-  const handleDeleteMumbleRoom = (id: string) => {
-    if (confirm("Hapus mapping channel Mumble ini?")) {
-      saveMumbleRooms(mumbleRooms.filter((r) => r.id !== id));
+  const handleDeleteMumbleRoom = async (room: MumbleRoomBridge) => {
+    if (!confirm(`Hapus permanen room '${room.name}' dari server Mumble & konfigurasi?`)) {
+      return;
+    }
+    setMumbleRooms(prev => prev.filter(r => r.name !== room.name && r.id !== room.id));
+    try {
+      const res = await fetch(`/api/mumla/channels/${encodeURIComponent(room.name)}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.channels)) {
+          const formatted: MumbleRoomBridge[] = data.channels.map((c: any, idx: number) => ({
+            id: c.id || `mroom_${idx}`,
+            name: c.name || c.channel,
+            targetTg: Number(c.targetTg !== undefined ? c.targetTg : c.tg) || 510,
+            description: c.description || `DMR TG ${c.targetTg || c.tg || 510}`,
+            isActive: c.isActive !== false
+          }));
+          setMumbleRooms(formatted);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("ninjaradio_mumble_rooms", JSON.stringify(formatted));
+          }
+        }
+      }
+      beepPlayer?.playRogerBeep();
+      fetchMumbleRooms();
+      fetchMumbleBots();
+    } catch (e) {
+      console.error("Failed to delete mumble channel:", e);
     }
   };
 
@@ -1453,6 +1559,15 @@ export default function SettingsPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isLoadingRooms}
+                    onClick={() => { fetchMumbleRooms(); fetchMumbleBots(); beepPlayer?.playTalkGrant(); }}
+                    title="Sinkronisasi Ulang Room dari Server Mumble"
+                    className="px-2.5 py-1.5 bg-[#05080f] hover:bg-[#131f33] text-cyan-400 border border-cyan-800/60 font-mono text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingRooms ? "animate-spin" : ""}`} /> Sync Mumble
+                  </button>
                   {!isAdminUnlocked ? (
                     <span className="text-[11px] text-amber-400 font-mono flex items-center gap-1">
                       <Lock className="w-3 h-3" /> Gateway Terkunci
@@ -1554,7 +1669,7 @@ export default function SettingsPage() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleDeleteMumbleRoom(room.id)}
+                                onClick={() => handleDeleteMumbleRoom(room)}
                                 title="Hapus Room"
                                 className="p-1 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-400 border border-rose-800/40"
                               >
@@ -2382,23 +2497,58 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
               </div>
 
               <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Ruangan / Channel Standby</label>
-                <select
-                  value={newBotChannel}
-                  onChange={(e) => {
-                    const sel = e.target.value;
-                    const r = mumbleRooms.find(x => x.name === sel);
-                    setNewBotChannel(sel);
-                    if (r) setNewBotTg(r.targetTg);
-                  }}
-                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
-                >
-                  {mumbleRooms.map((r, i) => (
-                    <option key={i} value={r.name}>
-                      {r.name} (TG {r.targetTg})
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-400 font-semibold">Ruangan / Channel Standby</label>
+                  <button
+                    type="button"
+                    onClick={() => setIsCustomBotChannel(!isCustomBotChannel)}
+                    className="text-[10px] text-cyan-400 hover:text-cyan-300 font-semibold hover:underline"
+                  >
+                    {isCustomBotChannel ? "📋 Pilih dari Daftar" : "✏️ Ketik Manual"}
+                  </button>
+                </div>
+                {isCustomBotChannel ? (
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contoh: Nama channel yang ada di server Mumble"
+                    value={newBotChannel}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNewBotChannel(val);
+                      const m = val.match(/\d+/);
+                      if (m) setNewBotTg(Number(m[0]));
+                    }}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
+                  />
+                ) : (
+                  <select
+                    value={newBotChannel}
+                    onChange={(e) => {
+                      const sel = e.target.value;
+                      if (sel === "__custom__") {
+                        setIsCustomBotChannel(true);
+                        return;
+                      }
+                      const r = mumbleRooms.find(x => x.name === sel);
+                      setNewBotChannel(sel);
+                      if (r) setNewBotTg(r.targetTg);
+                    }}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
+                  >
+                    {mumbleRooms.map((r, i) => (
+                      <option key={i} value={r.name}>
+                        {r.name} (TG {r.targetTg})
+                      </option>
+                    ))}
+                    <option value="__custom__">➕ Ketik Nama Channel Manual...</option>
+                  </select>
+                )}
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  {isCustomBotChannel
+                    ? "Ketik nama channel yang ada di server Mumble / Mumla."
+                    : "Pilih channel Mumble yang aktif atau klik 'Ketik Manual' jika channel baru dibuat di Mumla."}
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -2473,23 +2623,53 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
               </div>
 
               <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Pilih Channel / Room Tujuan</label>
-                <select
-                  value={moveBotChannel}
-                  onChange={(e) => {
-                    const sel = e.target.value;
-                    const r = mumbleRooms.find(x => x.name === sel);
-                    setMoveBotChannel(sel);
-                    if (r) setMoveBotTg(r.targetTg);
-                  }}
-                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
-                >
-                  {mumbleRooms.map((r, i) => (
-                    <option key={i} value={r.name}>
-                      {r.name} (DMR TG {r.targetTg})
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-400 font-semibold">Pilih Channel / Room Tujuan</label>
+                  <button
+                    type="button"
+                    onClick={() => setIsCustomMoveChannel(!isCustomMoveChannel)}
+                    className="text-[10px] text-purple-400 hover:text-purple-300 font-semibold hover:underline"
+                  >
+                    {isCustomMoveChannel ? "📋 Pilih dari Daftar" : "✏️ Ketik Manual"}
+                  </button>
+                </div>
+                {isCustomMoveChannel ? (
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contoh: Nama channel tujuan di Mumble"
+                    value={moveBotChannel}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setMoveBotChannel(val);
+                      const m = val.match(/\d+/);
+                      if (m) setMoveBotTg(Number(m[0]));
+                    }}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                  />
+                ) : (
+                  <select
+                    value={moveBotChannel}
+                    onChange={(e) => {
+                      const sel = e.target.value;
+                      if (sel === "__custom__") {
+                        setIsCustomMoveChannel(true);
+                        return;
+                      }
+                      const r = mumbleRooms.find(x => x.name === sel);
+                      setMoveBotChannel(sel);
+                      if (r) setMoveBotTg(r.targetTg);
+                    }}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                  >
+                    {mumbleRooms.map((r, i) => (
+                      <option key={i} value={r.name}>
+                        {r.name} (DMR TG {r.targetTg})
+                      </option>
+                    ))}
+                    <option value="__custom__">➕ Ketik Nama Channel Manual...</option>
+                  </select>
+                )}
               </div>
 
               <div>
