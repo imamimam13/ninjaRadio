@@ -88,6 +88,41 @@ class HomeBrewMasterServer:
 
         # Loopback suppression & dynamic talkgroup retargeting for local ingress
         self.active_local_txs: Dict[int, dict] = {}
+        # Worker TG -> local MMDVM_Bridge DMRD port mapping (updated by core_engine)
+        self.worker_dmr_ports: Dict[int, Tuple[str, int, int]] = {}
+
+    def parse_mmdvm_options(self, client: dict, options_str: str):
+        """Parses all TS1 and TS2 talkgroup subscriptions from RPTC/RPTO options payload."""
+        if not options_str:
+            return
+        import re
+        ts1_tgs = list(client.get("ts1_tgs") or [])
+        ts2_tgs = list(client.get("ts2_tgs") or [])
+
+        # Match patterns like TS1=510,5108; TS1_1=510; TS2_1=1025; TS2=1025,5109
+        for m in re.finditer(r'(?i)TS([12])(?:_\d+)?\s*=\s*([0-9,\s]+)', options_str):
+            slot_num = int(m.group(1))
+            tg_str = m.group(2)
+            for part in re.split(r'[,\s]+', tg_str):
+                if part.strip().isdigit():
+                    tg_val = int(part.strip())
+                    if tg_val <= 0:
+                        continue
+                    if slot_num == 1:
+                        if tg_val not in ts1_tgs:
+                            ts1_tgs.append(tg_val)
+                    else:
+                        if tg_val not in ts2_tgs:
+                            ts2_tgs.append(tg_val)
+
+        client["ts1_tgs"] = ts1_tgs
+        client["ts2_tgs"] = ts2_tgs
+        if ts2_tgs:
+            client["last_tg"] = ts2_tgs[0]
+            client["last_slot"] = 2
+        elif ts1_tgs:
+            client["last_tg"] = ts1_tgs[0]
+            client["last_slot"] = 1
 
     def is_local_transmission(self, src_id: int) -> bool:
         """Returns True if the transmission was originated locally within the last 2.5s (Loopback suppression)."""
@@ -99,12 +134,18 @@ class HomeBrewMasterServer:
         return False
 
     def mark_local_transmission(self, src_id: int, tg: int = 0, slot: int = 0):
+        now = time.time()
+        existing = self.active_local_txs.get(src_id)
+        if isinstance(existing, dict) and (now - existing.get("time", 0) < 3.5):
+            if not tg and existing.get("tg"):
+                tg = existing["tg"]
+            if not slot and existing.get("slot"):
+                slot = existing["slot"]
         self.active_local_txs[src_id] = {
-            "time": time.time(),
+            "time": now,
             "tg": tg,
             "slot": slot
         }
-        now = time.time()
         for s, item in list(self.active_local_txs.items()):
             t = item["time"] if isinstance(item, dict) else item
             if now - t > 10.0:
@@ -112,7 +153,7 @@ class HomeBrewMasterServer:
 
     def get_active_local_tx(self, src_id: int) -> Optional[dict]:
         entry = self.active_local_txs.get(src_id)
-        if isinstance(entry, dict) and (time.time() - entry.get("time", 0) < 3.0):
+        if isinstance(entry, dict) and (time.time() - entry.get("time", 0) < 3.5):
             return entry
         return None
 
@@ -229,8 +270,11 @@ class HomeBrewMasterServer:
                     "tx_packets": 0,
                     "last_tg": 0,
                     "last_slot": 2,
+                    "slots_mode": 3,  # 1=TS1 simplex, 2=TS2 simplex, 3=Duplex, 4=Simplex
                     "ts1_tgs": [],
-                    "ts2_tgs": []
+                    "ts2_tgs": [],
+                    "dynamic_tgs": {},  # slot -> tg
+                    "slot_locks": {}    # slot -> {"stream_id": int, "tg": int, "until": float}
                 }
                 self.pending_challenges.pop(addr, None)
                 self.sock.sendto(RPTACK, addr)
@@ -246,12 +290,50 @@ class HomeBrewMasterServer:
             config_payload = data[8:]
             callsign = config_payload[:8].decode("utf-8", errors="ignore").strip()
             software_str = "MMDVMHost"
-            if len(config_payload) > 8:
+            slots_mode = 3
+            options_str = ""
+
+            # Standard HomeBrew RPTC layout:
+            # 0..8 callsign, 8..17 rx_freq, 17..26 tx_freq, 26..28 pwr, 28..30 cc,
+            # 30..38 lat, 38..47 lon, 47..50 height, 50..70 loc, 70..89 desc, 89..90 slots,
+            # 90..214 url, 214..254 soft_id, 254..294 pkg_id, 294.. options
+            if len(config_payload) >= 90:
                 try:
-                    # MMDVMHost typically packs version / radio info
+                    rx_f = config_payload[8:17].decode("ascii", errors="ignore").strip()
+                    tx_f = config_payload[17:26].decode("ascii", errors="ignore").strip()
+                    slots_ch = config_payload[89:90].decode("ascii", errors="ignore").strip()
+                    if slots_ch in ("1", "2", "4"):
+                        slots_mode = int(slots_ch)
+                    elif rx_f and tx_f and rx_f == tx_f and slots_ch != "3":
+                        slots_mode = 2
+                except Exception:
+                    pass
+            if len(config_payload) >= 254:
+                try:
+                    s_id = config_payload[214:254].decode("ascii", errors="ignore").strip("\x00 ")
+                    if s_id:
+                        software_str = s_id[:30]
+                except Exception:
+                    pass
+            elif len(config_payload) > 8:
+                try:
                     extra = config_payload[8:].decode("ascii", errors="ignore").strip()
                     if extra:
                         software_str = extra[:30]
+                except Exception:
+                    pass
+
+            if len(config_payload) > 294:
+                try:
+                    options_str = config_payload[294:].decode("ascii", errors="ignore").strip("\x00 ")
+                except Exception:
+                    pass
+            elif b"TS" in config_payload:
+                try:
+                    full_ascii = config_payload.decode("ascii", errors="ignore")
+                    idx = full_ascii.upper().find("TS")
+                    if idx != -1:
+                        options_str = full_ascii[idx:].strip("\x00 ")
                 except Exception:
                     pass
 
@@ -261,20 +343,27 @@ class HomeBrewMasterServer:
             if addr in self.clients:
                 self.clients[addr]["callsign"] = callsign or self.clients[addr].get("callsign", "HOTSPOT")
                 self.clients[addr]["software"] = software_str
+                self.clients[addr]["slots_mode"] = slots_mode
                 self.clients[addr]["state"] = "CONNECTED"
                 self.clients[addr]["last_seen"] = time.time()
                 if "connected_at" not in self.clients[addr]:
                     self.clients[addr]["connected_at"] = time.time()
-                logger.info(f"[DMR-Master] ✓ Hotspot {callsign} ({dmr_id}) fully CONNECTED from {addr} [{software_str}]")
+                if options_str:
+                    self.clients[addr]["options"] = options_str
+                    self.parse_mmdvm_options(self.clients[addr], options_str)
+                logger.info(
+                    f"[DMR-Master] ✓ Hotspot {callsign} ({dmr_id}) CONNECTED from {addr} "
+                    f"[{software_str}, slots={slots_mode}, TS1={self.clients[addr].get('ts1_tgs')}, TS2={self.clients[addr].get('ts2_tgs')}]"
+                )
 
             # Send RPTACK acknowledgment
             self.sock.sendto(RPTACK, addr)
             return
 
-        # 3b. RPTO: Repeater / Hotspot Options Block (e.g. TS2_1=510990;)
+        # 3b. RPTO: Repeater / Hotspot Options Block (e.g. TS1_1=510;TS2_1=1025; or TS2=1025,5109)
         elif data.startswith(RPTO) and len(data) >= 8:
             dmr_id = struct.unpack(">I", data[4:8])[0]
-            options_payload = data[8:].decode("ascii", errors="ignore").strip()
+            options_payload = data[8:].decode("ascii", errors="ignore").strip("\x00 ")
 
             if addr not in self.clients:
                 self._update_client_seen(dmr_id, addr)
@@ -283,17 +372,13 @@ class HomeBrewMasterServer:
                 self.clients[addr]["options"] = options_payload
                 self.clients[addr]["state"] = "CONNECTED"
                 self.clients[addr]["last_seen"] = time.time()
-                # Parse talkgroup subscription if present (e.g. TS2_1=510990 or TS1_1=...)
-                import re
-                m2 = re.search(r"TS2_\d+=(\d+)", options_payload)
-                if m2:
-                    self.clients[addr]["last_tg"] = int(m2.group(1))
-                    self.clients[addr]["last_slot"] = 2
-                m1 = re.search(r"TS1_\d+=(\d+)", options_payload)
-                if m1 and not m2:
-                    self.clients[addr]["last_tg"] = int(m1.group(1))
-                    self.clients[addr]["last_slot"] = 1
-                logger.info(f"[DMR-Master] ✓ Hotspot {self.clients[addr].get('callsign')} ({dmr_id}) options: {options_payload}")
+                self.clients[addr]["ts1_tgs"] = []
+                self.clients[addr]["ts2_tgs"] = []
+                self.parse_mmdvm_options(self.clients[addr], options_payload)
+                logger.info(
+                    f"[DMR-Master] ✓ Hotspot {self.clients[addr].get('callsign')} ({dmr_id}) RPTO options: "
+                    f"{options_payload} -> TS1={self.clients[addr].get('ts1_tgs')}, TS2={self.clients[addr].get('ts2_tgs')}"
+                )
 
             # Send RPTACK acknowledgment (CRUCIAL: MMDVMHost transitions to STATE_RUNNING upon receiving this)
             self.sock.sendto(RPTACK, addr)
@@ -354,6 +439,7 @@ class HomeBrewMasterServer:
             seq = data[4]
             src_id = int.from_bytes(data[5:8], "big")
             dst_tg = int.from_bytes(data[8:11], "big")
+            rpt_id = struct.unpack(">I", data[11:15])[0]
             bits = data[15]
             slot = 2 if (bits & 0x80) else 1
             call_type = "unit" if (bits & 0x40) else "group"
@@ -374,23 +460,43 @@ class HomeBrewMasterServer:
                     data = data[:8] + tg_bytes + data[11:15] + bytes([new_bits]) + data[16:]
                     dst_tg = intended_tg
                     slot = intended_slot
+                    bits = new_bits
 
             now = time.time()
             self.total_rx_packets += 1
-            self.mark_local_transmission(src_id)
+            # Preserve intended_tg and intended_slot across all frames of the transmission!
+            self.mark_local_transmission(src_id, dst_tg, slot)
 
-            # Update client activity & packet counts
+            # Update client activity & dynamic TG subscription when a hotspot user transmits
+            if addr not in self.clients:
+                self._update_client_seen(rpt_id or src_id, addr)
+
             if addr in self.clients:
-                self.clients[addr]["last_seen"] = now
-                self.clients[addr]["rx_packets"] = self.clients[addr].get("rx_packets", 0) + 1
-                self.clients[addr]["last_tg"] = dst_tg
-                self.clients[addr]["last_slot"] = slot
-            else:
-                self._update_client_seen(src_id, addr)
-                if addr in self.clients:
-                    self.clients[addr]["rx_packets"] = self.clients[addr].get("rx_packets", 0) + 1
-                    self.clients[addr]["last_tg"] = dst_tg
-                    self.clients[addr]["last_slot"] = slot
+                cl = self.clients[addr]
+                cl["last_seen"] = now
+                cl["rx_packets"] = cl.get("rx_packets", 0) + 1
+                if dst_tg == 4000:
+                    # TG 4000 Unlink Dynamic Talkgroups on this slot
+                    dyn = cl.setdefault("dynamic_tgs", {})
+                    dyn.pop(slot, None)
+                    cl.setdefault("slot_locks", {}).pop(slot, None)
+                    if data_type == 0:
+                        logger.info(f"[DMR-Master] 🔌 Hotspot {cl.get('callsign')} ({cl.get('dmr_id')}) dialed TG 4000 -> Unlinked dynamic TG on TS{slot}")
+                    return
+                elif dst_tg not in getattr(self, "parrot_tgs", [9990, 99990]):
+                    cl["last_tg"] = dst_tg
+                    cl["last_slot"] = slot
+                    if addr[0] != "127.0.0.1":
+                        dyn = cl.setdefault("dynamic_tgs", {})
+                        if dyn.get(slot) != dst_tg:
+                            dyn[slot] = dst_tg
+                            logger.info(f"[DMR-Master] 📌 Hotspot {cl.get('callsign')} ({cl.get('dmr_id')}) dynamically linked to TG {dst_tg} on TS{slot}")
+                        # Lock this hotspot's slot to its own ongoing TX/RX TG
+                        cl.setdefault("slot_locks", {})[slot] = {
+                            "stream_id": stream_id,
+                            "tg": dst_tg,
+                            "until": now + 3.0
+                        }
 
             # Native Parrot (Configured Parrot Talkgroups or Private Calls)
             if dst_tg in getattr(self, "parrot_tgs", [9990, 99990]):
@@ -498,17 +604,104 @@ class HomeBrewMasterServer:
             return
 
     def broadcast_dmrd(self, data: bytes, exclude_addr: Optional[Tuple[str, int]] = None):
-        """Broadcasts a DMRD voice packet to all connected local hotspots and MMDVM_Bridge."""
-        if not self.sock:
+        """
+        Broadcasts a DMRD voice packet to connected local hotspots and MMDVM_Bridge.
+        Critical features for MMDVMHost / Pi-Star / WPSD + HT compatibility:
+        1. Stamps the target client's own 4-byte Repeater DMR ID into bytes 11..15 (required by MMDVMHost!).
+        2. Adapts the timeslot bit for Simplex hotspots and local MMDVM_Bridge (Slot 2) so Slot 1 TGs are never missed.
+        3. Enforces per-hotspot timeslot stream locking so two concurrent TGs never collide on the same RF slot.
+        4. Respects static (RPTC/RPTO) & dynamic (PTT kerchunk) TG subscriptions when configured.
+        """
+        if not self.sock or len(data) < 20:
             return
+
+        src_id = int.from_bytes(data[5:8], "big")
+        dst_tg = int.from_bytes(data[8:11], "big")
+        orig_bits = data[15]
+        orig_slot = 2 if (orig_bits & 0x80) else 1
+        call_type = "unit" if (orig_bits & 0x40) else "group"
+        data_type = (orig_bits & 0x30) >> 4
+        stream_id = int.from_bytes(data[16:20], "big")
+        now = time.time()
+
         self.total_tx_packets += 1
+
         for addr, client in list(self.clients.items()):
-            if addr != exclude_addr and client.get("state") in ["CONNECTED", "AUTHENTICATED"]:
-                try:
-                    self.sock.sendto(data, addr)
-                    client["tx_packets"] = client.get("tx_packets", 0) + 1
-                except Exception:
-                    pass
+            if addr == exclude_addr or client.get("state") not in ["CONNECTED", "AUTHENTICATED"]:
+                continue
+
+            client_dmr_id = client.get("dmr_id", 0)
+            if client_dmr_id and client_dmr_id == src_id and addr[0] != "127.0.0.1":
+                # Do not echo a hotspot user's own transmission back to their own hotspot
+                continue
+
+            is_local_bridge = (addr[0] == "127.0.0.1")
+            target_slot = orig_slot
+
+            if is_local_bridge:
+                # Local MMDVM_Bridge (DVSwitch.ini) listens on Slot 2 by default
+                target_slot = 2
+            else:
+                ts1_tgs = client.get("ts1_tgs") or []
+                ts2_tgs = client.get("ts2_tgs") or []
+                dyn_tgs = client.get("dynamic_tgs") or {}
+                slots_mode = client.get("slots_mode", 3)
+
+                # Determine if this hotspot has explicit static subscriptions via RPTO/RPTC
+                has_static = bool(ts1_tgs or ts2_tgs)
+                if has_static and call_type == "group":
+                    # Check if dst_tg is in static TS1/TS2 or dynamic TGs or last_tg
+                    in_ts1 = (dst_tg in ts1_tgs) or (dyn_tgs.get(1) == dst_tg)
+                    in_ts2 = (dst_tg in ts2_tgs) or (dyn_tgs.get(2) == dst_tg)
+                    is_last = (client.get("last_tg") == dst_tg)
+                    if not (in_ts1 or in_ts2 or is_last):
+                        continue
+                    if in_ts2 and not in_ts1:
+                        target_slot = 2
+                    elif in_ts1 and not in_ts2:
+                        target_slot = 1
+
+                # Adapt slot for Simplex MMDVM hotspots (slots_mode 1, 2, or 4)
+                if slots_mode == 1:
+                    target_slot = 1
+                elif slots_mode in (2, 4):
+                    target_slot = 2
+                elif client.get("last_tg") == dst_tg and client.get("last_slot") in (1, 2):
+                    # Deliver on the exact slot the HT operator used to key up this TG
+                    target_slot = client["last_slot"]
+
+                # Per-hotspot timeslot stream lock to prevent TDMA frame collision on HT
+                slot_locks = client.setdefault("slot_locks", {})
+                lock = slot_locks.get(target_slot)
+                if lock and now < lock.get("until", 0):
+                    if lock.get("stream_id") != stream_id and lock.get("tg") != dst_tg:
+                        # Another QSO is actively playing on this hotspot's slot; do not corrupt it
+                        continue
+
+                if data_type == 2:  # Voice Terminator releases lock shortly after
+                    slot_locks[target_slot] = {
+                        "stream_id": stream_id,
+                        "tg": dst_tg,
+                        "until": now + 0.4
+                    }
+                else:
+                    slot_locks[target_slot] = {
+                        "stream_id": stream_id,
+                        "tg": dst_tg,
+                        "until": now + 2.0
+                    }
+
+            # Stamp target client's own 4-byte Repeater ID into bytes 11..15 and set target_slot bit
+            rpt_bytes = struct.pack(">I", client_dmr_id if client_dmr_id else self.server_dmr_id)
+            slot_bit = 0x80 if target_slot == 2 else 0x00
+            new_bits = (orig_bits & 0x7F) | slot_bit
+            out_pkt = data[:11] + rpt_bytes + bytes([new_bits]) + data[16:]
+
+            try:
+                self.sock.sendto(out_pkt, addr)
+                client["tx_packets"] = client.get("tx_packets", 0) + 1
+            except Exception:
+                pass
 
     async def _play_parrot_echo(self, target_addr: Tuple[str, int], caller_id: int, orig_tg: int, slot: int, call_type: str, recorded_packets: list):
         """Plays back recorded DMR voice burst to the hotspot on TG 9990 after turnaround delay."""
@@ -523,7 +716,10 @@ class HomeBrewMasterServer:
                         dest_addr = a
                         break
 
-            logger.info(f"[DMR-Master] 🦜 Echoing {len(recorded_packets)} frames back to {dest_addr} (Caller: {caller_id}, Slot: {slot})")
+            target_client = self.clients.get(dest_addr, {})
+            target_rpt_id = target_client.get("dmr_id") or caller_id or self.server_dmr_id
+
+            logger.info(f"[DMR-Master] 🦜 Echoing {len(recorded_packets)} frames back to {dest_addr} (Caller: {caller_id}, Repeater: {target_rpt_id}, Slot: {slot})")
 
             new_stream_id = int(time.time()) & 0xFFFFFFFF
             out_seq = 0
@@ -538,7 +734,7 @@ class HomeBrewMasterServer:
             slot_bit = 0x80 if slot == 2 else 0x00
             src_bytes = orig_tg.to_bytes(3, "big")  # Parrot is sender (ID 9990 or 99990)
             dst_bytes = echo_dst.to_bytes(3, "big")
-            repeater_bytes = struct.pack(">I", self.repeater_id)
+            repeater_bytes = struct.pack(">I", int(target_rpt_id))
 
             for pkt in recorded_packets:
                 if not self.running or not self.sock:
@@ -634,6 +830,9 @@ class HomeBrewMasterServer:
                 "tx_packets": c.get("tx_packets", 0),
                 "last_tg": c.get("last_tg", 0),
                 "last_slot": c.get("last_slot", 2),
+                "ts1_tgs": c.get("ts1_tgs", []),
+                "ts2_tgs": c.get("ts2_tgs", []),
+                "dynamic_tgs": c.get("dynamic_tgs", {}),
                 "options": c.get("options", "")
             })
 

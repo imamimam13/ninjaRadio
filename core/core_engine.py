@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from datetime import datetime
 import socket
 import logging
@@ -9,7 +10,7 @@ import re
 import time
 import subprocess
 import signal
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import aiohttp
 from fastapi import FastAPI, HTTPException
 import uvicorn
@@ -45,8 +46,8 @@ def build_usrp_frame(seq: int, keyup: int, usrp_type: int = USRP_TYPE_VOICE, pay
     return b"USRP" + struct.pack(">iiiiiii", seq & 0x7FFFFFFF, 0, 1 if keyup else 0, 0, usrp_type << 24, 0, 0) + payload
 
 
-def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, callsign: str) -> bytes:
-    call = (callsign or str(src_id)).encode("ascii", errors="ignore")[:16]
+def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, callsign: str, pad_320: bool = False) -> bytes:
+    call = (callsign or str(src_id)).encode("ascii", errors="ignore")[:24]
     body = (
         (src_id & 0xFFFFFF).to_bytes(3, "big")
         + (rpt_id & 0xFFFFFFFF).to_bytes(4, "big")
@@ -54,7 +55,10 @@ def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, ca
         + bytes([slot & 0xFF, cc & 0xFF])
         + call + b"\x00"
     )
-    return bytes([TLV_TAG_SET_INFO, len(body)]) + body
+    tlv = bytes([TLV_TAG_SET_INFO, len(body)]) + body
+    if pad_320 and len(tlv) < 320:
+        tlv = tlv.ljust(320, b"\x00")
+    return tlv
 
 
 def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
@@ -79,8 +83,9 @@ def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
         "callsign": callsign,
     }
 
-def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
-    """Resolves amateur callsign for DMR ID from SQLite Callbook DB."""
+
+def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optional[str]:
+    """Resolves amateur callsign (and optionally operator name) for DMR ID from SQLite Callbook DB."""
     db_path = "/app/data/ninjaradio.db"
     if not os.path.exists(db_path):
         return None
@@ -88,21 +93,77 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (dmr_id,))
+            cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ?", (dmr_id,))
             row = cursor.fetchone()
             if row and row[0]:
-                return str(row[0]).strip().upper()
+                call = str(row[0]).strip().upper()
+                name = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
+                if include_name and name and name.upper() != call:
+                    return f"{call} {name}"[:24]
+                return call
     except Exception:
         pass
     return None
+
+
+def sync_callbook_to_subscriber_csv(default_id: int = 5109999, default_call: str = "N1NJA"):
+    """Exports all Callbook records from SQLite into /var/lib/dvswitch/subscriber_ids.csv for Analog_Bridge."""
+    db_path = "/app/data/ninjaradio.db"
+    sub_csv = "/var/lib/dvswitch/subscriber_ids.csv"
+    app_sub_csv = "/app/data/subscriber_ids.csv"
+    os.makedirs("/var/lib/dvswitch", exist_ok=True)
+    os.makedirs("/app/data", exist_ok=True)
+    lines = [f"{default_id},{default_call},{default_call},NinjaRadio,ID,0"]
+    seen_ids = {default_id}
+    if os.path.exists(db_path):
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.5) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT dmr_id, callsign, name, qth FROM callbook WHERE dmr_id > 0")
+                for d_id, call, name, qth in cursor.fetchall():
+                    d_id = int(d_id)
+                    if d_id in seen_ids:
+                        continue
+                    seen_ids.add(d_id)
+                    c_str = str(call or f"ID-{d_id}").strip().upper().replace(",", "")
+                    n_str = str(name or c_str).strip().replace(",", " ")
+                    q_str = str(qth or "ID").strip().replace(",", " ")
+                    lines.append(f"{d_id},{c_str},{n_str},{q_str},ID,0")
+        except Exception as e:
+            logger.debug(f"sync_callbook_to_subscriber_csv DB read note: {e}")
+
+    # Preserve any extra lines from existing /app/data/subscriber_ids.csv
+    if os.path.exists(app_sub_csv):
+        try:
+            with open(app_sub_csv, "r", encoding="utf-8", errors="ignore") as f:
+                for raw_l in f:
+                    l = raw_l.strip()
+                    if not l or l.startswith(";"):
+                        continue
+                    first_col = l.split(",", 1)[0].strip()
+                    if first_col.isdigit() and int(first_col) not in seen_ids:
+                        seen_ids.add(int(first_col))
+                        lines.append(l)
+        except Exception:
+            pass
+
+    content = "\n".join(lines) + "\n"
+    for target in (sub_csv, app_sub_csv):
+        try:
+            with open(target, "w", encoding="utf-8") as sf:
+                sf.write(content)
+        except Exception:
+            pass
+
 
 def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tuple:
     """
     Validates whether the incoming DMR/USRP operator is allowed to transmit on target_tg.
     Returns (is_allowed: bool, reason: str).
     """
-    if target_tg == 9990:
-        return True, "Echo Test"
+    if target_tg in (9990, 99990, 4000):
+        return True, "Special Service TG"
     db_path = "/app/data/ninjaradio.db"
     if not os.path.exists(db_path):
         return True, "Default (No DB)"
@@ -167,22 +228,93 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
         pass
     return True, "Fallback"
 
+
+def get_matrix_translated_targets(tg: int, slot: int = 2, source_mode: str = "DMR") -> List[dict]:
+    """
+    Queries active bridge_routes in TG Matrix to find all mapped / patched targets for `(tg, slot)`.
+    Supports manual cross-TG and cross-slot mapping (e.g., Local TG 1025 TS2 <-> Peer TG 510 TS1)
+    and independent rules without editing Peer Settings.
+    """
+    db_path = "/app/data/ninjaradio.db"
+    targets = []
+    if not os.path.exists(db_path):
+        return targets
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT name, source_mode, source_tg, source_slot, target_mode, target_tg, target_slot, bidirectional
+                FROM bridge_routes
+                WHERE is_active = 1
+                  AND (source_tg = ? OR (bidirectional = 1 AND target_tg = ?))
+            """, (tg, tg))
+            for r_name, s_mode, s_tg, s_slot, t_mode, t_tg, t_slot, bidir in cursor.fetchall():
+                s_tg = int(s_tg or 0)
+                t_tg = int(t_tg or 0)
+                s_slot = int(s_slot or 2)
+                t_slot = int(t_slot or 2)
+                if s_tg == tg:
+                    targets.append({
+                        "rule_name": r_name,
+                        "mode": str(t_mode or "DMR").upper(),
+                        "tg": t_tg,
+                        "slot": t_slot
+                    })
+                elif bidir and t_tg == tg:
+                    targets.append({
+                        "rule_name": r_name,
+                        "mode": str(s_mode or "DMR").upper(),
+                        "tg": s_tg,
+                        "slot": s_slot
+                    })
+    except Exception as e:
+        logger.debug(f"get_matrix_translated_targets note: {e}")
+    return targets
+
+
+def rewrite_dmrd_tg_and_slot(raw_packet: bytes, new_tg: int, new_slot: int) -> bytes:
+    """Rewrites destination Talkgroup (bytes 8..11) and Timeslot bit (byte 15 bit 7) of a DMRD packet."""
+    if not raw_packet or len(raw_packet) < 20 or not raw_packet.startswith(b"DMRD"):
+        return raw_packet
+    tg_bytes = struct.pack(">I", new_tg & 0xFFFFFF)[1:]
+    orig_bits = raw_packet[15]
+    slot_bit = 0x80 if new_slot == 2 else 0x00
+    new_bits = (orig_bits & 0x7F) | slot_bit
+    return raw_packet[:8] + tg_bytes + raw_packet[11:15] + bytes([new_bits]) + raw_packet[16:]
+
+
 def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: list = None) -> bool:
     """
     100% Self-Serve Peer & Matrix Routing Engine:
     1. If the route for `tg` is explicitly turned OFF (is_active = 0) in TG Matrix, drop it.
-    2. If the peer is configured with `subscribedTgs` containing `tg`, auto-approve immediately!
-    3. If there is an active route in TG Matrix for `tg`, approve immediately!
+    2. If there is an active route in TG Matrix for `tg` (either as source or target), approve immediately!
+    3. If the peer is configured with `subscribedTgs` containing `tg`, auto-approve immediately!
     4. Otherwise, if peer has no explicit restrictions, allow DMR traffic.
     """
     db_path = "/app/data/ninjaradio.db"
-    
-    # Rule 1: Check if explicitly muted / disabled in TG Matrix
+    peer_upper = (peer_name or "").strip().upper()
+
     if os.path.exists(db_path):
         try:
             import sqlite3
             with sqlite3.connect(db_path, timeout=1.0) as conn:
                 cursor = conn.cursor()
+                # Check if there is an active rule for this TG
+                cursor.execute("""
+                    SELECT id, name, source_mode, target_mode FROM bridge_routes 
+                    WHERE is_active = 1 
+                      AND (source_tg = ? OR target_tg = ?)
+                """, (tg, tg))
+                active_rows = cursor.fetchall()
+                if active_rows:
+                    for _, r_name, s_m, t_m in active_rows:
+                        # If rule specifies a peer name or general DMR/PEER mode, allow
+                        if not peer_upper or peer_upper in str(r_name).upper() or peer_upper in str(s_m).upper() or peer_upper in str(t_m).upper() or str(t_m).upper() in ("DMR", "PEER", "MUMBLE", "WEBRTC", "ALL"):
+                            return True
+                    return True
+
+                # Rule 1: Check if explicitly muted / disabled in TG Matrix
                 cursor.execute("""
                     SELECT id FROM bridge_routes 
                     WHERE is_active = 0 
@@ -198,24 +330,7 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: l
     if client_subscribed_tgs and tg in client_subscribed_tgs:
         return True
 
-    # Rule 3: Check if there is an active bridge route in database
-    if os.path.exists(db_path):
-        try:
-            import sqlite3
-            with sqlite3.connect(db_path, timeout=1.0) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id FROM bridge_routes 
-                    WHERE is_active = 1 
-                      AND (source_tg = ? OR target_tg = ?)
-                    LIMIT 1
-                """, (tg, tg))
-                if cursor.fetchone() is not None:
-                    return True
-        except Exception:
-            pass
-
-    # Rule 4: Default allow for connected DMR peers
+    # Rule 4: Default allow for connected DMR peers when no explicit block rule exists
     return True
 
 DEFAULT_CONFIG = {
@@ -301,11 +416,19 @@ class DVSwitchCoreManager:
         self.tx_identity_sent = False
         self.current_operator_dmr_id = 0
         self.current_operator_callsign = ""
+        self.primary_tg = 1025
+        self.primary_slot = 2
         self.current_tx_tg = 0
         self.current_tx_slot = 2
         self.current_tx_dmr_id = 0
+        self.current_tx_start_time = 0.0
         self.last_rx_src = 0
         self.active_tx_client_addr = None
+
+        # Active talker tracking per Talkgroup: tg -> {"src": int, "callsign": str, "slot": int, "time": float}
+        self.active_talkers_by_tg: Dict[int, dict] = {}
+        # Track initialized DVSwitch Mobile clients (addr -> timestamp of last mode/identity init)
+        self.initialized_usrp_clients: Dict[tuple, float] = {}
 
         # Modular Dynamic Analog_Bridge Worker Pool (Metode B)
         self.bridge_workers: Dict[str, dict] = {}
@@ -363,8 +486,10 @@ class DVSwitchCoreManager:
         self.active_peer_port = master_port
         rx_hz = format_freq_hz(rx_freq_mhz)
         tx_hz = format_freq_hz(tx_freq_mhz)
-        primary_tg = default_tg
-        primary_slot = 2
+        primary_tg = int(cfg.get("primary_tg") or default_tg or 1025)
+        primary_slot = int(cfg.get("primary_slot") or 2)
+        self.primary_tg = primary_tg
+        self.primary_slot = primary_slot
 
         # Collect all talkgroups that MMDVM_Bridge should subscribe to on the internal master
         ts1_list = [510, 5108, 91, 5155]
@@ -381,14 +506,18 @@ class DVSwitchCoreManager:
 
         for p in peers:
             raw_sub = str(p.get("subscribedTgs") or p.get("subscribed_tgs", "")).strip()
-            for m in re.finditer(r'TS1(?:_\d+)?\s*[=:;]\s*(\d+)', raw_sub, re.IGNORECASE):
-                v = int(m.group(1))
-                if v not in ts1_list:
-                    ts1_list.append(v)
-            for m in re.finditer(r'TS2(?:_\d+)?\s*[=:;]\s*(\d+)', raw_sub, re.IGNORECASE):
-                v = int(m.group(1))
-                if v not in ts2_list:
-                    ts2_list.append(v)
+            for m in re.finditer(r'TS1(?:_\d+)?\s*[=:;]\s*([0-9,\s]+)', raw_sub, re.IGNORECASE):
+                for part in re.split(r'[,\s]+', m.group(1)):
+                    if part.strip().isdigit():
+                        v = int(part.strip())
+                        if v not in ts1_list:
+                            ts1_list.append(v)
+            for m in re.finditer(r'TS2(?:_\d+)?\s*[=:;]\s*([0-9,\s]+)', raw_sub, re.IGNORECASE):
+                for part in re.split(r'[,\s]+', m.group(1)):
+                    if part.strip().isdigit():
+                        v = int(part.strip())
+                        if v not in ts2_list:
+                            ts2_list.append(v)
             if raw_sub.isdigit():
                 v = int(raw_sub)
                 if v not in ts2_list:
@@ -420,21 +549,8 @@ class DVSwitchCoreManager:
         os.makedirs("/var/log/dvswitch", exist_ok=True)
         os.makedirs("/var/lib/dvswitch", exist_ok=True)
 
-        # Ensure subscriber CSV exists from shared app data or default
-        sub_csv = "/var/lib/dvswitch/subscriber_ids.csv"
-        app_sub_csv = "/app/data/subscriber_ids.csv"
-        if os.path.exists(app_sub_csv) and os.path.getsize(app_sub_csv) > 0:
-            try:
-                import shutil
-                shutil.copyfile(app_sub_csv, sub_csv)
-            except Exception:
-                pass
-        elif not os.path.exists(sub_csv) or os.path.getsize(sub_csv) == 0:
-            try:
-                with open(sub_csv, "w", encoding="utf-8") as sf:
-                    sf.write(f"{radio_id},{callsign},{callsign},NinjaRadio,ID,0\n")
-            except Exception:
-                pass
+        # Synchronize SQLite Callbook + subscriber CSV into /var/lib/dvswitch/subscriber_ids.csv
+        sync_callbook_to_subscriber_csv(default_id=radio_id, default_call=callsign)
 
         # 1. Analog_Bridge.ini
         ab_content = f"""; Auto-generated by NinjaRadio DVSwitch Supervisor
@@ -721,11 +837,13 @@ Send={AB_AMBE_RX_PORT}
         """Returns live status of all active Analog_Bridge workers."""
         workers = []
         ab_running = self.ab_proc is not None and self.ab_proc.poll() is None
+        primary_tg_locked = int(self.primary_tg or self.config.get("primary_tg") or self.config.get("default_tg") or 1025)
+        primary_slot_locked = int(self.primary_slot or self.config.get("primary_slot") or 2)
         workers.append({
             "id": "worker_primary",
-            "name": f"Primary Gateway (TG {self.current_tx_tg or self.config.get('primary_tg', 1025)})",
-            "tg": self.current_tx_tg or int(self.config.get("primary_tg", 1025)),
-            "slot": self.current_tx_slot or 2,
+            "name": f"Primary Gateway (TG {primary_tg_locked})",
+            "tg": primary_tg_locked,
+            "slot": primary_slot_locked,
             "usrp_rx_port": AB_USRP_RX_PORT,
             "usrp_tx_port": AB_USRP_TX_PORT,
             "status": "RUNNING" if ab_running else "STOPPED",
@@ -858,6 +976,7 @@ talkerAlias = %callsign %location %description
         with open(dvswitch_ini_path, "w", encoding="utf-8") as f:
             f.write(dvswitch_content)
 
+        opt_line = f"Options=TS{slot}_1={tg};TS{slot}={tg};"
         mmdvm_ini_path = f"/app/data/MMDVM_Bridge_{w_id}.ini"
         mmdvm_content = f"""; Auto-generated by NinjaRadio for Worker TG {tg} Slot {slot}
 [General]
@@ -916,6 +1035,7 @@ Slot1=1
 Slot2=1
 ModeHang=3
 Debug=1
+{opt_line}
 
 [AMBE]
 Enable=1
@@ -941,6 +1061,8 @@ Send={ambe_rx}
         # 3. Write Analog_Bridge.ini and start Analog_Bridge
         ini_path = f"/app/data/Analog_Bridge_{w_id}.ini"
         log_path = f"/var/log/dvswitch/Analog_Bridge_{w_id}.log"
+        rx_audio_gain = float(self.config.get("rx_audio_gain", 2.50))
+        tx_audio_gain = float(self.config.get("tx_audio_gain", 1.25))
         ini_content = f"""; Auto-generated On-Demand Full-Stack Worker for TG {tg} Slot {slot}
 [GENERAL]
 logLevel = 2
@@ -972,8 +1094,8 @@ txPort = {usrp_tx}
 rxPort = {usrp_rx}
 usrpAudio = AUDIO_USE_GAIN
 tlvAudio = AUDIO_USE_GAIN
-usrpGain = 1.00
-tlvGain = 1.00
+usrpGain = {rx_audio_gain:.2f}
+tlvGain = {tx_audio_gain:.2f}
 usrpAGC = -20,10,100
 """
         with open(ini_path, "w", encoding="utf-8") as f:
@@ -1017,6 +1139,9 @@ usrpAGC = -20,10,100
             "rx_sock": rx_sock,
             "rx_packets": 0,
             "tx_packets": 0,
+            "rx_src": 0,
+            "rx_call": "",
+            "rx_active": False,
             "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         }
         self.bridge_workers[w_id] = worker_entry
@@ -1094,6 +1219,8 @@ usrpAGC = -20,10,100
 
     def retune_primary_bridge(self, tg: int, slot: int = 2) -> dict:
         """Dynamically retunes the primary Analog_Bridge to a new talkgroup without restart."""
+        self.primary_tg = tg
+        self.primary_slot = slot
         self.current_tx_tg = tg
         self.current_tx_slot = slot
         self.config["primary_tg"] = tg
@@ -1114,13 +1241,13 @@ usrpAGC = -20,10,100
         }
 
     async def run_worker_pcm_rx_loop(self, worker_id: str):
-        """Asynchronously receives decoded PCM from an on-demand worker socket."""
+        """Asynchronously receives decoded PCM and TLV metadata from an on-demand worker socket."""
         w = self.bridge_workers.get(worker_id)
         if not w:
             return
         sock = w.get("rx_sock")
-        tg = w.get("tg")
-        slot = w.get("slot", 2)
+        tg = int(w.get("tg", 0))
+        slot = int(w.get("slot", 2))
         loop = asyncio.get_running_loop()
         logger.info(f"📻 Worker {worker_id} started PCM Rx loop on UDP port {w.get('usrp_tx_port')}")
         while self.running and worker_id in self.bridge_workers:
@@ -1131,26 +1258,76 @@ usrpAGC = -20,10,100
                     magic, seq, mem, key_flag, hdr_tg = struct.unpack(">4sIIII", data[:20])
                     usrp_type, = struct.unpack("<I", data[20:24])
                     pcm_payload = data[32:]
-                    if usrp_type == 2:
+                    if usrp_type == 2 and len(pcm_payload) > 0:
+                        tlv_info = parse_set_info_tlv(pcm_payload)
+                        if tlv_info:
+                            w_src = tlv_info["src"]
+                            w_tg = tlv_info["tg"] or tg
+                            w_slot = tlv_info["slot"] or slot
+                            raw_call = (tlv_info["callsign"] or "").strip()
+                            if not raw_call or raw_call.isdigit() or raw_call == str(w_src):
+                                w_call = lookup_callbook_callsign(w_src) or raw_call or f"ID-{w_src}"
+                            else:
+                                w_call = raw_call
+                            w["rx_src"] = w_src
+                            w["rx_call"] = w_call
+                            self.active_talkers_by_tg[w_tg] = {
+                                "src": w_src,
+                                "callsign": w_call,
+                                "slot": w_slot,
+                                "time": time.time()
+                            }
                         continue
+
+                    # Resolve talker identity for this worker's TG
+                    talker_info = self.active_talkers_by_tg.get(tg, {})
+                    active_src = w.get("rx_src") or talker_info.get("src") or self.current_rx_src or self.last_rx_src
+                    if not active_src:
+                        active_src = int(self.config.get("server_dmr_id", 5109999))
+                    active_call = w.get("rx_call") or talker_info.get("callsign") or lookup_callbook_callsign(active_src) or f"ID-{active_src}"
+
+                    # Avoid echoing primary bridge if primary bridge is already decoding this exact TG
+                    primary_tg_locked = int(self.primary_tg or self.config.get("primary_tg", 1025))
+                    if self.current_rx_active and self.current_rx_tg == tg and tg == primary_tg_locked:
+                        continue
+
                     if key_flag == 1 and len(pcm_payload) >= 320:
+                        w["rx_active"] = True
                         try:
-                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, tg, 5109999, slot, 0) + pcm_payload
+                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, tg, active_src, slot, 0) + pcm_payload
                             self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
                         except Exception:
-                            pass
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                pass
                         asyncio.create_task(self.dispatch_event_to_backend({
                             "network": f"Analog_Bridge (Worker TG {tg})",
                             "host": "127.0.0.1",
-                            "src_id": 5109999,
+                            "src_id": active_src,
                             "dst_tg": tg,
                             "slot": slot,
-                            "callsign": f"TG-{tg}",
+                            "callsign": active_call,
                             "is_tx": False,
                             "is_transmitting": True,
                             "data_type": 1,
-                            "pcm": base64.b64encode(pcm_payload).decode("ascii")
+                            "payload": pcm_payload
                         }))
+                    elif key_flag == 0 and w.get("rx_active"):
+                        w["rx_active"] = False
+                        asyncio.create_task(self.dispatch_event_to_backend({
+                            "network": f"Analog_Bridge (Worker TG {tg})",
+                            "host": "127.0.0.1",
+                            "src_id": active_src,
+                            "dst_tg": tg,
+                            "slot": slot,
+                            "callsign": active_call,
+                            "is_tx": False,
+                            "is_transmitting": False,
+                            "data_type": 2
+                        }))
+                        w["rx_src"] = 0
+                        w["rx_call"] = ""
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -1235,23 +1412,28 @@ usrpAGC = -20,10,100
                     logger.error(f"Failed to restore worker for TG {tg}: {e}")
 
     async def run_ptt_carrier_watchdog(self):
-        """Monitors active PTT carrier and auto-unkeys if no audio frame arrives for >0.6s (prevents stuck TX/loops)."""
+        """Monitors active PTT carrier and auto-unkeys if no audio frame arrives after startup grace period."""
         while self.running:
             await asyncio.sleep(0.1)
-            if self.is_transmitting and (time.time() - self.last_audio_tx_time > 0.6):
-                logger.info(f"[PTT-Watchdog] ⏹️ Audio silence detected (>0.6s). Auto-releasing carrier PTT.")
-                self.stop_carrier_tx()
-                asyncio.create_task(self.dispatch_event_to_backend({
-                    "network": "DVSwitch Mobile / USRP (32345)",
-                    "host": "auto-watchdog",
-                    "src_id": self.current_tx_dmr_id or 1022057,
-                    "dst_tg": self.current_tx_tg or 510,
-                    "slot": self.current_tx_slot or 2,
-                    "callsign": self.current_operator_callsign or "N1NJA",
-                    "is_tx": False,
-                    "is_transmitting": False,
-                    "data_type": 2
-                }))
+            if self.is_transmitting:
+                now = time.time()
+                # Allow 2.5s startup grace period for browser getUserMedia() / WebAudio initialization
+                if now - getattr(self, "current_tx_start_time", 0.0) < 2.5:
+                    continue
+                if now - self.last_audio_tx_time > 1.2:
+                    logger.info(f"[PTT-Watchdog] ⏹️ Audio silence detected (>1.2s). Auto-releasing carrier PTT.")
+                    self.stop_carrier_tx()
+                    asyncio.create_task(self.dispatch_event_to_backend({
+                        "network": "DVSwitch Mobile / USRP (32345)",
+                        "host": "auto-watchdog",
+                        "src_id": self.current_tx_dmr_id or 1022057,
+                        "dst_tg": self.current_tx_tg or self.primary_tg or 510,
+                        "slot": self.current_tx_slot or 2,
+                        "callsign": self.current_operator_callsign or "N1NJA",
+                        "is_tx": False,
+                        "is_transmitting": False,
+                        "data_type": 2
+                    }))
 
     async def run_process_watchdog(self):
         """Monitors DVSwitch daemons and restarts them if they terminate unexpectedly."""
@@ -1314,7 +1496,7 @@ usrpAGC = -20,10,100
                             dst = int(m.group(2))
                             raw_slot = int(m.group(3))
                             slot = 1 if raw_slot <= 1 else 2
-                            call = m.group(4).strip() if (m.lastindex and m.lastindex >= 4 and m.group(4)) else f"ID-{src}"
+                            call = m.group(4).strip() if (m.lastindex and m.lastindex >= 4 and m.group(4)) else (lookup_callbook_callsign(src) or f"ID-{src}")
                             if src > 0 and dst > 0:
                                 self.current_rx_src = src
                                 self.current_rx_tg = dst
@@ -1322,6 +1504,13 @@ usrpAGC = -20,10,100
                                 self.current_rx_call = call
                                 self.current_rx_time = time.time()
                                 self.current_rx_active = True
+                                self.last_rx_src = src
+                                self.active_talkers_by_tg[dst] = {
+                                    "src": src,
+                                    "callsign": call,
+                                    "slot": slot,
+                                    "time": self.current_rx_time
+                                }
                                 logger.info(f"🎙️ DMR Active Call: Call={call} ID={src} -> TG={dst} (Slot {slot})")
 
                 # 2. MMDVM_Bridge log follower
@@ -1352,7 +1541,7 @@ usrpAGC = -20,10,100
                             dst = int(sm.group(3))
                             if raw_src.isdigit():
                                 src = int(raw_src)
-                                call = f"ID-{src}"
+                                call = lookup_callbook_callsign(src) or f"ID-{src}"
                             else:
                                 call = raw_src
                                 digits_only = re.sub(r'\D', '', raw_src)
@@ -1365,6 +1554,13 @@ usrpAGC = -20,10,100
                                 self.current_rx_call = call
                                 self.current_rx_time = time.time()
                                 self.current_rx_active = True
+                                self.last_rx_src = src
+                                self.active_talkers_by_tg[dst] = {
+                                    "src": src,
+                                    "callsign": call,
+                                    "slot": slot,
+                                    "time": self.current_rx_time
+                                }
                                 logger.info(f"🎙️ MMDVM Call Header: {call} ({src}) -> TG={dst} (Slot {slot})")
 
                         em = mmdvm_end_pat.search(mline)
@@ -1415,24 +1611,20 @@ usrpAGC = -20,10,100
     async def run_ab_pcm_rx_loop(self):
         """
         Receives pure, authentic 8kHz 16-bit PCM USRP frames decoded by Analog_Bridge + md380-emu.
-        Dispatches directly to Web Audio and Mumble VoIP.
+        Dispatches directly to Web Audio, Mumble VoIP, and DVSwitch Mobile clients.
         """
         loop = asyncio.get_running_loop()
         logger.info("📻 Started DVSwitch PCM Audio Rx loop.")
+        last_tlv_push_time = 0.0
         while self.running:
             try:
                 data, _ = await loop.sock_recvfrom(self.ab_pcm_sock, 2048)
                 if len(data) >= 32 and data.startswith(b"USRP"):
                     self.rx_packet_count += 1
-                    # DVSwitch USRP Protocol:
-                    # 0..4: b'USRP', 4..8: seq, 8..12: mem, 12..16: key_flag (1=keyed, 0=unkey),
-                    # 16..20: talkgroup, 20..24: usrp_type (0=VOICE, 2=TEXT/METADATA), 24..32: mpxid, res
                     magic, seq, mem, key_flag, talkgroup = struct.unpack(">4sIIII", data[:20])
                     usrp_type, = struct.unpack("<I", data[20:24])
                     mpxid, res = struct.unpack(">II", data[24:32])
                     pcm_payload = data[32:]
-
-                    # Metadata and audio dispatch will occur after parsing talker and TG info below
 
                     # Handle USRP_TYPE_TEXT (2) metadata packets exported by Analog_Bridge
                     if usrp_type == 2 and len(pcm_payload) > 0:
@@ -1444,21 +1636,36 @@ usrpAGC = -20,10,100
                                 self.current_rx_tg = tlv_info["tg"]
                                 self.current_rx_slot = tlv_info["slot"]
                                 raw_call = (tlv_info["callsign"] or "").strip()
-                                if not raw_call or raw_call.isdigit() or raw_call == str(self.current_rx_src):
-                                    resolved_call = lookup_callbook_callsign(tlv_info["src"])
-                                    self.current_rx_call = resolved_call if resolved_call else (raw_call or f"ID-{tlv_info['src']}")
+                                cb_call_full = lookup_callbook_callsign(tlv_info["src"], include_name=True)
+                                cb_call_only = lookup_callbook_callsign(tlv_info["src"], include_name=False)
+                                if cb_call_only:
+                                    self.current_rx_call = cb_call_only
+                                    mobile_display_call = cb_call_full or cb_call_only
+                                elif raw_call and not raw_call.isdigit() and raw_call != str(self.current_rx_src):
+                                    self.current_rx_call = raw_call.split()[0]
+                                    mobile_display_call = raw_call
                                 else:
-                                    self.current_rx_call = raw_call
+                                    self.current_rx_call = f"ID-{tlv_info['src']}"
+                                    mobile_display_call = self.current_rx_call
+
                                 self.last_rx_src = tlv_info["src"]
+                                self.active_talkers_by_tg[self.current_rx_tg] = {
+                                    "src": self.current_rx_src,
+                                    "callsign": self.current_rx_call,
+                                    "slot": self.current_rx_slot,
+                                    "time": time.time()
+                                }
                                 logger.info(f"📋 USRP TLV SET_INFO: Call={self.current_rx_call} ID={self.current_rx_src} TG={self.current_rx_tg} (Slot {self.current_rx_slot})")
-                                # Forward TLV metadata AND standard ASCII metadata to DVSwitch Mobile clients immediately
+                                # Forward clean 320-byte padded TLV SET_INFO to DVSwitch Mobile clients (never overwrite with non-standard ASCII src=...)
                                 try:
-                                    tlv_fwd = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, pcm_payload)
-                                    self.broadcast_to_usrp_clients(tlv_fwd)
-                                    ascii_meta = f"src={self.current_rx_src} rpt=0 dst={self.current_rx_tg} slot={self.current_rx_slot} cc=1 metadata={self.current_rx_call}\x00".encode("ascii")
-                                    self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, ascii_meta))
+                                    rpt_id = int(self.config.get("server_dmr_id", 5109999))
+                                    rich_tlv = build_set_info_tlv(
+                                        self.current_rx_src, rpt_id, self.current_rx_tg, self.current_rx_slot, 1, mobile_display_call, pad_320=True
+                                    )
+                                    self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, rich_tlv))
+                                    last_tlv_push_time = time.time()
                                 except Exception as ex:
-                                    logger.debug(f"Error broadcasting TLV/ASCII to DVSwitch: {ex}")
+                                    logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
                             else:
                                 meta_str = pcm_payload.decode("ascii", errors="ignore").strip()
                                 logger.info(f"📋 USRP Text Metadata: {meta_str}")
@@ -1474,42 +1681,51 @@ usrpAGC = -20,10,100
                                     self.current_rx_tg = int(m_tg.group(1))
                         except Exception as e:
                             logger.debug(f"Metadata parse note: {e}")
-                        continue  # Do not pass text metadata packet as audio stream
+                        continue
 
                     # Resolve incoming talker info (never use operator's own identity as RX talker)
-                    primary_tg = int(self.config.get("primary_tg", 1025))
+                    primary_tg = int(self.primary_tg or self.config.get("primary_tg", 1025))
                     active_tg = self.current_rx_tg if self.current_rx_tg > 0 else (talkgroup if (0 < talkgroup < 16777215) else primary_tg)
-                    active_slot = self.current_rx_slot if self.current_rx_slot > 0 else 2
-                    active_src = self.current_rx_src if self.current_rx_src > 0 else self.last_rx_src
-                    active_call = self.current_rx_call or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
+                    talker_for_tg = self.active_talkers_by_tg.get(active_tg, {})
+                    active_slot = self.current_rx_slot if self.current_rx_slot > 0 else (talker_for_tg.get("slot") or 2)
+                    active_src = self.current_rx_src if self.current_rx_src > 0 else (talker_for_tg.get("src") or self.last_rx_src)
+                    active_call = self.current_rx_call or talker_for_tg.get("callsign") or (lookup_callbook_callsign(active_src) if active_src > 0 else None) or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
 
-                    # If this is the start of an incoming voice burst, ensure DVSwitch clients receive SET_INFO metadata (both TLV & ASCII):
-                    if not self.current_rx_active:
+                    now = time.time()
+                    # Ensure DVSwitch Mobile clients receive 320B-padded TLV SET_INFO on burst start and every 1.0s for late-joiners
+                    if (not self.current_rx_active or (now - last_tlv_push_time > 1.0)) and active_src > 0:
                         try:
-                            tlv_burst = build_set_info_tlv(active_src, 5109999, active_tg, active_slot, 1, active_call)
+                            rpt_id = int(self.config.get("server_dmr_id", 5109999))
+                            mobile_call = lookup_callbook_callsign(active_src, include_name=True) or active_call
+                            tlv_burst = build_set_info_tlv(active_src, rpt_id, active_tg, active_slot, 1, mobile_call, pad_320=True)
                             self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, tlv_burst))
-                            ascii_burst = f"src={active_src} rpt=0 dst={active_tg} slot={active_slot} cc=1 metadata={active_call}\x00".encode("ascii")
-                            self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, ascii_burst))
+                            last_tlv_push_time = now
                         except Exception:
                             pass
 
                     # Refresh active timestamp while receiving audio packets
-                    self.current_rx_time = time.time()
+                    self.current_rx_time = now
                     self.current_rx_active = True
 
-                    # 1. Forward tagged PCM frame to Mumble bridge (UDP 12346)
-                    # We pack active_tg into field 3 so Mumble router knows which room bot should play it!
-                    if len(pcm_payload) >= 320:
-                        try:
-                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, active_tg, active_src, active_slot, 0) + pcm_payload
-                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                        except Exception:
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                pass
+                    # Determine all target TGs (including any cross-TG translations from TG Matrix)
+                    routed_tgs = [(active_tg, active_slot)]
+                    for mt in get_matrix_translated_targets(active_tg, active_slot):
+                        t_pair = (mt["tg"], mt["slot"])
+                        if mt["tg"] > 0 and t_pair not in routed_tgs:
+                            routed_tgs.append(t_pair)
 
-                        # 2. Forward standard voice frame to external USRP clients (DVSwitch Mobile)
+                    if len(pcm_payload) >= 320:
+                        for r_tg, r_slot in routed_tgs:
+                            try:
+                                mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, r_tg, active_src, r_slot, 0) + pcm_payload
+                                self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                try:
+                                    self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                                except Exception:
+                                    pass
+
+                        # Forward standard voice frame to external USRP clients (DVSwitch Mobile)
                         try:
                             usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, pcm_payload)
                             self.broadcast_to_usrp_clients(usrp_mobile_pkt)
@@ -1518,17 +1734,18 @@ usrpAGC = -20,10,100
 
                     # Dispatch event to backend API for Web Audio player
                     if key_flag == 1 and len(pcm_payload) >= 320:
-                        traffic_event = {
-                            "network": f"DMR Master ({self.active_peer_host})",
-                            "src_id": active_src,
-                            "dst_tg": active_tg,
-                            "slot": active_slot,
-                            "callsign": active_call,
-                            "payload": pcm_payload,
-                            "data_type": 1,
-                            "is_tx": False
-                        }
-                        asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+                        for r_tg, r_slot in routed_tgs:
+                            traffic_event = {
+                                "network": f"DMR Master ({self.active_peer_host})",
+                                "src_id": active_src,
+                                "dst_tg": r_tg,
+                                "slot": r_slot,
+                                "callsign": active_call,
+                                "payload": pcm_payload,
+                                "data_type": 1,
+                                "is_tx": False
+                            }
+                            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
                     elif key_flag == 0:
                         # Voice Terminator
                         try:
@@ -1536,16 +1753,17 @@ usrpAGC = -20,10,100
                             self.broadcast_to_usrp_clients(unkey_fwd)
                         except Exception:
                             pass
-                        traffic_event = {
-                            "network": f"DMR Master ({self.active_peer_host})",
-                            "src_id": active_src,
-                            "dst_tg": active_tg,
-                            "slot": active_slot,
-                            "callsign": active_call,
-                            "data_type": 2,
-                            "is_tx": False
-                        }
-                        asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+                        for r_tg, r_slot in routed_tgs:
+                            traffic_event = {
+                                "network": f"DMR Master ({self.active_peer_host})",
+                                "src_id": active_src,
+                                "dst_tg": r_tg,
+                                "slot": r_slot,
+                                "callsign": active_call,
+                                "data_type": 2,
+                                "is_tx": False
+                            }
+                            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
                         self.current_rx_active = False
                         self.current_rx_tg = 0
                         self.current_rx_src = 0
@@ -1555,7 +1773,7 @@ usrpAGC = -20,10,100
                     logger.debug(f"ab_pcm_rx_loop note: {e}")
                     await asyncio.sleep(0.01)
 
-    def send_set_info_to_ab(self, src: int, callsign: str, tg: int, slot: int):
+    def send_set_info_to_ab(self, src: int, callsign: str, tg: int, slot: int, port: int = AB_USRP_RX_PORT):
         """Sends official DVSwitch TLV SET_INFO frame to Analog_Bridge before audio frames."""
         try:
             rpt_id = int(self.config.get("server_dmr_id", 102205798))
@@ -1563,15 +1781,89 @@ usrpAGC = -20,10,100
             tlv = build_set_info_tlv(src, rpt_id, tg, slot, cc, callsign)
             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
             pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv)
-            self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
-            logger.info(f"📋 Sent TLV SET_INFO to Analog_Bridge: {callsign} ({src}) -> TG {tg} Slot {slot}")
+            self.bridge_sock.sendto(pkt, ("127.0.0.1", port))
+            logger.info(f"📋 Sent TLV SET_INFO to Analog_Bridge (port {port}): {callsign} ({src}) -> TG {tg} Slot {slot}")
         except Exception as e:
             logger.debug(f"Failed to send SET_INFO: {e}")
+
+    def initialize_dvswitch_client(self, addr: tuple, seq: int = 1, force: bool = False):
+        """
+        Pushes automatic DMR mode selection, available modes, INFO JSON, and initial TLV SET_INFO
+        (Callsign, DMR ID, and active Talkgroup) to a connected DVSwitch Mobile / USRP client.
+        Works even when DVSwitch Mobile connects without sending 'REG:' first!
+        """
+        if not self.usrp_ingress_sock or addr[0] == "127.0.0.1":
+            return
+        now = time.time()
+        last_init = self.initialized_usrp_clients.get(addr, 0.0)
+        if not force and (now - last_init < 30.0):
+            return
+        self.initialized_usrp_clients[addr] = now
+
+        try:
+            meta = self.client_metadata.get(addr) or self.client_metadata.get(addr[0], {})
+            primary_tg_val = int(meta.get("tg") or self.primary_tg or self.config.get("primary_tg") or self.config.get("default_tg", 1025))
+            slot_val = int(meta.get("slot") or self.primary_slot or 2)
+            op_id = int(meta.get("src") or self.current_operator_dmr_id or self.config.get("server_dmr_id", 1022057))
+            op_call = (
+                meta.get("callsign")
+                or lookup_callbook_callsign(op_id, include_name=False)
+                or self.current_operator_callsign
+                or str(self.config.get("server_callsign", "BD62BOT"))
+            )
+            rpt_id = int(self.config.get("server_dmr_id", 5109999))
+            cc_val = int(self.config.get("color_code", 1))
+
+            # 1. Advertise modes & force DMR mode via both USRP TEXT and TLV Tag 5 (Remote Command)
+            modes_reply = b'MODES:["DMR", "DSTAR", "NXDN", "P25", "YSF"]\x00'
+            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, modes_reply), addr)
+            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
+            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 3, 0, USRP_TYPE_TEXT, f"TG:{primary_tg_val}\x00".encode("ascii")), addr)
+
+            cmd_mode1 = b"mode=DMR"
+            tlv_mode1 = struct.pack("BB", 5, len(cmd_mode1)) + cmd_mode1
+            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 4, 0, USRP_TYPE_TEXT, tlv_mode1), addr)
+
+            # 2. Send full Analog_Bridge INFO JSON declaring DMR mode, callsign, and active TG
+            info_dict = {
+                "ab": "Analog_Bridge",
+                "tlv": {
+                    "ambe_mode": "DMR",
+                    "ambe_size": 72,
+                    "ip": "127.0.0.1",
+                    "rx_port": AB_AMBE_RX_PORT,
+                    "tx_port": AB_AMBE_TX_PORT
+                },
+                "digital": {
+                    "call": op_call,
+                    "gw": op_id,
+                    "rpt": rpt_id,
+                    "tg": primary_tg_val,
+                    "ts": slot_val,
+                    "cc": cc_val
+                },
+                "usrp": {
+                    "rx_port": USRP_AUDIO_PORT,
+                    "tx_port": USRP_AUDIO_PORT
+                },
+                "last_tune": str(primary_tg_val)
+            }
+            info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
+            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 5, 0, USRP_TYPE_TEXT, info_bytes), addr)
+
+            # 3. Send 320-byte padded TLV_TAG_SET_INFO (0x08) so DVSwitch Mobile displays Callsign & TG on screen immediately
+            display_call = f"{op_call} TG {primary_tg_val}"[:24]
+            tlv_init = build_set_info_tlv(op_id, rpt_id, primary_tg_val, slot_val, cc_val, display_call, pad_320=True)
+            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 6, 0, USRP_TYPE_TEXT, tlv_init), addr)
+
+            logger.info(f"📱 Initialized DVSwitch Mobile client at {addr} -> Mode: DMR, Call: {op_call} ({op_id}), TG: {primary_tg_val} TS{slot_val}")
+        except Exception as ex:
+            logger.debug(f"initialize_dvswitch_client note: {ex}")
 
     async def run_usrp_ingress_loop(self):
         """
         Receives USRP frames from Web App PTT, Mumble Bridge, or DVSwitch Mobile,
-        normalizes the header to official DVSwitch standard, and forwards to Analog_Bridge (UDP 32000).
+        normalizes the header to official DVSwitch standard, and forwards to Analog_Bridge (UDP 32000 or Worker port).
         """
         loop = asyncio.get_running_loop()
         logger.info("📱 Started USRP Ingress loop.")
@@ -1580,14 +1872,16 @@ usrpAGC = -20,10,100
                 data, addr = await loop.sock_recvfrom(self.usrp_ingress_sock, 2048)
                 if len(data) >= 32 and data.startswith(b"USRP"):
                     self.tx_packet_count += 1
+                    is_new_client = addr not in self.registered_usrp_clients
                     self.registered_usrp_clients[addr] = time.time()
-                    self.last_audio_tx_time = time.time()
-                    self.last_ptt_heartbeat_time = time.time()
 
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                     payload = data[32:]
                     packet_type = (dmr_id >> 24) & 0xFF
-                    is_control_pkt = (key_flag == 0) or (packet_type in [USRP_TYPE_TEXT, 4])
+                    is_control_pkt = (key_flag == 0) or (packet_type in [USRP_TYPE_TEXT, 4, 3])
+
+                    if is_new_client and addr[0] != "127.0.0.1":
+                        self.initialize_dvswitch_client(addr, seq, force=True)
 
                     if is_control_pkt or key_flag == 0 or len(payload) != 320:
                         logger.info(f"🔍 [USRP-RAW] from {addr}: key={key_flag}, type={packet_type}, tg={tg}, dmr_id={dmr_id}, slot={slot}, len={len(payload)}, hex={payload[:64].hex()}")
@@ -1596,126 +1890,46 @@ usrpAGC = -20,10,100
                     if payload.startswith(b"REG:"):
                         if b"UNREG" in payload:
                             self.registered_usrp_clients.pop(addr, None)
+                            self.initialized_usrp_clients.pop(addr, None)
                             self.client_metadata.pop(addr, None)
                             reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:UNREG\x00")
+                            try:
+                                self.usrp_ingress_sock.sendto(reply_pkt, addr)
+                            except Exception:
+                                pass
                             logger.info(f"📱 DVSwitch Mobile client UNREGISTERED from {addr}")
                         else:
                             self.registered_usrp_clients[addr] = time.time()
                             logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({payload.decode('ascii', errors='ignore').strip()})")
-                            primary_tg_val = self.current_tx_tg or int(self.config.get("primary_tg", 0)) or int(self.config.get("default_tg", 510))
-
-                            # 1. Standard REG:OK acknowledgment
                             reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
                             try:
                                 self.usrp_ingress_sock.sendto(reply_pkt, addr)
                             except Exception:
                                 pass
-
-                            # 2. Automatically command DVSwitch Mobile client to switch mode to DMR
-                            try:
-                                # Mode command strings recognized by DVSwitch Mobile, pyUC & USRP clients
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 3, 0, USRP_TYPE_TEXT, f"TG:{primary_tg_val}\x00".encode("ascii")), addr)
-
-                                # TLV Tag 5 (Remote Command) mode=DMR and *DMR
-                                cmd_mode1 = b"mode=DMR"
-                                tlv_mode1 = struct.pack("BB", 5, len(cmd_mode1)) + cmd_mode1
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 4, 0, USRP_TYPE_TEXT, tlv_mode1), addr)
-
-                                cmd_mode2 = b"*DMR"
-                                tlv_mode2 = struct.pack("BB", 5, len(cmd_mode2)) + cmd_mode2
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 5, 0, USRP_TYPE_TEXT, tlv_mode2), addr)
-
-                                # 3. Send full INFO JSON declaring DMR mode and active talkgroup
-                                info_dict = {
-                                    "ab": "Analog_Bridge",
-                                    "tlv": {
-                                        "ambe_mode": "DMR",
-                                        "ambe_size": 72,
-                                        "ip": "127.0.0.1",
-                                        "rx_port": 31100,
-                                        "tx_port": 31103
-                                    },
-                                    "digital": {
-                                        "call": self.current_operator_callsign or "N1NJA",
-                                        "gw": int(self.config.get("server_dmr_id", 5109999)),
-                                        "rpt": int(self.config.get("server_dmr_id", 5109999)),
-                                        "tg": primary_tg_val,
-                                        "ts": self.current_tx_slot or 2,
-                                        "cc": int(self.config.get("color_code", 1))
-                                    },
-                                    "usrp": {
-                                        "rx_port": USRP_AUDIO_PORT,
-                                        "tx_port": USRP_AUDIO_PORT
-                                    },
-                                    "last_tune": str(primary_tg_val)
-                                }
-                                info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 6, 0, USRP_TYPE_TEXT, info_bytes), addr)
-                                logger.info(f"🎯 Automatically set mode -> DMR (TG {primary_tg_val}) for DVSwitch client {addr}")
-                            except Exception as ex:
-                                logger.debug(f"Auto DMR mode push note: {ex}")
+                            self.initialize_dvswitch_client(addr, seq, force=True)
                         continue
 
-                    if payload.startswith(b"PING"):
+                    if payload.startswith(b"PING") or packet_type == 3:
                         self.registered_usrp_clients[addr] = time.time()
                         try:
-                            # Send standard PONG with USRP_TYPE_PING (3)
                             pong_pkt = b"USRP" + struct.pack(">iiiiiii", seq & 0x7FFFFFFF, 0, 0, 0, 3 << 24, 0, 0) + b"PONG\x00"
                             self.usrp_ingress_sock.sendto(pong_pkt, addr)
                         except Exception:
                             pass
+                        self.initialize_dvswitch_client(addr, seq, force=False)
                         continue
 
                     if payload.startswith(b"MODES:"):
                         self.registered_usrp_clients[addr] = time.time()
-                        try:
-                            modes_reply = b'MODES:["DMR", "DSTAR", "NXDN", "P25", "YSF"]\x00'
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, modes_reply), addr)
-                            logger.info(f"✓ Replied MODES to DVSwitch client at {addr}")
-                        except Exception as ex:
-                            logger.debug(f"MODES reply note: {ex}")
+                        self.initialize_dvswitch_client(addr, seq, force=True)
                         continue
 
                     if payload.startswith(b"INFO:"):
                         self.registered_usrp_clients[addr] = time.time()
-                        try:
-                            primary_tg_val = self.current_tx_tg or int(self.config.get("primary_tg", 0)) or int(self.config.get("default_tg", 510))
-                            info_dict = {
-                                "ab": "Analog_Bridge",
-                                "tlv": {
-                                    "ambe_mode": "DMR",
-                                    "ambe_size": 72,
-                                    "ip": "127.0.0.1",
-                                    "rx_port": 31100,
-                                    "tx_port": 31103
-                                },
-                                "digital": {
-                                    "call": self.current_operator_callsign or "N1NJA",
-                                    "gw": int(self.config.get("server_dmr_id", 5109999)),
-                                    "rpt": int(self.config.get("server_dmr_id", 5109999)),
-                                    "tg": primary_tg_val,
-                                    "ts": self.current_tx_slot or 2,
-                                    "cc": int(self.config.get("color_code", 1))
-                                },
-                                "usrp": {
-                                    "rx_port": USRP_AUDIO_PORT,
-                                    "tx_port": USRP_AUDIO_PORT
-                                },
-                                "last_tune": str(primary_tg_val)
-                            }
-                            info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, info_bytes), addr)
-                        except Exception as ex:
-                            logger.debug(f"INFO reply note: {ex}")
+                        self.initialize_dvswitch_client(addr, seq, force=True)
                         continue
 
                     # Handle DTMF dialing / Talkgroup tuning from DVSwitch Mobile
-                    # Examples from DVSwitch Mobile:
-                    # - User enters "1025" and taps Send: packet_type == 1 (USRP_TYPE_DTMF), payload == b"1025\x00"
-                    # - Mode selection: b"*DMR\x00"
-                    # - Keypad tone strings: b"*1025#\x00"
                     if packet_type == 1 or (is_control_pkt and len(payload) > 0 and payload[0] not in [TLV_TAG_SET_INFO, 5, 3] and not payload.startswith(b"REG:") and not payload.startswith(b"PING") and not payload.startswith(b"INFO:") and not payload.startswith(b"MODES:")):
                         text_clean = payload.split(b"\x00")[0].decode("ascii", errors="ignore").strip()
                         if text_clean:
@@ -1724,12 +1938,9 @@ usrpAGC = -20,10,100
                                 if addr not in self.client_metadata:
                                     self.client_metadata[addr] = {}
                                 self.client_metadata[addr]["tg"] = dialed_tg
+                                self.client_metadata[addr[0]] = self.client_metadata[addr]
                                 logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {dialed_tg} via DTMF/Send ('{text_clean}')")
-                                try:
-                                    reply = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, f"TG:{dialed_tg}\x00".encode("ascii"))
-                                    self.usrp_ingress_sock.sendto(reply, addr)
-                                except Exception:
-                                    pass
+                                self.initialize_dvswitch_client(addr, seq, force=True)
                                 continue
                             elif text_clean.startswith("*"):
                                 digits = "".join([c for c in text_clean if c.isdigit()])
@@ -1738,14 +1949,16 @@ usrpAGC = -20,10,100
                                     if addr not in self.client_metadata:
                                         self.client_metadata[addr] = {}
                                     self.client_metadata[addr]["tg"] = dialed_tg
+                                    self.client_metadata[addr[0]] = self.client_metadata[addr]
                                     logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {dialed_tg} via DTMF *{digits}")
+                                    self.initialize_dvswitch_client(addr, seq, force=True)
                                     continue
                                 elif text_clean.upper() in ["*DMR", "*YSF", "*DSTAR", "*P25"]:
                                     logger.info(f"📱 DVSwitch Mobile ({addr}) mode selection: {text_clean}")
+                                    self.initialize_dvswitch_client(addr, seq, force=True)
                                     continue
 
                     # Handle remote talkgroup tuning / commands from DVSwitch Mobile
-                    # Supported: TLV Tag 5 (TLV_TAG_REMOTE_CMD), TLV Tag 3 (TLV_TAG_TG_TUNE), or ASCII (txTg=... or *<tg>)
                     cmd_str = ""
                     if len(payload) >= 3 and payload[0] == 5:  # TLV_TAG_REMOTE_CMD
                         cmd_len = payload[1]
@@ -1756,7 +1969,9 @@ usrpAGC = -20,10,100
                             if addr not in self.client_metadata:
                                 self.client_metadata[addr] = {}
                             self.client_metadata[addr]["tg"] = tune_val
+                            self.client_metadata[addr[0]] = self.client_metadata[addr]
                             logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {tune_val} via TLV_TAG_TG_TUNE")
+                            self.initialize_dvswitch_client(addr, seq, force=True)
                             continue
                     elif is_control_pkt and (payload.startswith(b"txTg=") or payload.startswith(b"*")):
                         cmd_str = payload.decode("ascii", errors="ignore").strip()
@@ -1771,6 +1986,7 @@ usrpAGC = -20,10,100
                                 self.client_metadata[addr]["tg"] = new_tg
                                 self.client_metadata[addr[0]] = self.client_metadata[addr]
                                 logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {new_tg} via remote command '{cmd_str}'")
+                                self.initialize_dvswitch_client(addr, seq, force=True)
                                 continue
                         elif cmd_str.startswith("*"):
                             digits = "".join([c for c in cmd_str if c.isdigit()])
@@ -1781,27 +1997,32 @@ usrpAGC = -20,10,100
                                 self.client_metadata[addr]["tg"] = new_tg
                                 self.client_metadata[addr[0]] = self.client_metadata[addr]
                                 logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {new_tg} via keypad '{cmd_str}'")
+                                self.initialize_dvswitch_client(addr, seq, force=True)
                                 continue
 
                     # Handle TLV SET_INFO (Identity carry-over from DVSwitch Mobile)
-                    # STRICT: Only process as TLV when is_control_pkt is True (never parse audio PCM as TLV!)
                     if is_control_pkt and len(payload) >= 14 and payload[0] == TLV_TAG_SET_INFO:
                         tlv_info = parse_set_info_tlv(payload)
                         if tlv_info:
                             existing = self.client_metadata.get(addr) or self.client_metadata.get(addr[0], {})
-                            if tlv_info.get("tg", 0) == 0 and existing.get("tg", 0) > 0:
-                                tlv_info["tg"] = existing["tg"]
+                            if tlv_info.get("tg", 0) == 0:
+                                tlv_info["tg"] = existing.get("tg", 0) or self.primary_tg or int(self.config.get("primary_tg", 1025))
                             if tlv_info.get("slot") not in (1, 2):
                                 tlv_info["slot"] = 2
+                            if (not tlv_info.get("callsign") or tlv_info["callsign"].isdigit()) and tlv_info.get("src", 0) > 0:
+                                cb_c = lookup_callbook_callsign(tlv_info["src"])
+                                if cb_c:
+                                    tlv_info["callsign"] = cb_c
                             self.client_metadata[addr] = tlv_info
                             self.client_metadata[addr[0]] = tlv_info
                             self.registered_usrp_clients[addr] = time.time()
                             logger.info(f"📱 DVSwitch client identity recorded from {addr}: {tlv_info['callsign']} (ID: {tlv_info['src']}, TG: {tlv_info['tg']}, Slot: {tlv_info['slot']})")
+                            self.initialize_dvswitch_client(addr, seq, force=True)
                         continue
 
                     # 2. Handle PTT Release / Unkey (key_flag == 0)
                     if key_flag == 0:
-                        default_fallback_tg = int(self.config.get("default_tg", 510))
+                        default_fallback_tg = int(self.primary_tg or self.config.get("default_tg", 510))
                         default_server_id = int(self.config.get("server_dmr_id", 5109999))
                         if self.is_transmitting or self.tx_identity_sent:
                             active_tg = self.current_tx_tg or tg or default_fallback_tg
@@ -1819,7 +2040,6 @@ usrpAGC = -20,10,100
                                 "is_transmitting": False,
                                 "data_type": 2
                             }))
-                        # Send unkey ack reply from 32345 to DVSwitch Mobile / USRP client
                         try:
                             ack_pkt = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
                             self.usrp_ingress_sock.sendto(ack_pkt, addr)
@@ -1828,7 +2048,10 @@ usrpAGC = -20,10,100
 
                     # 3. Handle PTT Key-down / Voice audio (key_flag == 1)
                     elif len(payload) > 0:
-                        default_fallback_tg = int(self.config.get("default_tg", 510))
+                        now = time.time()
+                        self.last_audio_tx_time = now
+                        self.last_ptt_heartbeat_time = now
+                        default_fallback_tg = int(self.primary_tg or self.config.get("default_tg", 510))
                         hdr_tg = tg if (0 < tg < 16777215) else 0
                         hdr_slot = slot if slot in [1, 2] else 2
                         hdr_dmr_id = dmr_id if (1000 < dmr_id < 16777215 and dmr_id != (USRP_TYPE_TEXT << 24) and packet_type == 0) else 0
@@ -1840,33 +2063,33 @@ usrpAGC = -20,10,100
 
                         if client_meta and (not hdr_dmr_id or client_meta.get("src") == hdr_dmr_id):
                             target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or self.current_operator_dmr_id or 1022057
-                            target_call = client_meta.get("callsign", "DVSWITCH")
+                            target_call = client_meta.get("callsign") or lookup_callbook_callsign(target_dmr_id) or "DVSWITCH"
                             target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
                             target_slot = hdr_slot if hdr_tg else meta_slot
                         elif hdr_dmr_id:
                             target_dmr_id = hdr_dmr_id
-                            target_call = lookup_callbook_callsign(target_dmr_id) or f"ID-{target_dmr_id}"
+                            target_call = lookup_callbook_callsign(target_dmr_id) or self.current_operator_callsign or f"ID-{target_dmr_id}"
                             target_tg = hdr_tg or default_fallback_tg
                             target_slot = hdr_slot
                         else:
                             target_dmr_id = self.current_operator_dmr_id or 1022057
-                            target_call = self.current_operator_callsign or "BD62BOT"
+                            target_call = self.current_operator_callsign or lookup_callbook_callsign(target_dmr_id) or "BD62BOT"
                             target_tg = hdr_tg or default_fallback_tg
                             target_slot = hdr_slot
 
                         # Server-Side TX Firewall check
                         is_allowed, reason = check_core_tx_permission(target_dmr_id, target_call, target_tg)
                         if not is_allowed:
-                            now = time.time()
                             if now - getattr(self, "_last_fw_alert_time", 0) > 3.0:
                                 self._last_fw_alert_time = now
                                 logger.warning(f"🛑 [TX-FIREWALL] Blocked PTT from {addr} ({target_call} - {target_dmr_id}) to TG {target_tg}: {reason}")
                             continue
 
-                        # Check if a dedicated on-demand worker is active for target_tg
+                        # Check if a dedicated on-demand worker is active for target_tg (FIXED: check "ab_proc", not "proc")
                         target_worker_port = AB_USRP_RX_PORT
                         for w in self.bridge_workers.values():
-                            if w.get("tg") == target_tg and w.get("proc") and w["proc"].poll() is None:
+                            ab_p = w.get("ab_proc")
+                            if w.get("tg") == target_tg and ab_p and ab_p.poll() is None:
                                 target_worker_port = w.get("usrp_rx_port", AB_USRP_RX_PORT)
                                 w["tx_packets"] = w.get("tx_packets", 0) + 1
                                 break
@@ -1875,20 +2098,14 @@ usrpAGC = -20,10,100
                             self.dmr_master_server.mark_local_transmission(target_dmr_id, target_tg, target_slot)
 
                         if not self.tx_identity_sent or not self.is_transmitting or self.current_tx_tg != target_tg or self.current_tx_dmr_id != target_dmr_id:
-                            self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot)
-                            if target_worker_port != AB_USRP_RX_PORT:
-                                try:
-                                    tlv = build_set_info_tlv(target_dmr_id, 5109999, target_tg, target_slot, 1, target_call)
-                                    pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv)
-                                    self.bridge_sock.sendto(pkt, ("127.0.0.1", target_worker_port))
-                                except Exception:
-                                    pass
+                            self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot, port=target_worker_port)
                             self.tx_identity_sent = True
                             self.is_transmitting = True
                             self.active_tx_client_addr = addr
                             self.current_tx_tg = target_tg
                             self.current_tx_slot = target_slot
                             self.current_tx_dmr_id = target_dmr_id
+                            self.current_tx_start_time = now
                             logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot}, Port: {target_worker_port})")
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
@@ -1918,6 +2135,9 @@ usrpAGC = -20,10,100
         for client_addr, last_seen in list(self.registered_usrp_clients.items()):
             if now - last_seen > 120:
                 del self.registered_usrp_clients[client_addr]
+                self.initialized_usrp_clients.pop(client_addr, None)
+                continue
+            if client_addr[0] == "127.0.0.1":
                 continue
             try:
                 self.usrp_ingress_sock.sendto(data, client_addr)
@@ -1931,7 +2151,6 @@ usrpAGC = -20,10,100
         if not self.http_session:
             return
         try:
-            import base64
             data_to_send = traffic.copy()
             if "payload" in data_to_send and isinstance(data_to_send["payload"], bytes):
                 data_to_send["payload_b64"] = base64.b64encode(data_to_send["payload"]).decode("ascii")
@@ -1962,14 +2181,12 @@ usrpAGC = -20,10,100
     def tune_remote(self, tg: int, slot: int):
         """Sends DVSwitch TLV Remote Command to dynamically tune txTg and txTs in Analog_Bridge."""
         try:
-            # 1. txTg
             cmd_tg = f"txTg={tg}".encode("ascii")
             tlv_tg = struct.pack("BB", 5, len(cmd_tg)) + cmd_tg
             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
             pkt_tg = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, tlv_tg)
             self.bridge_sock.sendto(pkt_tg, ("127.0.0.1", AB_USRP_RX_PORT))
 
-            # 2. txTs
             cmd_ts = f"txTs={slot}".encode("ascii")
             tlv_ts = struct.pack("BB", 5, len(cmd_ts)) + cmd_ts
             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
@@ -1982,23 +2199,32 @@ usrpAGC = -20,10,100
     async def start_carrier_tx(self, tg: int, slot: int, dmr_id: int = None, callsign: str = None):
         """Maintains active DMR transmission carrier while client streams audio, with strict PTT heartbeat and TOT watchdog."""
         target_dmr_id = dmr_id if (dmr_id and dmr_id > 0) else (self.current_operator_dmr_id or 1022057)
-        target_call = callsign or self.current_operator_callsign or "BD62BOT"
+        target_call = callsign or self.current_operator_callsign or lookup_callbook_callsign(target_dmr_id) or "BD62BOT"
+        now = time.time()
         self.is_transmitting = True
         self.current_tx_tg = tg
         self.current_tx_slot = slot
         self.current_tx_dmr_id = target_dmr_id
+        self.current_tx_start_time = now
+
+        # Route to dedicated worker if one exists for `tg`
+        target_worker_port = AB_USRP_RX_PORT
+        for w in self.bridge_workers.values():
+            ab_p = w.get("ab_proc")
+            if w.get("tg") == tg and ab_p and ab_p.poll() is None:
+                target_worker_port = w.get("usrp_rx_port", AB_USRP_RX_PORT)
+                break
 
         # Send SET_INFO immediately to inform Analog_Bridge of talker identity
-        self.send_set_info_to_ab(target_dmr_id, target_call, tg, slot)
+        self.send_set_info_to_ab(target_dmr_id, target_call, tg, slot, port=target_worker_port)
         self.tx_identity_sent = True
         if self.dmr_master_server:
             self.dmr_master_server.mark_local_transmission(target_dmr_id, tg, slot)
 
-        now = time.time()
         self.last_audio_tx_time = now
         self.last_ptt_heartbeat_time = now
         start_time = now
-        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot}) by ID {target_dmr_id} ({target_call})")
+        logger.info(f"🎙️ PTT Carrier Active -> TG {tg} (Slot {slot}, Port {target_worker_port}) by ID {target_dmr_id} ({target_call})")
 
         try:
             while self.is_transmitting and self.running:
@@ -2008,17 +2234,17 @@ usrpAGC = -20,10,100
                     logger.warning("⚠️ TX Time-Out-Timer (TOT 90s) reached! Auto-unkeying.")
                     break
 
-                # 2. PTT Heartbeat Watchdog: Only release if frontend heartbeat has stopped for > 2.0s
-                if now - self.last_ptt_heartbeat_time > 2.0:
-                    logger.info("⏹️ PTT Heartbeat timed out (>2.0s). Auto-releasing carrier.")
+                # 2. PTT Heartbeat Watchdog: Only release if frontend heartbeat has stopped for > 2.5s
+                if now - self.last_ptt_heartbeat_time > 2.5:
+                    logger.info("⏹️ PTT Heartbeat timed out (>2.5s). Auto-releasing carrier.")
                     break
 
-                # 3. Inter-burst fill: Send comfort silence during speech micro-gaps (> 50ms) to keep DMR carrier open
-                if now - self.last_audio_tx_time > 0.05:
+                # 3. Inter-burst fill: Send comfort silence only during genuine speech pauses (> 180ms after first audio arrives)
+                if (now - start_time > 0.35) and (now - self.last_audio_tx_time > 0.18):
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                     pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, b"\x00" * 320)
                     try:
-                        self.bridge_sock.sendto(pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                        self.bridge_sock.sendto(pkt, ("127.0.0.1", target_worker_port))
                     except Exception:
                         pass
                 await asyncio.sleep(0.02)
@@ -2076,50 +2302,112 @@ usrpAGC = -20,10,100
         self.arm_operator_identity(dmr_id, callsign, allow_restart=False)
 
     def stop_carrier_tx(self, tg: int = None, slot: int = None, dmr_id: int = None):
-        """Releases DMR PTT transmission and sends multiple unkey frames using official DVSwitch USRP format."""
+        """Releases DMR PTT transmission, sends unkey frames to target worker/primary, and restores Primary Gateway TG."""
         if not self.is_transmitting and not self.tx_identity_sent:
             return
         self.is_transmitting = False
         self.tx_identity_sent = False
         self.active_tx_client_addr = None
-        target_tg = tg or getattr(self, "current_tx_tg", 0)
-        target_slot = slot or getattr(self, "current_tx_slot", 2)
+        target_tg = tg or getattr(self, "current_tx_tg", 0) or self.primary_tg
+        target_slot = slot or getattr(self, "current_tx_slot", 2) or self.primary_slot
         target_dmr_id = dmr_id or getattr(self, "current_tx_dmr_id", 0)
-        logger.info(f"⏹️ PTT Carrier Released for TG {target_tg} Slot {target_slot} (ID {target_dmr_id}).")
+
+        target_worker_port = AB_USRP_RX_PORT
+        for w in self.bridge_workers.values():
+            ab_p = w.get("ab_proc")
+            if w.get("tg") == target_tg and ab_p and ab_p.poll() is None:
+                target_worker_port = w.get("usrp_rx_port", AB_USRP_RX_PORT)
+                break
+
+        logger.info(f"⏹️ PTT Carrier Released for TG {target_tg} Slot {target_slot} (ID {target_dmr_id}, Port {target_worker_port}).")
         for _ in range(3):
             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
             unkey_pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
             try:
-                self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", target_worker_port))
             except Exception:
                 pass
+
+        # Restore Primary Gateway back to its locked primary_tg if a temporary TX used the primary bridge for another TG
+        primary_tg_locked = int(self.primary_tg or self.config.get("primary_tg") or 1025)
+        primary_slot_locked = int(self.primary_slot or self.config.get("primary_slot") or 2)
+        self.current_tx_tg = 0
+        if target_worker_port == AB_USRP_RX_PORT and target_tg != primary_tg_locked:
+            self.send_set_info_to_ab(
+                src=int(self.config.get("server_dmr_id", 1022057)),
+                callsign=self.config.get("server_callsign", "BD62BOT"),
+                tg=primary_tg_locked,
+                slot=primary_slot_locked,
+                port=AB_USRP_RX_PORT
+            )
 
     def handle_dmr_master_traffic(self, traffic: dict):
         """Callback from HomeBrewMasterServer when an external hotspot or MMDVM_Bridge transmits."""
         try:
-            self.current_rx_src = traffic.get("src_id", 0)
-            self.current_rx_tg = traffic.get("dst_tg", 0)
-            self.current_rx_slot = traffic.get("slot", 2)
-            self.current_rx_time = time.time()
+            src_id = traffic.get("src_id", 0)
+            dst_tg = traffic.get("dst_tg", 0)
+            slot = traffic.get("slot", 2)
+            now = time.time()
+            callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
+
+            self.current_rx_src = src_id
+            self.current_rx_tg = dst_tg
+            self.current_rx_slot = slot
+            self.current_rx_call = callsign
+            self.current_rx_time = now
             self.current_rx_active = True
+            self.last_rx_src = src_id
             self.rx_packet_count += 1
 
-            # Forward raw DMRD packet to matching connected upstream peer clients ONLY if bridged in TG Matrix
+            if dst_tg > 0 and src_id > 0:
+                self.active_talkers_by_tg[dst_tg] = {
+                    "src": src_id,
+                    "callsign": callsign,
+                    "slot": slot,
+                    "time": now
+                }
+
             raw_packet = traffic.get("raw_packet")
+            # Build list of (target_tg, target_slot, packet_bytes) including manual TG Matrix cross-TG mappings
+            packets_to_route = [(dst_tg, slot, raw_packet)]
+            if raw_packet:
+                for mt in get_matrix_translated_targets(dst_tg, slot):
+                    t_tg = mt["tg"]
+                    t_slot = mt["slot"]
+                    if t_tg > 0 and (t_tg, t_slot) != (dst_tg, slot):
+                        translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
+                        packets_to_route.append((t_tg, t_slot, translated_pkt))
+                        self.active_talkers_by_tg[t_tg] = {
+                            "src": src_id,
+                            "callsign": callsign,
+                            "slot": t_slot,
+                            "time": now
+                        }
+                        # Also broadcast the translated TG to local hotspots on our DMR Master Server
+                        if self.dmr_master_server:
+                            self.dmr_master_server.broadcast_dmrd(translated_pkt)
+
+            # Forward DMRD packet(s) to matching connected upstream peer clients
             if raw_packet and self.peer_clients:
                 for peer_key, client in list(self.peer_clients.items()):
                     if client.state == "CONNECTED":
-                        if is_tg_bridged_to_peer(self.current_rx_tg, client.name, getattr(client, "subscribed_tgs", [])):
-                            client.send_raw_dmrd(raw_packet)
-                            logger.info(f"🚀 [BRIDGE-FORWARD] TG {self.current_rx_tg} forwarded to upstream peer '{client.name}' (Src: {self.current_rx_src})")
+                        sub_tgs = getattr(client, "subscribed_tgs", [])
+                        for r_tg, r_slot, r_pkt in packets_to_route:
+                            if is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
+                                # Send if peer subscribes to r_tg OR if there is an explicit TG Matrix route for r_tg
+                                if (not sub_tgs) or (r_tg in sub_tgs) or (r_tg != dst_tg) or get_matrix_translated_targets(r_tg, r_slot):
+                                    client.send_raw_dmrd(r_pkt)
+                                    if traffic.get("data_type") == 0:
+                                        logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
+                                    break
 
             # Dispatch traffic notification to backend for live monitor & web clients
             traffic_event = {
                 "network": traffic.get("network", "Local DMR Master (62031)"),
-                "src_id": self.current_rx_src,
-                "dst_tg": self.current_rx_tg,
-                "slot": self.current_rx_slot,
-                "callsign": traffic.get("callsign") or f"ID-{self.current_rx_src}",
+                "src_id": src_id,
+                "dst_tg": dst_tg,
+                "slot": slot,
+                "callsign": callsign,
                 "is_tx": False,
                 "data_type": traffic.get("data_type", 1)
             }
@@ -2191,7 +2479,7 @@ usrpAGC = -20,10,100
     def handle_peer_traffic(self, traffic: dict):
         """
         Handles incoming DMR traffic from upstream peer (e.g. BRIDI).
-        Suppresses loopback and broadcasts to local hotspots + MMDVM_Bridge (Web/Mumble).
+        Suppresses loopback, applies TG Matrix translations, and broadcasts to local hotspots + MMDVM_Bridge (Web/Mumble).
         """
         try:
             src_id = traffic.get("src_id", 0)
@@ -2199,6 +2487,7 @@ usrpAGC = -20,10,100
             slot = traffic.get("slot", 2)
             raw_packet = traffic.get("raw_packet")
             network_name = traffic.get("network", "Remote Peer")
+            now = time.time()
 
             # 1. Loopback suppression: if transmission originated locally, drop!
             if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id):
@@ -2208,13 +2497,42 @@ usrpAGC = -20,10,100
             if not is_tg_bridged_to_peer(dst_tg, network_name, [dst_tg]):
                 return
 
-            # 3. Forward DMRD frame to our local DMR Master Server
+            callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
+
+            # Update live RX metadata immediately so Analog_Bridge & Worker PCM loops know the caller even on late entry!
+            self.current_rx_src = src_id
+            self.current_rx_tg = dst_tg
+            self.current_rx_slot = slot
+            self.current_rx_call = callsign
+            self.current_rx_time = now
+            self.current_rx_active = True
+            self.last_rx_src = src_id
+            if dst_tg > 0 and src_id > 0:
+                self.active_talkers_by_tg[dst_tg] = {
+                    "src": src_id,
+                    "callsign": callsign,
+                    "slot": slot,
+                    "time": now
+                }
+
+            # 3. Forward DMRD frame (and any TG Matrix translated frames) to our local DMR Master Server
             # so all connected local hotspots and MMDVM_Bridge (Web Audio/Mumble) hear it!
             if self.dmr_master_server and raw_packet:
                 self.dmr_master_server.broadcast_dmrd(raw_packet)
+                for mt in get_matrix_translated_targets(dst_tg, slot):
+                    t_tg = mt["tg"]
+                    t_slot = mt["slot"]
+                    if t_tg > 0 and (t_tg, t_slot) != (dst_tg, slot):
+                        translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
+                        self.active_talkers_by_tg[t_tg] = {
+                            "src": src_id,
+                            "callsign": callsign,
+                            "slot": t_slot,
+                            "time": now
+                        }
+                        self.dmr_master_server.broadcast_dmrd(translated_pkt)
 
             # 4. Last heard & live traffic event to backend
-            callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
             traffic_event = {
                 "network": f"Peer: {network_name}",
                 "src_id": src_id,
@@ -2271,8 +2589,8 @@ usrpAGC = -20,10,100
             p_port = int(p.get("port", 62031))
             p_name = p.get("name") or p_host
             is_active = p.get("isActive", True)
-            peer_key = f"{p_host}:{p_port}"
-            client = self.peer_clients.get(peer_key)
+            peer_key = str(p.get("id") or f"{p_host}:{p_port}")
+            client = self.peer_clients.get(peer_key) or self.peer_clients.get(f"{p_host}:{p_port}")
 
             if client:
                 state = client.state
@@ -2327,7 +2645,7 @@ usrpAGC = -20,10,100
             meta = self.client_metadata.get((ip, port), {})
             call = meta.get("callsign", "")
             sid = meta.get("src", 0)
-            tg = meta.get("tg", 0)
+            tg = meta.get("tg", 0) or self.primary_tg
             is_client_tx = bool(self.is_transmitting and self.active_tx_client_addr == (ip, port))
             usrp_clients.append({
                 "ip": ip,
@@ -2375,8 +2693,10 @@ usrpAGC = -20,10,100
                 "is_transmitting": self.is_transmitting,
                 "operator_callsign": self.current_operator_callsign or self.config.get("server_callsign", "N1NJA"),
                 "operator_dmr_id": self.current_operator_dmr_id or self.config.get("server_dmr_id", 5109999),
-                "tx_tg": self.current_tx_tg or self.config.get("default_tg", 510),
-                "tx_slot": self.current_tx_slot or 2,
+                "primary_tg": self.primary_tg or self.config.get("primary_tg", 1025),
+                "primary_slot": self.primary_slot or 2,
+                "tx_tg": self.current_tx_tg or self.primary_tg or self.config.get("default_tg", 510),
+                "tx_slot": self.current_tx_slot or self.primary_slot or 2,
                 "rx_active": self.current_rx_active,
                 "rx_callsign": self.current_rx_call,
                 "rx_src": self.current_rx_src,

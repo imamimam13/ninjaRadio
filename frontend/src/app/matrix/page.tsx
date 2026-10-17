@@ -85,12 +85,16 @@ export default function MatrixPage() {
   const [tunePrimarySlot, setTunePrimarySlot] = useState(2);
   const [isTuning, setIsTuning] = useState(false);
 
-  // New Route Form
+  // New Route Form (Independent Rule & Manual TG Mapping)
   const [name, setName] = useState("");
   const [sourceMode, setSourceMode] = useState("DMR");
-  const [sourceTg, setSourceTg] = useState(510);
-  const [targetMode, setTargetMode] = useState("YSF");
-  const [targetTg, setTargetTg] = useState(51000);
+  const [sourceTg, setSourceTg] = useState(1025);
+  const [sourceSlot, setSourceSlot] = useState(2);
+  const [targetMode, setTargetMode] = useState("DMR");
+  const [targetTg, setTargetTg] = useState(510);
+  const [targetSlot, setTargetSlot] = useState(1);
+  const [bidirectional, setBidirectional] = useState(true);
+  const [autoSpawnWorker, setAutoSpawnWorker] = useState(false);
 
   // Edit Route State
   const [editingRoute, setEditingRoute] = useState<RouteItem | null>(null);
@@ -189,30 +193,90 @@ export default function MatrixPage() {
     }
   };
 
+  const applyPresetRule = (preset: "cross_tg" | "peer" | "webrtc" | "mumble") => {
+    if (preset === "cross_tg") {
+      setSourceMode("DMR");
+      setSourceTg(1025);
+      setSourceSlot(2);
+      setTargetMode("DMR");
+      setTargetTg(510);
+      setTargetSlot(1);
+      setBidirectional(true);
+      setName("Translasi Manual TG 1025 (TS2) <-> TG 510 (TS1)");
+    } else if (preset === "peer") {
+      setSourceMode("DMR");
+      setSourceTg(1025);
+      setSourceSlot(2);
+      setTargetMode("PEER");
+      setTargetTg(1025);
+      setTargetSlot(2);
+      setBidirectional(true);
+      setName("Rule Independen DMR Master <-> Upstream Peer TG 1025");
+    } else if (preset === "webrtc") {
+      setSourceMode("DMR");
+      setSourceTg(5109);
+      setSourceSlot(2);
+      setTargetMode("WEBRTC");
+      setTargetTg(5109);
+      setTargetSlot(2);
+      setBidirectional(true);
+      setAutoSpawnWorker(true);
+      setName("Rule Independen DMR <-> WebRTC/DVSwitch TG 5109");
+    } else if (preset === "mumble") {
+      setSourceMode("DMR");
+      setSourceTg(1025);
+      setSourceSlot(2);
+      setTargetMode("MUMBLE");
+      setTargetTg(1025);
+      setTargetSlot(2);
+      setBidirectional(true);
+      setName("Rule Independen DMR <-> Mumble VoIP TG 1025");
+    }
+  };
+
   const handleCreateRoute = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdminUnlocked) {
       handleToggleAdmin();
       return;
     }
-    if (!name) return;
+    const finalName =
+      name.trim() ||
+      `${sourceMode} TG ${sourceTg} (TS${sourceSlot}) ${bidirectional ? "<->" : "->"} ${targetMode} TG ${targetTg} (TS${targetSlot})`;
     try {
       const res = await fetch("/api/matrix", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name,
+          name: finalName,
           source_mode: sourceMode,
           source_tg: Number(sourceTg),
-          source_slot: 1,
+          source_slot: Number(sourceSlot),
           target_mode: targetMode,
           target_tg: Number(targetTg),
-          target_slot: 1,
+          target_slot: Number(targetSlot),
           is_active: true,
-          bidirectional: true,
+          bidirectional,
         }),
       });
       if (res.ok) {
+        if (autoSpawnWorker) {
+          try {
+            await fetch("/api/workers/spawn", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tg: Number(sourceTg), slot: Number(sourceSlot) }),
+            });
+            if (Number(targetTg) !== Number(sourceTg)) {
+              await fetch("/api/workers/spawn", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tg: Number(targetTg), slot: Number(targetSlot) }),
+              });
+            }
+            fetchWorkers();
+          } catch {}
+        }
         setName("");
         fetchRoutes();
         beepPlayer?.playTalkGrant();
@@ -471,76 +535,177 @@ export default function MatrixPage() {
           </div>
         </div>
 
-        {/* Add New Bridge Route */}
-        <div className="bg-[#0b121e] border border-cyan-900/40 rounded-2xl p-4 shadow-xl">
-          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400 mb-3 flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            Tambah Jembatan Cross-Network Baru
-          </h3>
-          <form onSubmit={handleCreateRoute} className="grid grid-cols-1 sm:grid-cols-6 gap-3">
-            <input
-              type="text"
-              placeholder="Nama Jembatan (misal: DMR Indo <-> YSF Room 51000)"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="sm:col-span-2 px-3 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-400"
-            />
-            
-            <div className="flex gap-2 sm:col-span-1">
-              <select
-                value={sourceMode}
-                onChange={(e) => setSourceMode(e.target.value)}
-                className="w-1/2 px-2 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-cyan-300 font-mono"
+        {/* Add New Bridge Route (Independent Rule & Manual TG Mapping) */}
+        <div className="bg-[#0b121e] border border-cyan-900/40 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+                <Plus className="w-4 h-4" />
+                Tambah Rule Independen & Manual Mapping TG (Cross-TG / Cross-Slot / Multi-Mode)
+              </h3>
+              <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                Buat rule routing independen atau translasi manual antar Talkgroup & Slot (contoh: DMR TG 1025 TS2 $\leftrightarrow$ DMR TG 510 TS1) tanpa perlu mengubah Settings.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => applyPresetRule("cross_tg")}
+                className="px-2.5 py-1 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 text-[10px] font-mono font-bold transition-all"
               >
-                <option>DMR</option>
-                <option>YSF</option>
-                <option>P25</option>
-                <option>ANALOG</option>
-                <option>CB</option>
-                <option>MUMBLE</option>
-              </select>
-              <input
-                type="number"
-                placeholder="Src TG"
-                value={sourceTg}
-                onChange={(e) => setSourceTg(Number(e.target.value))}
-                className="w-1/2 px-2 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono"
-              />
-            </div>
-
-            <div className="flex items-center justify-center text-slate-400 hidden sm:flex sm:col-span-1">
-              <ArrowLeftRight className="w-5 h-5 text-cyan-400 animate-pulse" />
-            </div>
-
-            <div className="flex gap-2 sm:col-span-1">
-              <select
-                value={targetMode}
-                onChange={(e) => setTargetMode(e.target.value)}
-                className="w-1/2 px-2 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-purple-300 font-mono"
+                + Preset: Translasi Manual TG
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPresetRule("peer")}
+                className="px-2.5 py-1 rounded-lg bg-amber-950/80 hover:bg-amber-900 border border-amber-800 text-amber-300 text-[10px] font-mono font-bold transition-all"
               >
-                <option>YSF</option>
-                <option>D-STAR</option>
-                <option>P25</option>
-                <option>ANALOG</option>
-                <option>CB</option>
-                <option>DMR</option>
-                <option>MUMBLE</option>
-              </select>
-              <input
-                type="number"
-                placeholder="Tgt TG"
-                value={targetTg}
-                onChange={(e) => setTargetTg(Number(e.target.value))}
-                className="w-1/2 px-2 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono"
-              />
+                + Preset: Rule Peer Independen
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPresetRule("webrtc")}
+                className="px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-800 text-indigo-300 text-[10px] font-mono font-bold transition-all"
+              >
+                + Preset: Rule WebRTC / DVSwitch
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPresetRule("mumble")}
+                className="px-2.5 py-1 rounded-lg bg-purple-950/80 hover:bg-purple-900 border border-purple-800 text-purple-300 text-[10px] font-mono font-bold transition-all"
+              >
+                + Preset: Rule Mumble VoIP
+              </button>
             </div>
+          </div>
 
-            <button
-              type="submit"
-              className="sm:col-span-1 py-2 px-3 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-heading font-black text-xs rounded-xl shadow-lg shadow-cyan-500/20 transition-all"
-            >
-              Simpan Bridge
-            </button>
+          <form onSubmit={handleCreateRoute} className="space-y-3">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
+              <div className="lg:col-span-3">
+                <label className="text-[10px] font-mono text-slate-400 uppercase block mb-1">Nama Rule / Jembatan</label>
+                <input
+                  type="text"
+                  placeholder="Otomatis jika dikosongkan (misal: DMR TG 1025 <-> DMR TG 510)"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              {/* SOURCE */}
+              <div className="lg:col-span-3 bg-[#060a12] p-2.5 rounded-xl border border-cyan-900/40">
+                <label className="text-[10px] font-mono text-cyan-400 font-bold uppercase block mb-1">
+                  Source (Asal Mode, TG & Slot)
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <select
+                    value={sourceMode}
+                    onChange={(e) => setSourceMode(e.target.value)}
+                    className="px-2 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-lg text-xs text-cyan-300 font-mono font-bold"
+                  >
+                    <option value="DMR">DMR</option>
+                    <option value="PEER">PEER</option>
+                    <option value="WEBRTC">WEBRTC</option>
+                    <option value="USRP">USRP</option>
+                    <option value="MUMBLE">MUMBLE</option>
+                    <option value="YSF">YSF</option>
+                    <option value="P25">P25</option>
+                    <option value="ANALOG">ANALOG</option>
+                    <option value="CB">CB</option>
+                  </select>
+                  <input
+                    type="number"
+                    placeholder="Src TG"
+                    value={sourceTg}
+                    onChange={(e) => setSourceTg(Number(e.target.value))}
+                    className="px-2 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-lg text-xs text-amber-300 font-mono font-bold"
+                  />
+                  <select
+                    value={sourceSlot}
+                    onChange={(e) => setSourceSlot(Number(e.target.value))}
+                    className="px-2 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-lg text-xs text-slate-200 font-mono"
+                  >
+                    <option value={1}>TS 1</option>
+                    <option value={2}>TS 2</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* DIRECTION */}
+              <div className="lg:col-span-1 flex flex-col items-center justify-center">
+                <button
+                  type="button"
+                  onClick={() => setBidirectional(!bidirectional)}
+                  className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-mono font-bold flex flex-col items-center gap-0.5 transition-all ${
+                    bidirectional
+                      ? "bg-cyan-950/70 border-cyan-700 text-cyan-300"
+                      : "bg-amber-950/70 border-amber-700 text-amber-300"
+                  }`}
+                  title="Klik untuk ubah 2 Arah (Bidirectional) atau 1 Arah (One-Way)"
+                >
+                  <ArrowLeftRight className="w-4 h-4" />
+                  <span>{bidirectional ? "2 ARAH" : "1 ARAH"}</span>
+                </button>
+              </div>
+
+              {/* TARGET */}
+              <div className="lg:col-span-3 bg-[#060a12] p-2.5 rounded-xl border border-purple-900/40">
+                <label className="text-[10px] font-mono text-purple-400 font-bold uppercase block mb-1">
+                  Target (Tujuan Mode, TG & Slot)
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <select
+                    value={targetMode}
+                    onChange={(e) => setTargetMode(e.target.value)}
+                    className="px-2 py-1.5 bg-[#05080f] border border-purple-900/60 rounded-lg text-xs text-purple-300 font-mono font-bold"
+                  >
+                    <option value="DMR">DMR</option>
+                    <option value="PEER">PEER</option>
+                    <option value="WEBRTC">WEBRTC</option>
+                    <option value="USRP">USRP</option>
+                    <option value="MUMBLE">MUMBLE</option>
+                    <option value="YSF">YSF</option>
+                    <option value="D-STAR">D-STAR</option>
+                    <option value="P25">P25</option>
+                    <option value="ANALOG">ANALOG</option>
+                    <option value="CB">CB</option>
+                  </select>
+                  <input
+                    type="number"
+                    placeholder="Tgt TG"
+                    value={targetTg}
+                    onChange={(e) => setTargetTg(Number(e.target.value))}
+                    className="px-2 py-1.5 bg-[#05080f] border border-purple-900/60 rounded-lg text-xs text-amber-300 font-mono font-bold"
+                  />
+                  <select
+                    value={targetSlot}
+                    onChange={(e) => setTargetSlot(Number(e.target.value))}
+                    className="px-2 py-1.5 bg-[#05080f] border border-purple-900/60 rounded-lg text-xs text-slate-200 font-mono"
+                  >
+                    <option value={1}>TS 1</option>
+                    <option value={2}>TS 2</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="lg:col-span-2 flex flex-col gap-1.5">
+                <label className="flex items-center gap-1.5 text-[10px] font-mono text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoSpawnWorker}
+                    onChange={(e) => setAutoSpawnWorker(e.target.checked)}
+                    className="rounded bg-slate-900 border-slate-700 text-cyan-500"
+                  />
+                  <span>Auto-Spawn Worker AB</span>
+                </label>
+                <button
+                  type="submit"
+                  className="w-full py-2.5 px-3 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-heading font-black text-xs rounded-xl shadow-lg shadow-cyan-500/20 transition-all"
+                >
+                  + Buat Rule
+                </button>
+              </div>
+            </div>
           </form>
         </div>
 
@@ -598,21 +763,38 @@ export default function MatrixPage() {
               {/* Route Path Patch Bay */}
               <div className="mt-3 flex items-center justify-between bg-[#05080f] p-3 rounded-xl border border-cyan-900/40 font-mono text-xs">
                 <div className="text-left">
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-cyan-950 text-cyan-300 border border-cyan-800 font-bold">
-                    {route.source_mode}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <span className="px-2 py-0.5 rounded text-[10px] bg-cyan-950 text-cyan-300 border border-cyan-800 font-bold">
+                      {route.source_mode}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-900 text-slate-300 border border-slate-700 font-bold">
+                      TS{route.source_slot || 1}
+                    </span>
+                  </div>
                   <div className="font-bold text-white text-sm mt-1">TG {route.source_tg}</div>
                 </div>
 
                 <div className="flex flex-col items-center">
                   <ArrowLeftRight className={`w-4 h-4 ${route.is_active ? "text-cyan-400 animate-pulse" : "text-slate-600"}`} />
-                  <span className="text-[9px] text-slate-500 font-bold">BIDIRECTIONAL</span>
+                  <span className="text-[9px] text-slate-400 font-bold">
+                    {route.bidirectional !== false ? "2 ARAH (BIDI)" : "1 ARAH (ONE-WAY)"}
+                  </span>
+                  {route.source_tg !== route.target_tg && (
+                    <span className="mt-0.5 px-1.5 py-0.2 rounded bg-amber-950/80 border border-amber-800 text-amber-300 text-[9px] font-bold">
+                      TRANSLASI TG
+                    </span>
+                  )}
                 </div>
 
                 <div className="text-right">
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-purple-950 text-purple-300 border border-purple-800 font-bold">
-                    {route.target_mode}
-                  </span>
+                  <div className="flex items-center justify-end gap-1">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-900 text-slate-300 border border-slate-700 font-bold">
+                      TS{route.target_slot || 1}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] bg-purple-950 text-purple-300 border border-purple-800 font-bold">
+                      {route.target_mode}
+                    </span>
+                  </div>
                   <div className="font-bold text-white text-sm mt-1">TG {route.target_tg}</div>
                 </div>
               </div>
@@ -981,53 +1163,79 @@ export default function MatrixPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-cyan-400 block uppercase">Source Mode & TG</label>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono text-cyan-400 block uppercase">Source Mode, TG & Slot</label>
                   <select
                     value={editSourceMode}
                     onChange={(e) => setEditSourceMode(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-cyan-300 font-mono mb-1.5"
+                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-cyan-300 font-mono"
                   >
-                    <option>DMR</option>
-                    <option>YSF</option>
-                    <option>P25</option>
-                    <option>ANALOG</option>
-                    <option>CB</option>
-                    <option>MUMBLE</option>
+                    <option value="DMR">DMR</option>
+                    <option value="PEER">PEER</option>
+                    <option value="WEBRTC">WEBRTC</option>
+                    <option value="USRP">USRP</option>
+                    <option value="MUMBLE">MUMBLE</option>
+                    <option value="YSF">YSF</option>
+                    <option value="P25">P25</option>
+                    <option value="ANALOG">ANALOG</option>
+                    <option value="CB">CB</option>
                   </select>
-                  <input
-                    type="number"
-                    value={editSourceTg}
-                    onChange={(e) => setEditSourceTg(Number(e.target.value))}
-                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-cyan-400 outline-none"
-                    placeholder="Src TG"
-                    required
-                  />
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input
+                      type="number"
+                      value={editSourceTg}
+                      onChange={(e) => setEditSourceTg(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-cyan-400 outline-none"
+                      placeholder="Src TG"
+                      required
+                    />
+                    <select
+                      value={editSourceSlot}
+                      onChange={(e) => setEditSourceSlot(Number(e.target.value))}
+                      className="w-full px-2 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-slate-200 font-mono"
+                    >
+                      <option value={1}>TS 1</option>
+                      <option value={2}>TS 2</option>
+                    </select>
+                  </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-purple-400 block uppercase">Target Mode & TG</label>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono text-purple-400 block uppercase">Target Mode, TG & Slot</label>
                   <select
                     value={editTargetMode}
                     onChange={(e) => setEditTargetMode(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-purple-300 font-mono mb-1.5"
+                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-purple-300 font-mono"
                   >
-                    <option>YSF</option>
-                    <option>D-STAR</option>
-                    <option>P25</option>
-                    <option>ANALOG</option>
-                    <option>CB</option>
-                    <option>DMR</option>
-                    <option>MUMBLE</option>
+                    <option value="DMR">DMR</option>
+                    <option value="PEER">PEER</option>
+                    <option value="WEBRTC">WEBRTC</option>
+                    <option value="USRP">USRP</option>
+                    <option value="MUMBLE">MUMBLE</option>
+                    <option value="YSF">YSF</option>
+                    <option value="D-STAR">D-STAR</option>
+                    <option value="P25">P25</option>
+                    <option value="ANALOG">ANALOG</option>
+                    <option value="CB">CB</option>
                   </select>
-                  <input
-                    type="number"
-                    value={editTargetTg}
-                    onChange={(e) => setEditTargetTg(Number(e.target.value))}
-                    className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-purple-400 outline-none"
-                    placeholder="Tgt TG"
-                    required
-                  />
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input
+                      type="number"
+                      value={editTargetTg}
+                      onChange={(e) => setEditTargetTg(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-purple-400 outline-none"
+                      placeholder="Tgt TG"
+                      required
+                    />
+                    <select
+                      value={editTargetSlot}
+                      onChange={(e) => setEditTargetSlot(Number(e.target.value))}
+                      className="w-full px-2 py-1.5 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-slate-200 font-mono"
+                    >
+                      <option value={1}>TS 1</option>
+                      <option value={2}>TS 2</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 

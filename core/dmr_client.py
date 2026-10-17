@@ -14,8 +14,10 @@ RPTL = b"RPTL"
 RPTACK = b"RPTACK"
 RPTK = b"RPTK"
 RPTC = b"RPTC"
+RPTO = b"RPTO"
 RPTP = b"RPTP"
 RPTPING = b"RPTPING"
+RPTPONG = b"RPTPONG"
 RPTCL = b"RPTCL"
 MSTPING = b"MSTPING"
 MSTP = b"MSTP"
@@ -282,15 +284,18 @@ class HomeBrewClient:
         pkg_id = "MMDVM".ljust(40)[:40].encode("utf-8")             # 40 bytes (standard MMDVM repeater package)
 
         opt_parts = []
-        for i, tg in enumerate(self.ts1_tgs, start=1):
-            opt_parts.append(f"TS1_{i}={tg}")
-            opt_parts.append(f"TS1={tg}")
-        for i, tg in enumerate(self.ts2_tgs, start=1):
-            opt_parts.append(f"TS2_{i}={tg}")
-            opt_parts.append(f"TS2={tg}")
+        if self.ts1_tgs:
+            opt_parts.append("TS1=" + ",".join(str(t) for t in self.ts1_tgs))
+            for i, tg in enumerate(self.ts1_tgs, start=1):
+                opt_parts.append(f"TS1_{i}={tg}")
+        if self.ts2_tgs:
+            opt_parts.append("TS2=" + ",".join(str(t) for t in self.ts2_tgs))
+            for i, tg in enumerate(self.ts2_tgs, start=1):
+                opt_parts.append(f"TS2_{i}={tg}")
 
-        tg_options = ";".join(opt_parts) + ";"
-        options_bytes = f"OPTIONS:{tg_options}".encode("utf-8")
+        tg_options = (";".join(opt_parts) + ";") if opt_parts else ""
+        self.tg_options_str = tg_options
+        options_bytes = f"OPTIONS:{tg_options}".encode("utf-8") if tg_options else b""
         logger.info(f"[{self.name}] Configured RPTC Options: {tg_options} (TS1: {self.ts1_tgs}, TS2: {self.ts2_tgs}, Freq: {self.tx_freq}/{self.rx_freq} MHz, CC: {self.color_code})")
 
         config_data = (
@@ -302,8 +307,26 @@ class HomeBrewClient:
         packet = RPTC + struct.pack(">I", self.dmr_id) + config_data
         self.sock.sendto(packet, self.target_addr)
         self.packets_tx += 1
+        self._rpto_sent = False
         self._set_state("CONNECTED")
-        logger.info(f"[{self.name}] ✓ Successfully connected! TS1: {self.ts1_tgs} | TS2: {self.ts2_tgs} on {self.host}:{self.port}")
+        logger.info(f"[{self.name}] ✓ Sent RPTC configuration! TS1: {self.ts1_tgs} | TS2: {self.ts2_tgs} on {self.host}:{self.port}")
+        # Also send RPTO options packet shortly after so both HBlink/FreeDMR and MMDVM masters register all TGs
+        if tg_options:
+            await self._send_rpto()
+
+    async def _send_rpto(self):
+        """Sends standalone RPTO options packet for multi-TG subscriptions."""
+        tg_options = getattr(self, "tg_options_str", "")
+        if not tg_options or not self.sock or not self.target_addr:
+            return
+        try:
+            pkt = RPTO + struct.pack(">I", self.dmr_id) + tg_options.encode("ascii", errors="ignore")
+            self.sock.sendto(pkt, self.target_addr)
+            self.packets_tx += 1
+            self._rpto_sent = True
+            logger.info(f"[{self.name}] ✓ Sent RPTO multi-TG options to {self.target_addr}: {tg_options}")
+        except Exception as e:
+            logger.debug(f"[{self.name}] Failed to send RPTO: {e}")
 
     async def _ping_worker(self):
         """Periodically pings the Master to maintain keepalive or retries login."""
@@ -342,6 +365,8 @@ class HomeBrewClient:
                 await self._send_rptc()
             elif self.state == "CONNECTED":
                 self.last_ping_rx = time.time()
+                if not getattr(self, "_rpto_sent", False) and getattr(self, "tg_options_str", ""):
+                    await self._send_rpto()
 
         # 2. Master NAK (Auth rejected or invalid ID)
         elif data.startswith(MSTNAK):
@@ -391,6 +416,14 @@ class HomeBrewClient:
                     "timestamp": time.time()
                 })
 
+    def get_preferred_slot(self, dst_tg: int, default_slot: int = 2) -> int:
+        """Returns the configured timeslot (1 or 2) for dst_tg on this peer if explicitly assigned."""
+        if dst_tg in self.ts1_tgs and dst_tg not in self.ts2_tgs:
+            return 1
+        if dst_tg in self.ts2_tgs and dst_tg not in self.ts1_tgs:
+            return 2
+        return default_slot
+
     def transmit_dmrd(self, src_id: int, dst_tg: int, slot: int, data_type: int = 1, sequence: int = 0, payload: bytes = None, call_type: str = "group", dtype_vseq: int = None):
         """Constructs and transmits an authentic DMRD voice/signaling frame to Master."""
         if not self.sock or not self.target_addr or self.state != "CONNECTED":
@@ -402,6 +435,9 @@ class HomeBrewClient:
                 data_type = 2
             elif dtype_vseq in [0, 1]:
                 data_type = dtype_vseq
+
+        if call_type == "group":
+            slot = self.get_preferred_slot(dst_tg, slot)
 
         self.stream_seq = (self.stream_seq + 1) % 256
         seq_byte = struct.pack("B", self.stream_seq)
@@ -432,12 +468,21 @@ class HomeBrewClient:
             return False
 
     def send_raw_dmrd(self, raw_data: bytes) -> bool:
-        """Transmits an authentic raw DMRD packet directly to the remote master."""
+        """Transmits an authentic raw DMRD packet directly to the remote master, adapting slot & repeater ID."""
         if not self.sock or not self.target_addr or self.state != "CONNECTED":
             return False
         try:
-            if len(raw_data) >= 15:
-                # Stamp the authenticated client repeater ID (bytes 11..14) so remote Master accepts it
+            if len(raw_data) >= 16:
+                dst_tg = int.from_bytes(raw_data[8:11], "big")
+                orig_bits = raw_data[15]
+                orig_slot = 2 if (orig_bits & 0x80) else 1
+                is_unit = bool(orig_bits & 0x40)
+                target_slot = orig_slot if is_unit else self.get_preferred_slot(dst_tg, orig_slot)
+                slot_bit = 0x80 if target_slot == 2 else 0x00
+                new_bits = (orig_bits & 0x7F) | slot_bit
+                # Stamp the authenticated client repeater ID (bytes 11..14) and adapted slot bit (byte 15)
+                tx_pkt = raw_data[:11] + struct.pack(">I", self.dmr_id) + bytes([new_bits]) + raw_data[16:]
+            elif len(raw_data) >= 15:
                 tx_pkt = raw_data[:11] + struct.pack(">I", self.dmr_id) + raw_data[15:]
             else:
                 tx_pkt = raw_data
