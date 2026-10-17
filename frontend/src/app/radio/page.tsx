@@ -480,8 +480,17 @@ export default function RadioPocketMode() {
   const rxGainNodeRef = useRef<GainNode | null>(null);
   const rxInputNodeRef = useRef<AudioNode | null>(null);
   const rxNextTimeRef = useRef<number>(0);
+  const rxSuspendedQueueRef = useRef<AudioRxData[]>([]);
   const lastPlayedChunkRef = useRef<string>("");
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
+
+  const flushSuspendedRxQueue = () => {
+    if (rxSuspendedQueueRef.current.length === 0) return;
+    const queued = rxSuspendedQueueRef.current.splice(0, rxSuspendedQueueRef.current.length);
+    for (const chunk of queued) {
+      scheduleRxChunk(chunk);
+    }
+  };
 
   const ensureAudioUnlocked = () => {
     try {
@@ -515,35 +524,11 @@ export default function RadioPocketMode() {
         comp.attack.value = 0.01;
         comp.release.value = 0.20;
 
-        // Pipeline: source -> hpf -> lpf -> gainNode -> comp -> (hidden <audio> via MediaStream | destination)
+        // Pipeline: source -> hpf -> lpf -> gainNode -> comp -> ctx.destination
         hpf.connect(lpf);
         lpf.connect(gainNode);
         gainNode.connect(comp);
-
-        // Chrome Android only shows lockscreen media controls for real media elements,
-        // so output goes through a MediaStream into a hidden <audio>. If that fails,
-        // fall back to the plain AudioContext destination.
-        let routedToElement = false;
-        try {
-          const streamDest = ctx.createMediaStreamDestination();
-          comp.connect(streamDest);
-          const el = document.createElement("audio");
-          el.setAttribute("playsinline", "true");
-          el.style.display = "none";
-          el.srcObject = streamDest.stream;
-          document.body.appendChild(el);
-          rxAudioElRef.current = el;
-          el.play().then(() => {}).catch(() => {
-            try { comp.disconnect(streamDest); } catch {}
-            comp.connect(ctx.destination);
-          });
-          routedToElement = true;
-        } catch {
-          routedToElement = false;
-        }
-        if (!routedToElement) {
-          comp.connect(ctx.destination);
-        }
+        comp.connect(ctx.destination);
 
         rxAudioCtxRef.current = ctx;
         rxGainNodeRef.current = gainNode;
@@ -553,9 +538,11 @@ export default function RadioPocketMode() {
       if (rxAudioCtxRef.current.state === "suspended") {
         rxAudioCtxRef.current.resume().then(() => {
           setAudioUnlocked(true);
+          flushSuspendedRxQueue();
         }).catch(() => {});
       } else if (rxAudioCtxRef.current.state === "running") {
         setAudioUnlocked(true);
+        flushSuspendedRxQueue();
       }
     } catch (e) {
       console.warn("Audio unlock note:", e);
@@ -594,6 +581,11 @@ export default function RadioPocketMode() {
     currentTgRef.current = currentTg;
   }, [currentTg]);
 
+  const currentTimeSlotRef = useRef(currentTimeSlot);
+  useEffect(() => {
+    currentTimeSlotRef.current = currentTimeSlot;
+  }, [currentTimeSlot]);
+
   const [txFirewallAlert, setTxFirewallAlert] = useState<string | null>(null);
 
   useEffect(() => {
@@ -610,6 +602,66 @@ export default function RadioPocketMode() {
     return () => window.removeEventListener("ninja_tx_rejected", handleRejection);
   }, []);
 
+  const scheduleRxChunk = (audioChunk: AudioRxData) => {
+    try {
+      const ctx = rxAudioCtxRef.current;
+      if (!ctx) return;
+
+      const binaryStr = atob(audioChunk.pcm);
+      const len = binaryStr.length;
+      const safeLen = len - (len % 2);
+      if (safeLen < 2) return;
+
+      const bytes = new Uint8Array(safeLen);
+      for (let i = 0; i < safeLen; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
+
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768.0;
+      }
+
+      // Micro cosine envelope on chunk boundaries (8 samples = 1ms) to prevent boundary clicks/pops
+      const envLen = Math.min(8, Math.floor(float32.length / 4));
+      for (let i = 0; i < envLen; i++) {
+        const gain = 0.5 * (1 - Math.cos((Math.PI * i) / envLen));
+        float32[i] *= gain;
+        float32[float32.length - 1 - i] *= gain;
+      }
+
+      const now = ctx.currentTime;
+      const isBurstStart = !rxNextTimeRef.current || rxNextTimeRef.current < now;
+
+      if (isBurstStart) {
+        // 150ms jitter cushion bridges TDMA DMR bursts (60-80ms interval) seamlessly
+        rxNextTimeRef.current = now + 0.15;
+      } else if (rxNextTimeRef.current > now + 0.45) {
+        // Clock drift recovery: bring buffer back to stable 150ms cushion
+        rxNextTimeRef.current = now + 0.15;
+      }
+
+      const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
+      audioBuffer.copyToChannel(float32, 0);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      if (rxInputNodeRef.current) {
+        source.connect(rxInputNodeRef.current);
+      } else if (rxGainNodeRef.current) {
+        source.connect(rxGainNodeRef.current);
+      } else {
+        source.connect(ctx.destination);
+      }
+
+      source.start(rxNextTimeRef.current);
+      rxNextTimeRef.current += audioBuffer.duration;
+    } catch (e) {
+      console.warn("Audio buffer playback error:", e);
+    }
+  };
+
   const playAudioChunk = (audioChunk: AudioRxData) => {
     // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
     if (!audioChunk || !audioChunk.pcm) return;
@@ -624,67 +676,18 @@ export default function RadioPocketMode() {
       const ctx = rxAudioCtxRef.current;
       if (!ctx) return;
 
-      const play = () => {
-        try {
-          const binaryStr = atob(audioChunk.pcm);
-          const len = binaryStr.length;
-          const safeLen = len - (len % 2);
-          if (safeLen < 2) return;
-
-          const bytes = new Uint8Array(safeLen);
-          for (let i = 0; i < safeLen; i++) {
-            bytes[i] = binaryStr.charCodeAt(i);
-          }
-          const int16 = new Int16Array(bytes.buffer, 0, safeLen / 2);
-
-          const float32 = new Float32Array(int16.length);
-          for (let i = 0; i < int16.length; i++) {
-            float32[i] = int16[i] / 32768.0;
-          }
-
-          const now = ctx.currentTime;
-          const isBurstStart = !rxNextTimeRef.current || rxNextTimeRef.current < now;
-
-          if (isBurstStart) {
-            // 100ms cushion bridges DMR 60ms TDMA slot gaps seamlessly without buffer starvation
-            rxNextTimeRef.current = now + 0.10;
-            // Smoothly ramp up first 4 samples (0.5ms) ONLY on initial burst onset to eliminate cold-start speaker pop
-            const fadeLen = Math.min(4, float32.length);
-            for (let i = 0; i < fadeLen; i++) {
-              float32[i] *= (i / fadeLen);
-            }
-          } else if (rxNextTimeRef.current > now + 0.35) {
-            // Clock drift recovery: bring buffer back to stable 100ms cushion
-            rxNextTimeRef.current = now + 0.10;
-          }
-
-          const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
-          audioBuffer.copyToChannel(float32, 0);
-
-          const source = ctx.createBufferSource();
-          source.buffer = audioBuffer;
-          if (rxInputNodeRef.current) {
-            source.connect(rxInputNodeRef.current);
-          } else if (rxGainNodeRef.current) {
-            source.connect(rxGainNodeRef.current);
-          } else {
-            source.connect(ctx.destination);
-          }
-
-          source.start(rxNextTimeRef.current);
-          rxNextTimeRef.current += audioBuffer.duration;
-        } catch (e) {
-          console.warn("Audio buffer playback error:", e);
-        }
-      };
-
       if (ctx.state === "suspended") {
+        // Queue incoming audio chunks while suspended (cap at 50 chunks = 1s) and play upon resume()
+        if (rxSuspendedQueueRef.current.length < 50) {
+          rxSuspendedQueueRef.current.push(audioChunk);
+        }
         ctx.resume().then(() => {
           setAudioUnlocked(true);
-          play();
+          flushSuspendedRxQueue();
         }).catch(() => {});
       } else {
-        play();
+        flushSuspendedRxQueue();
+        scheduleRxChunk(audioChunk);
       }
     } catch (e) {
       console.warn("Audio playback error:", e);
@@ -753,7 +756,7 @@ export default function RadioPocketMode() {
       const ctx = new AudioCtx();
       txAudioCtxRef.current = ctx;
       if (ctx.state === "suspended") {
-        ctx.resume().catch(() => {});
+        await ctx.resume().catch(() => {});
       }
 
       const source = ctx.createMediaStreamSource(stream);
@@ -814,30 +817,26 @@ export default function RadioPocketMode() {
           }
           const b64 = btoa(binary);
 
+          const prof = activeProfileRef.current;
           sendJson({
             type: "AUDIO_TX",
             pcm: b64,
             is_tx: true,
             tg: tgNum,
-            slot: currentTimeSlot,
-            callsign: activeProfile.callsign,
-            dmr_id: activeProfile.dmrId,
+            slot: currentTimeSlotRef.current,
+            callsign: prof.callsign,
+            dmr_id: prof.dmrId,
           });
         }
       };
 
-      source.connect(processor);
-      // Route through MediaStreamDestination to keep Chromium audio thread actively running
-      try {
-        const streamDest = ctx.createMediaStreamDestination();
-        processor.connect(streamDest);
-      } catch {
-        const muteGain = ctx.createGain();
-        muteGain.gain.value = 0.00001;
-        txMuteGainRef.current = muteGain;
-        processor.connect(muteGain);
-        muteGain.connect(ctx.destination);
-      }
+      // Connect processor through a zero-gain node to ctx.destination and store in ref
+      // so the browser audio clock continuously pulls frames without garbage collection
+      const muteGain = ctx.createGain();
+      muteGain.gain.value = 0;
+      txMuteGainRef.current = muteGain;
+      processor.connect(muteGain);
+      muteGain.connect(ctx.destination);
     } catch (err) {
       console.warn("Could not start Web TX microphone stream:", err);
     }

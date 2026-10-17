@@ -77,7 +77,11 @@ export default function DashboardPage() {
       }
 
       if (rxAudioCtxRef.current.state === "suspended") {
-        rxAudioCtxRef.current.resume().catch(() => {});
+        rxAudioCtxRef.current.resume().then(() => {
+          flushDashboardRxQueue();
+        }).catch(() => {});
+      } else if (rxAudioCtxRef.current.state === "running") {
+        flushDashboardRxQueue();
       }
     } catch (e) {
       console.warn("Dashboard audio unlock note:", e);
@@ -110,24 +114,12 @@ export default function DashboardPage() {
     activeTxRef.current = activeTx;
   }, [activeTx]);
 
-  const lastChunkRef = useRef<string>("");
+  const rxSuspendedQueueRef = useRef<AudioRxData[]>([]);
 
-  // Real-time Audio Dispatcher (bypasses React state batching to receive 100% of packets)
-  const playAudioChunk = (audioChunk: AudioRxData) => {
-    if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
-    // Selective Audio Gate: If a specific TG is selected on Dashboard, only play audio matching that TG!
-    if (selectedTgFilterRef.current !== null && audioChunk.tg !== selectedTgFilterRef.current) return;
-    if (lastChunkRef.current === audioChunk.pcm) return;
-    lastChunkRef.current = audioChunk.pcm;
-
+  const scheduleDashboardRxChunk = (audioChunk: AudioRxData) => {
     try {
-      ensureAudioUnlocked();
       const ctx = rxAudioCtxRef.current;
       if (!ctx) return;
-      if (ctx.state === "suspended") {
-        ctx.resume().catch(() => {});
-        return;
-      }
 
       const binaryStr = atob(audioChunk.pcm);
       const len = binaryStr.length;
@@ -145,8 +137,8 @@ export default function DashboardPage() {
         float32[i] = int16[i] / 32768.0;
       }
 
-      // Micro cosine envelope (4-6 samples fade-in & fade-out) to eliminate chunk boundary pops
-      const fadeLen = Math.min(6, Math.floor(float32.length / 4));
+      // Micro cosine envelope (8 samples fade-in & fade-out) to eliminate chunk boundary pops
+      const fadeLen = Math.min(8, Math.floor(float32.length / 4));
       for (let i = 0; i < fadeLen; i++) {
         const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
         float32[i] *= factor;
@@ -165,11 +157,46 @@ export default function DashboardPage() {
       }
 
       const now = ctx.currentTime;
-      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.40) {
-        rxNextTimeRef.current = now + 0.12;
+      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.45) {
+        rxNextTimeRef.current = now + 0.15;
       }
       source.start(rxNextTimeRef.current);
       rxNextTimeRef.current += audioBuffer.duration;
+    } catch (e) {
+      console.warn("Dashboard audio playback note:", e);
+    }
+  };
+
+  const flushDashboardRxQueue = () => {
+    if (rxSuspendedQueueRef.current.length === 0) return;
+    const queued = rxSuspendedQueueRef.current.splice(0, rxSuspendedQueueRef.current.length);
+    for (const chunk of queued) {
+      scheduleDashboardRxChunk(chunk);
+    }
+  };
+
+  // Real-time Audio Dispatcher (bypasses React state batching to receive 100% of packets)
+  const playAudioChunk = (audioChunk: AudioRxData) => {
+    if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
+    // Selective Audio Gate: If a specific TG is selected on Dashboard, only play audio matching that TG!
+    if (selectedTgFilterRef.current !== null && audioChunk.tg !== selectedTgFilterRef.current) return;
+
+    try {
+      ensureAudioUnlocked();
+      const ctx = rxAudioCtxRef.current;
+      if (!ctx) return;
+      if (ctx.state === "suspended") {
+        if (rxSuspendedQueueRef.current.length < 50) {
+          rxSuspendedQueueRef.current.push(audioChunk);
+        }
+        ctx.resume().then(() => {
+          flushDashboardRxQueue();
+        }).catch(() => {});
+        return;
+      }
+
+      flushDashboardRxQueue();
+      scheduleDashboardRxChunk(audioChunk);
     } catch (e) {
       console.warn("Dashboard audio playback note:", e);
     }

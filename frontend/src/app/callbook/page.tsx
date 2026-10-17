@@ -93,9 +93,11 @@ export default function CallbookPage() {
     }
   };
 
-  // Import CSV/JSON Modal state
+  // Import CSV/JSON Modal state (Local File or External URL)
   const [showImportModal, setShowImportModal] = useState(false);
+  const [importMode, setImportMode] = useState<"file" | "url">("file");
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importUrl, setImportUrl] = useState("");
   const [importOrg, setImportOrg] = useState("AUTO");
   const [importTg, setImportTg] = useState("510");
   const [isImporting, setIsImporting] = useState(false);
@@ -197,39 +199,55 @@ export default function CallbookPage() {
   };
 
   const handleExecuteImport = async () => {
-    if (!importFile) return;
+    if (importMode === "file" && !importFile) return;
+    if (importMode === "url" && !importUrl.trim()) return;
 
     setIsImporting(true);
     setImportError(null);
 
-    const formData = new FormData();
-    formData.append("file", importFile);
-    if (importOrg && importOrg !== "AUTO") {
-      formData.append("organization", importOrg);
-    }
-    if (importTg) {
-      formData.append("default_tg", importTg);
-    }
-
     try {
-      const res = await fetch("/api/callbook/import", {
-        method: "POST",
-        body: formData,
-      });
+      let res: Response;
+      if (importMode === "url") {
+        res = await fetch("/api/callbook/import-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: importUrl.trim(),
+            organization: importOrg && importOrg !== "AUTO" ? importOrg : null,
+            default_tg: importTg ? Number(importTg) : null,
+          }),
+        });
+      } else {
+        const formData = new FormData();
+        formData.append("file", importFile!);
+        if (importOrg && importOrg !== "AUTO") {
+          formData.append("organization", importOrg);
+        }
+        if (importTg) {
+          formData.append("default_tg", importTg);
+        }
+        res = await fetch("/api/callbook/import", {
+          method: "POST",
+          body: formData,
+        });
+      }
+
       const data = await res.json();
       if (res.ok && data.success) {
         setShowImportModal(false);
-        setImportStatus(`✓ Berhasil mengimpor ${data.imported_count || 0} data pengguna! (Dilewati: ${data.skipped_count || 0})`);
+        setImportStatus(
+          `✓ Berhasil menarik & mengimpor ${data.imported_count || 0} data pengguna! (Dilewati: ${data.skipped_count || 0})`
+        );
         beepPlayer?.playTalkGrant();
         fetchCallbook();
         fetchOrganizations();
         setTimeout(() => setImportStatus(null), 5000);
       } else {
         beepPlayer?.playRogerBeep();
-        setImportError(data.detail || data.error || "Gagal mengimpor file data.");
+        setImportError(data.detail || data.error || "Gagal mengimpor data Callbook.");
       }
     } catch {
-      setImportError("Terjadi kesalahan jaringan saat mengunggah.");
+      setImportError("Terjadi kesalahan jaringan saat mengimpor data.");
     } finally {
       setIsImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -467,9 +485,10 @@ export default function CallbookPage() {
                 setShowImportModal(true);
               }}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-[#05080f] border border-cyan-900/60 hover:border-cyan-400 text-cyan-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+              title="Import Callbook dari File Lokal atau Tarik JSON dari Link URL Luar"
             >
               <Upload className="w-4 h-4 text-cyan-400" />
-              <span>Import</span>
+              <span>Import File / Link JSON</span>
             </button>
 
             <button
@@ -627,7 +646,7 @@ export default function CallbookPage() {
 
       </main>
 
-      {/* Import File Modal (CSV / JSON) */}
+      {/* Import File / External URL Modal (CSV / JSON) */}
       {showImportModal && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-[#0e1422] border-2 border-cyan-500/60 rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
@@ -635,10 +654,10 @@ export default function CallbookPage() {
               <div>
                 <h3 className="font-heading font-black text-lg text-white flex items-center gap-2">
                   <Upload className="w-5 h-5 text-cyan-400" />
-                  Import Callbook CSV / JSON
+                  Import Callbook (File Lokal / Link URL Luar)
                 </h3>
                 <p className="text-xs font-mono text-slate-400 mt-1">
-                  Upload file data user dengan pilihan Organisasi dan Default TG
+                  Upload file CSV/JSON atau tarik langsung data JSON/CSV dari link server luar
                 </p>
               </div>
               <button
@@ -650,6 +669,40 @@ export default function CallbookPage() {
               </button>
             </div>
 
+            {/* Source Mode Tabs */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-[#05080f] border border-cyan-900/60 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setImportMode("file");
+                  setImportError(null);
+                }}
+                className={`py-2 px-3 rounded-xl text-xs font-mono font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  importMode === "file"
+                    ? "bg-cyan-500/20 border border-cyan-400 text-cyan-300 shadow"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>📁 Upload File Lokal</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setImportMode("url");
+                  setImportError(null);
+                }}
+                className={`py-2 px-3 rounded-xl text-xs font-mono font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  importMode === "url"
+                    ? "bg-cyan-500/20 border border-cyan-400 text-cyan-300 shadow"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>🌐 Tarik Link URL Luar</span>
+              </button>
+            </div>
+
             {importError && (
               <div className="p-3 bg-red-950/70 border border-red-500/50 rounded-xl text-red-300 text-xs font-mono flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
@@ -657,55 +710,76 @@ export default function CallbookPage() {
               </div>
             )}
 
-            {/* File Drag/Selection Box */}
-            <div>
-              <label className="block text-xs font-mono text-slate-300 mb-1.5 font-bold">
-                1. Pilih File (JSON atau CSV)
-              </label>
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition-all ${
-                  importFile
-                    ? "border-emerald-500/60 bg-emerald-950/20"
-                    : "border-cyan-900/60 bg-[#05080f] hover:border-cyan-400/60"
-                }`}
-              >
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  accept=".csv,.json"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      setImportFile(f);
-                      setImportError(null);
-                    }
-                  }}
-                  className="hidden"
-                />
-                {importFile ? (
-                  <div className="space-y-1">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-900/50 border border-emerald-500/50 rounded-xl text-emerald-300 font-mono text-xs font-bold">
-                      <Check className="w-4 h-4 text-emerald-400" />
-                      {importFile.name}
+            {/* Step 1: File Selection OR External URL Input */}
+            {importMode === "file" ? (
+              <div>
+                <label className="block text-xs font-mono text-slate-300 mb-1.5 font-bold">
+                  1. Pilih File (JSON atau CSV)
+                </label>
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition-all ${
+                    importFile
+                      ? "border-emerald-500/60 bg-emerald-950/20"
+                      : "border-cyan-900/60 bg-[#05080f] hover:border-cyan-400/60"
+                  }`}
+                >
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    accept=".csv,.json"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) {
+                        setImportFile(f);
+                        setImportError(null);
+                      }
+                    }}
+                    className="hidden"
+                  />
+                  {importFile ? (
+                    <div className="space-y-1">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-900/50 border border-emerald-500/50 rounded-xl text-emerald-300 font-mono text-xs font-bold">
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        {importFile.name}
+                      </div>
+                      <p className="text-[11px] text-slate-400 font-mono">
+                        Ukuran: {(importFile.size / 1024).toFixed(1)} KB — Klik untuk ganti file
+                      </p>
                     </div>
-                    <p className="text-[11px] text-slate-400 font-mono">
-                      Ukuran: {(importFile.size / 1024).toFixed(1)} KB — Klik untuk ganti file
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    <Upload className="w-7 h-7 text-cyan-400 mx-auto mb-1 opacity-80" />
-                    <p className="text-xs font-bold text-slate-200 font-mono">
-                      Klik untuk memilih file CSV / JSON
-                    </p>
-                    <p className="text-[11px] text-slate-500 font-mono">
-                      Mendukung format RadioID.net CSV & JSON list/object
-                    </p>
-                  </div>
-                )}
+                  ) : (
+                    <div className="space-y-1">
+                      <Upload className="w-7 h-7 text-cyan-400 mx-auto mb-1 opacity-80" />
+                      <p className="text-xs font-bold text-slate-200 font-mono">
+                        Klik untuk memilih file CSV / JSON
+                      </p>
+                      <p className="text-[11px] text-slate-500 font-mono">
+                        Mendukung format RadioID.net CSV & JSON list/object
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-2">
+                <label className="block text-xs font-mono text-slate-300 font-bold">
+                  1. Masukkan Link URL Luar (JSON / CSV)
+                </label>
+                <input
+                  type="url"
+                  value={importUrl}
+                  onChange={(e) => {
+                    setImportUrl(e.target.value);
+                    setImportError(null);
+                  }}
+                  placeholder="https://contoh-server.id/api/callbook/user.json"
+                  className="w-full px-3.5 py-2.5 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300 text-xs font-mono focus:border-cyan-400 outline-none"
+                />
+                <p className="text-[11px] text-slate-400 font-mono leading-relaxed">
+                  Server NinjaRadio akan menarik langsung data JSON/CSV dari link di atas (bebas kendala CORS browser). Mendukung format <code className="text-cyan-300">user.json</code>, <code className="text-cyan-300">RadioID.net JSON/CSV</code>, maupun endpoint API Callbook server lain.
+                </p>
+              </div>
+            )}
 
             {/* Target Organization Selector */}
             <div className="space-y-1.5">
@@ -733,7 +807,7 @@ export default function CallbookPage() {
                 onChange={(e) => setImportOrg(e.target.value)}
                 className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-cyan-300 text-xs font-mono font-bold focus:border-cyan-400 outline-none"
               >
-                <option value="AUTO">🌐 Otomatis / Sesuai Kolom di File</option>
+                <option value="AUTO">🌐 Otomatis / Sesuai Kolom di Data</option>
                 {organizations.map((org) => (
                   <option key={org.code} value={org.code}>
                     {org.name || org.code} ({org.code})
@@ -741,7 +815,7 @@ export default function CallbookPage() {
                 ))}
               </select>
               <p className="text-[11px] text-slate-500 font-mono">
-                Pilih organisasi jika ingin memasukkan semua kontak dalam file ini ke satu group tertentu.
+                Pilih organisasi jika ingin memasukkan semua kontak yang ditarik ke satu group tertentu.
               </p>
             </div>
 
@@ -798,10 +872,10 @@ export default function CallbookPage() {
               </button>
               <button
                 type="button"
-                disabled={!importFile || isImporting}
+                disabled={(importMode === "file" ? !importFile : !importUrl.trim()) || isImporting}
                 onClick={handleExecuteImport}
                 className={`flex-1 py-2.5 rounded-xl font-heading font-black text-xs transition-all flex items-center justify-center gap-2 ${
-                  !importFile || isImporting
+                  (importMode === "file" ? !importFile : !importUrl.trim()) || isImporting
                     ? "bg-cyan-900/40 text-cyan-600 cursor-not-allowed"
                     : "bg-cyan-400 hover:bg-cyan-300 text-slate-950 shadow-lg shadow-cyan-500/25"
                 }`}
@@ -809,12 +883,12 @@ export default function CallbookPage() {
                 {isImporting ? (
                   <>
                     <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                    <span>Mengimpor Data...</span>
+                    <span>{importMode === "url" ? "Menarik Data dari URL..." : "Mengimpor Data..."}</span>
                   </>
                 ) : (
                   <>
                     <Upload className="w-4 h-4" />
-                    <span>Mulai Impor</span>
+                    <span>{importMode === "url" ? "Tarik & Impor dari URL" : "Mulai Impor File"}</span>
                   </>
                 )}
               </button>

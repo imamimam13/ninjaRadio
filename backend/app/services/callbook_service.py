@@ -512,6 +512,12 @@ class CallbookService:
                 "default_tg": tg_val,
             }
 
+        # Preload existing entries by dmr_id in a single query for fast bulk import from external URLs
+        existing_res = await session.execute(select(CallbookEntry))
+        existing_map: Dict[int, CallbookEntry] = {
+            e.dmr_id: e for e in existing_res.scalars().all() if e.dmr_id is not None
+        }
+
         if is_json:
             try:
                 data = json.loads(trimmed)
@@ -520,7 +526,7 @@ class CallbookService:
                     raw_rows = data
                 elif isinstance(data, dict):
                     # Check common container keys
-                    for key in ["users", "data", "callbook", "results", "records", "items", "subscribers", "entries", "contacts", "rows"]:
+                    for key in ["users", "data", "callbook", "results", "records", "items", "subscribers", "entries", "contacts", "rows", "result", "list"]:
                         if key in data and isinstance(data[key], list):
                             raw_rows = data[key]
                             break
@@ -533,18 +539,21 @@ class CallbookService:
                                 break
 
                     if not raw_rows:
-                        # Keyed dictionary (e.g. {"1022057": {"callsign": "BD62BOT", ...}})
-                        for k, v in data.items():
-                            if isinstance(v, dict):
-                                row_dict = dict(v)
-                                if str(k).strip().isdigit() and not any(f in row_dict for f in ["dmr_id", "radio_id", "id", "dmrid", "radioid"]):
-                                    row_dict["dmr_id"] = int(k)
-                                elif not str(k).strip().isdigit() and not any(f in row_dict for f in ["callsign", "call", "call_sign"]):
-                                    row_dict["callsign"] = str(k).strip()
-                                raw_rows.append(row_dict)
-                            elif isinstance(v, (str, int)):
-                                if str(k).strip().isdigit():
-                                    raw_rows.append({"dmr_id": int(k), "callsign": str(v).strip()})
+                        # Single user object or keyed dictionary (e.g. {"1022057": {"callsign": "BD62BOT", ...}})
+                        if any(k in data for k in ["dmr_id", "radio_id", "id", "dmrid", "radioid", "callsign"]):
+                            raw_rows = [data]
+                        else:
+                            for k, v in data.items():
+                                if isinstance(v, dict):
+                                    row_dict = dict(v)
+                                    if str(k).strip().isdigit() and not any(f in row_dict for f in ["dmr_id", "radio_id", "id", "dmrid", "radioid"]):
+                                        row_dict["dmr_id"] = int(k)
+                                    elif not str(k).strip().isdigit() and not any(f in row_dict for f in ["callsign", "call", "call_sign"]):
+                                        row_dict["callsign"] = str(k).strip()
+                                    raw_rows.append(row_dict)
+                                elif isinstance(v, (str, int)):
+                                    if str(k).strip().isdigit():
+                                        raw_rows.append({"dmr_id": int(k), "callsign": str(v).strip()})
 
                 for row in raw_rows:
                     parsed = extract_row_fields(row)
@@ -552,7 +561,7 @@ class CallbookService:
                         skipped_count += 1
                         continue
 
-                    existing = await CallbookService.get_by_dmr_id(session, parsed["dmr_id"])
+                    existing = existing_map.get(parsed["dmr_id"])
                     if existing:
                         existing.callsign = parsed["callsign"] or existing.callsign
                         existing.name = parsed["name"] or existing.name
@@ -577,6 +586,7 @@ class CallbookService:
                             default_tg=parsed["default_tg"],
                         )
                         session.add(entry)
+                        existing_map[parsed["dmr_id"]] = entry
                     imported_count += 1
 
                 await session.commit()
@@ -593,7 +603,7 @@ class CallbookService:
                         skipped_count += 1
                         continue
 
-                    existing = await CallbookService.get_by_dmr_id(session, parsed["dmr_id"])
+                    existing = existing_map.get(parsed["dmr_id"])
                     if existing:
                         existing.callsign = parsed["callsign"] or existing.callsign
                         existing.name = parsed["name"] or existing.name
@@ -618,6 +628,7 @@ class CallbookService:
                             default_tg=parsed["default_tg"],
                         )
                         session.add(entry)
+                        existing_map[parsed["dmr_id"]] = entry
                     imported_count += 1
 
                 await session.commit()

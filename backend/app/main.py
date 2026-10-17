@@ -69,6 +69,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     client_tx_active = False
     last_tx_info = {"tg": 1025, "dmr_id": 102205798, "slot": 2, "callsign": "WEB-OP"}
+    tx_perm_cache = {}  # (dmr_id, callsign, tg) -> (is_allowed, reason, expiry_ts)
 
     async def notify_core_stop_tx():
         nonlocal client_tx_active
@@ -91,6 +92,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 pass
 
     try:
+        import time
         while True:
             # Handle incoming client messages (audio stream from Web PTT, PTT events, ping)
             data = await websocket.receive_text()
@@ -107,9 +109,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         last_tx_info = {"tg": tg, "dmr_id": dmr_id, "slot": slot, "callsign": callsign}
                         is_tx = bool(msg.get("is_tx", True)) if pcm_b64 else False
                         if pcm_b64 and is_tx:
-                            # Verify TX authorization with Callbook & Organization Firewall
-                            async with async_session_maker() as session:
-                                is_allowed, reason = await CallbookService.check_tx_permission(session, dmr_id, callsign, tg)
+                            # Verify TX authorization with Callbook & Organization Firewall (cached for 60s to prevent 50Hz DB stall)
+                            cache_key = (dmr_id, callsign, tg)
+                            now_ts = time.time()
+                            cached_perm = tx_perm_cache.get(cache_key)
+                            if cached_perm and now_ts < cached_perm[2]:
+                                is_allowed, reason = cached_perm[0], cached_perm[1]
+                            else:
+                                async with async_session_maker() as session:
+                                    is_allowed, reason = await CallbookService.check_tx_permission(session, dmr_id, callsign, tg)
+                                tx_perm_cache[cache_key] = (is_allowed, reason, now_ts + 60.0)
                             if not is_allowed:
                                 await websocket.send_text(json.dumps({
                                     "type": "TX_REJECTED",

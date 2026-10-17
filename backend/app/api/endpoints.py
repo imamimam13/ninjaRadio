@@ -130,12 +130,26 @@ async def search_callbook(
 ):
     return await CallbookService.search_callbook(session, query=q, organization=org)
 
+async def _notify_core_reload_subscribers():
+    try:
+        _CALLBOOK_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.post("http://core:5000/api/reload_subscribers")
+    except Exception:
+        pass
+
 @router.post("/callbook", response_model=CallbookResponse)
 async def add_callbook_entry(
     data: CallbookCreate,
     session: AsyncSession = Depends(get_db)
 ):
-    return await CallbookService.create_entry(session, data)
+    entry = await CallbookService.create_entry(session, data)
+    asyncio.create_task(_notify_core_reload_subscribers())
+    return entry
 
 @router.post("/callbook/import")
 async def import_callbook_file(
@@ -154,6 +168,63 @@ async def import_callbook_file(
     )
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to import callbook"))
+    asyncio.create_task(_notify_core_reload_subscribers())
+    return result
+
+@router.post("/callbook/import-url")
+async def import_callbook_from_url(
+    payload: dict,
+    session: AsyncSession = Depends(get_db)
+):
+    """Fetches JSON or CSV callbook data from an external URL and imports it into the local Callbook."""
+    url = str(payload.get("url") or "").strip()
+    organization = payload.get("organization")
+    default_tg = payload.get("default_tg")
+    if default_tg is not None and str(default_tg).strip().isdigit():
+        default_tg = int(str(default_tg).strip())
+    else:
+        default_tg = None
+
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="URL tidak valid. Harus diawali dengan http:// atau https://")
+
+    try:
+        import httpx
+        from urllib.parse import urlparse
+        headers = {
+            "User-Agent": "NinjaRadio-Callbook-Sync/1.0 (+https://ninjaradio.id)",
+            "Accept": "application/json, text/csv, text/plain, */*"
+        }
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, verify=False) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Gagal mengunduh dari URL (HTTP {resp.status_code})"
+                )
+            content = resp.text
+            parsed_url = urlparse(url)
+            filename = parsed_url.path.split("/")[-1] or "remote.json"
+            content_type = resp.headers.get("content-type", "").lower()
+            if "json" in content_type and not filename.lower().endswith(".json"):
+                filename = f"{filename}.json"
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Gagal menghubungi link URL luar: {str(e)}")
+
+    result = await CallbookService.import_batch_data(
+        session,
+        content,
+        filename,
+        target_organization=organization,
+        default_tg=default_tg
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Gagal mem-parsing data dari URL"))
+    asyncio.create_task(_notify_core_reload_subscribers())
+    return result
+
 @router.put("/callbook/{entry_id}", response_model=CallbookResponse)
 async def update_callbook_entry(
     entry_id: int,
@@ -163,6 +234,7 @@ async def update_callbook_entry(
     entry = await CallbookService.update_entry(session, entry_id, data)
     if not entry:
         raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan")
+    asyncio.create_task(_notify_core_reload_subscribers())
     return entry
 
 @router.delete("/callbook/{entry_id}")
@@ -173,6 +245,7 @@ async def delete_callbook_entry(
     ok = await CallbookService.delete_entry(session, entry_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan")
+    asyncio.create_task(_notify_core_reload_subscribers())
     return {"status": "SUCCESS"}
 
 @router.post("/callbook/batch-update")
@@ -195,6 +268,7 @@ async def batch_update_callbook(
         callsign_prefix=callsign_prefix,
         ids=ids
     )
+    asyncio.create_task(_notify_core_reload_subscribers())
     return result
 
 @router.get("/callbook/export/{filename}")
@@ -818,6 +892,19 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     slot = int(event.get("slot", 1))
     network = event.get("network", "DMR-Network")
     is_tx = event.get("is_tx", False)
+
+    # If late-entry PCM audio arrives before TLV header, recover active talker ID so audio is never dropped
+    if src_id <= 0 and event.get("payload_b64") and dst_tg > 0:
+        for _, s_info in ACTIVE_STREAMS.items():
+            if s_info.get("talkgroup") == dst_tg and int(s_info.get("dmr_id", 0)) > 0:
+                src_id = int(s_info["dmr_id"])
+                if not event.get("callsign") and s_info.get("callsign"):
+                    event["callsign"] = s_info["callsign"]
+                break
+        if src_id <= 0:
+            src_id = 9999999
+            if not event.get("callsign"):
+                event["callsign"] = "DMR-RX"
 
     # Ignore invalid TG 0 or Radio ID 0 to prevent phantom RX display
     if src_id <= 0 or dst_tg <= 0:

@@ -111,17 +111,23 @@ export default function SettingsPage() {
   const [coreStatus, setCoreStatus] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Helper to build standard MMDVM / FreeDMR options string
+  // Helper to build standard MMDVM / FreeDMR / BrandMeister multi-TG options string
   const buildOptionsString = (ts1: string, ts2: string) => {
     const parts: string[] = [];
-    const p1 = ts1.split(/[,; ]+/).filter(Boolean);
-    p1.forEach((tg, idx) => {
-      parts.push(`TS1_${idx + 1}=${tg}`);
-    });
-    const p2 = ts2.split(/[,; ]+/).filter(Boolean);
-    p2.forEach((tg, idx) => {
-      parts.push(`TS2_${idx + 1}=${tg}`);
-    });
+    const p1 = Array.from(new Set(ts1.split(/[,; ]+/).map((x) => x.trim()).filter((x) => /^\d+$/.test(x))));
+    if (p1.length > 0) {
+      parts.push(`TS1=${p1.join(",")}`);
+      p1.forEach((tg, idx) => {
+        parts.push(`TS1_${idx + 1}=${tg}`);
+      });
+    }
+    const p2 = Array.from(new Set(ts2.split(/[,; ]+/).map((x) => x.trim()).filter((x) => /^\d+$/.test(x))));
+    if (p2.length > 0) {
+      parts.push(`TS2=${p2.join(",")}`);
+      p2.forEach((tg, idx) => {
+        parts.push(`TS2_${idx + 1}=${tg}`);
+      });
+    }
     return parts.length > 0 ? `${parts.join(";")};` : "";
   };
 
@@ -250,19 +256,36 @@ export default function SettingsPage() {
     setNewPeerSlots(peer.slots || "both");
 
     const raw = (peer.subscribedTgs || "").trim();
-    setNewPeerOptions(raw);
 
-    // Extract TS1 and TS2 static talkgroups
-    let parsedTs1 = "";
-    let parsedTs2 = "";
-    const m1 = raw.match(/TS1(?:_\d+)?\s*[=:;_]\s*([0-9, ]+)/i);
-    if (m1) parsedTs1 = m1[1].trim();
+    // Extract ALL TS1 and TS2 static talkgroups across TS1=..., TS1_1=..., TS1_2=..., etc.
+    const ts1Set = new Set<string>();
+    const ts2Set = new Set<string>();
 
-    const m2 = raw.match(/TS2(?:_\d+)?\s*[=:;_]\s*([0-9, ]+)/i);
-    if (m2) parsedTs2 = m2[1].trim();
+    const regex1 = /TS1(?:_\d+)?\s*[=:]\s*([0-9, ]+)/gi;
+    let m1: RegExpExecArray | null;
+    while ((m1 = regex1.exec(raw)) !== null) {
+      m1[1]
+        .split(/[, ]+/)
+        .map((s) => s.trim())
+        .filter((s) => /^\d+$/.test(s))
+        .forEach((tg) => ts1Set.add(tg));
+    }
+
+    const regex2 = /TS2(?:_\d+)?\s*[=:]\s*([0-9, ]+)/gi;
+    let m2: RegExpExecArray | null;
+    while ((m2 = regex2.exec(raw)) !== null) {
+      m2[1]
+        .split(/[, ]+/)
+        .map((s) => s.trim())
+        .filter((s) => /^\d+$/.test(s))
+        .forEach((tg) => ts2Set.add(tg));
+    }
+
+    let parsedTs1 = Array.from(ts1Set).join(", ");
+    let parsedTs2 = Array.from(ts2Set).join(", ");
 
     if (!parsedTs1 && !parsedTs2 && raw) {
-      const parts = raw.split(/[,; ]+/).filter(Boolean);
+      const parts = raw.split(/[,; ]+/).filter((s) => /^\d+$/.test(s));
       if (parts.length === 1) parsedTs1 = parts[0];
       else if (parts.length >= 2) {
         parsedTs1 = parts[0];
@@ -271,6 +294,7 @@ export default function SettingsPage() {
     }
     setNewPeerTs1(parsedTs1);
     setNewPeerTs2(parsedTs2);
+    setNewPeerOptions(buildOptionsString(parsedTs1, parsedTs2) || raw);
     setShowCfgPreview(false);
     setShowAddPeerModal(true);
   };
@@ -283,10 +307,10 @@ export default function SettingsPage() {
     if (newPeerMode === "openbridge") {
       finalTgs = newPeerTs1.trim() || newPeerOptions.trim();
     } else {
-      if (newPeerOptions.trim()) {
-        finalTgs = newPeerOptions.trim();
-      } else if (newPeerTs1.trim() || newPeerTs2.trim()) {
+      if (newPeerTs1.trim() || newPeerTs2.trim()) {
         finalTgs = buildOptionsString(newPeerTs1, newPeerTs2);
+      } else if (newPeerOptions.trim()) {
+        finalTgs = newPeerOptions.trim();
       }
     }
 
