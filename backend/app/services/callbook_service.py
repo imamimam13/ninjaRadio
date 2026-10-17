@@ -350,7 +350,7 @@ class CallbookService:
                 "5109999,N1NJA,NinjaRadio Master,Jakarta,ID,0"
             ]
             for e in entries:
-                clean_id = e.dmr_id & 0xFFFFFF if e.dmr_id else 0
+                clean_id = int(e.dmr_id) if e.dmr_id else 0
                 if clean_id > 0 and clean_id != 5109999:
                     c_call = (e.callsign or "NOCALL").replace(",", " ").strip().upper()
                     c_name = (e.name or c_call).replace(",", " ").strip()
