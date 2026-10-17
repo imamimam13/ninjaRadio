@@ -264,8 +264,8 @@ class HomeBrewClient:
         desc = "NinjaDMR".ljust(19)[:19].encode("utf-8")
         slots = b"3"
         url = "https://ninjadmr.app".ljust(124)[:124].encode("utf-8")
-        soft_id = "MMDVM_Bridge".ljust(40)[:40].encode("utf-8")
-        pkg_id = "MMDVM".ljust(40)[:40].encode("utf-8")
+        soft_id = "NinjaRadio".ljust(40)[:40].encode("utf-8")
+        pkg_id = "NinjaRadio".ljust(40)[:40].encode("utf-8")
 
         opt_parts = []
         for i, tg in enumerate(self.ts1_tgs, start=1):
