@@ -1811,14 +1811,13 @@ usrpAGC = -20,10,100
                     active_call = self.current_rx_call or talker_for_tg.get("callsign") or (lookup_callbook_callsign(active_src) if active_src > 0 else None) or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
 
                     now = time.time()
-                    # Ensure DVSwitch Mobile clients receive 320B-padded TLV SET_INFO on burst start and every 1.0s for late-joiners
-                    if (not self.current_rx_active or (now - last_tlv_push_time > 1.0)) and active_src > 0:
+                    # Ensure DVSwitch Mobile clients receive 320B-padded TLV SET_INFO once on burst start (prevents flickering)
+                    if not self.current_rx_active and active_src > 0:
                         try:
                             rpt_id = int(self.config.get("server_dmr_id", 5109999))
                             mobile_call = lookup_callbook_callsign(active_src, include_name=True) or active_call
                             tlv_burst = build_set_info_tlv(active_src, rpt_id, active_tg, active_slot, 1, mobile_call, pad_320=True)
                             self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, tlv_burst))
-                            last_tlv_push_time = now
                         except Exception:
                             pass
 
@@ -1887,6 +1886,9 @@ usrpAGC = -20,10,100
                         self.current_rx_tg = 0
                         self.current_rx_src = 0
                         self.current_rx_call = ""
+                        # Re-send clean idle banner to DVSwitch Mobile clients
+                        for client_addr in list(self.registered_usrp_clients.keys()):
+                            self.initialize_dvswitch_client(client_addr, seq, force=True)
             except Exception as e:
                 if self.running:
                     logger.debug(f"ab_pcm_rx_loop note: {e}")
@@ -1970,10 +1972,10 @@ usrpAGC = -20,10,100
             info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
             self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 5, 0, USRP_TYPE_TEXT, info_bytes), addr)
 
-            # NOTE: Never send TLV_TAG_SET_INFO (0x08) during client initialization or idle!
-            # TLV SET_INFO sets the remote RX Talker banner in DVSwitch Mobile.
-            # Sending operator identity here causes DVSwitch Mobile to flicker self-callsign.
-            # TLV SET_INFO is dispatched exclusively when genuine incoming RX voice arrives.
+            # 3. Send 320-byte padded TLV_TAG_SET_INFO (0x08) so DVSwitch Mobile displays Callsign & TG on screen immediately
+            display_call = f"{op_call} TG {primary_tg_val}"[:24]
+            tlv_init = build_set_info_tlv(op_id, rpt_id, primary_tg_val, slot_val, cc_val, display_call, pad_320=True)
+            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 6, 0, USRP_TYPE_TEXT, tlv_init), addr)
 
             logger.info(f"📱 Initialized DVSwitch Mobile client at {addr} -> Mode: DMR, Call: {op_call} ({op_id}), TG: {primary_tg_val} TS{slot_val}")
         except Exception as ex:
@@ -1999,6 +2001,20 @@ usrpAGC = -20,10,100
                     packet_type = (dmr_id >> 24) & 0xFF
                     is_control_pkt = (key_flag == 0) or (packet_type in [USRP_TYPE_TEXT, 4, 3])
 
+                    hdr_src = dmr_id & 0xFFFFFF
+                    hdr_tg = tg if (0 < tg < 16777215) else 0
+                    if 100000 <= hdr_src <= 9999999:
+                        if addr not in self.client_metadata:
+                            self.client_metadata[addr] = {}
+                        self.client_metadata[addr]["src"] = hdr_src
+                        if "callsign" not in self.client_metadata[addr]:
+                            cb_c = lookup_callbook_callsign(hdr_src, include_name=False)
+                            if cb_c:
+                                self.client_metadata[addr]["callsign"] = cb_c
+                        if hdr_tg > 0:
+                            self.client_metadata[addr]["tg"] = hdr_tg
+                        self.client_metadata[addr[0]] = self.client_metadata[addr]
+
                     if is_new_client and addr[0] != "127.0.0.1":
                         self.initialize_dvswitch_client(addr, seq, force=True)
 
@@ -2019,7 +2035,17 @@ usrpAGC = -20,10,100
                             logger.info(f"📱 DVSwitch Mobile client UNREGISTERED from {addr}")
                         else:
                             self.registered_usrp_clients[addr] = time.time()
-                            logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({payload.decode('ascii', errors='ignore').strip()})")
+                            reg_str = payload[4:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                            if reg_str:
+                                if addr not in self.client_metadata:
+                                    self.client_metadata[addr] = {}
+                                for token in reg_str.split():
+                                    if token.isdigit() and len(token) >= 6:
+                                        self.client_metadata[addr]["src"] = int(token)
+                                    elif any(c.isalpha() for c in token) and len(token) >= 3:
+                                        self.client_metadata[addr]["callsign"] = token.upper()
+                                self.client_metadata[addr[0]] = self.client_metadata[addr]
+                            logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({reg_str})")
                             reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
                             try:
                                 self.usrp_ingress_sock.sendto(reply_pkt, addr)
@@ -2035,7 +2061,6 @@ usrpAGC = -20,10,100
                             self.usrp_ingress_sock.sendto(pong_pkt, addr)
                         except Exception:
                             pass
-                        # PING only requires PONG; do not re-run full client initialization
                         continue
 
                     if payload.startswith(b"MODES:"):
@@ -2045,6 +2070,25 @@ usrpAGC = -20,10,100
 
                     if payload.startswith(b"INFO:"):
                         self.registered_usrp_clients[addr] = time.time()
+                        try:
+                            info_raw = payload[5:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                            if info_raw.startswith("{"):
+                                info_obj = json.loads(info_raw)
+                                dig = info_obj.get("digital", {})
+                                c_call = dig.get("call") or info_obj.get("call")
+                                c_src = dig.get("gw") or dig.get("src") or info_obj.get("src")
+                                c_tg = dig.get("tg") or info_obj.get("tg")
+                                if addr not in self.client_metadata:
+                                    self.client_metadata[addr] = {}
+                                if c_call:
+                                    self.client_metadata[addr]["callsign"] = str(c_call).upper()
+                                if c_src and int(c_src) > 0:
+                                    self.client_metadata[addr]["src"] = int(c_src)
+                                if c_tg and int(c_tg) > 0:
+                                    self.client_metadata[addr]["tg"] = int(c_tg)
+                                self.client_metadata[addr[0]] = self.client_metadata[addr]
+                        except Exception:
+                            pass
                         self.initialize_dvswitch_client(addr, seq, force=True)
                         continue
 

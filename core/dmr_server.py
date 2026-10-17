@@ -656,29 +656,29 @@ class HomeBrewMasterServer:
             is_local_bridge = (addr[0] == "127.0.0.1")
             target_slot = orig_slot
 
-            ts1_tgs = client.get("ts1_tgs") or []
-            ts2_tgs = client.get("ts2_tgs") or []
-            dyn_tgs = client.get("dynamic_tgs") or {}
-            slots_mode = client.get("slots_mode", 3)
-
-            # Determine if this client (hotspot or local MMDVM_Bridge worker) has explicit static subscriptions via RPTO/RPTC
-            has_static = bool(ts1_tgs or ts2_tgs)
-            if has_static and call_type == "group":
-                in_ts1 = (dst_tg in ts1_tgs) or (dyn_tgs.get(1) == dst_tg)
-                in_ts2 = (dst_tg in ts2_tgs) or (dyn_tgs.get(2) == dst_tg)
-                is_last = (client.get("last_tg") == dst_tg)
-                if not (in_ts1 or in_ts2 or is_last):
-                    continue
-                if in_ts2 and not in_ts1:
-                    target_slot = 2
-                elif in_ts1 and not in_ts2:
-                    target_slot = 1
-
             if is_local_bridge:
-                # If local bridge has no explicit static TG option, default to slot 2
-                if not has_static:
-                    target_slot = 2
+                # Local MMDVM_Bridge (DVSwitch.ini) on 127.0.0.1 must ALWAYS receive DMR voice on Slot 2
+                # so Analog_Bridge & Dashboard Web Audio stream flawlessly!
+                target_slot = 2
             else:
+                ts1_tgs = client.get("ts1_tgs") or []
+                ts2_tgs = client.get("ts2_tgs") or []
+                dyn_tgs = client.get("dynamic_tgs") or {}
+                slots_mode = client.get("slots_mode", 3)
+
+                # Determine if this hotspot has explicit static subscriptions via RPTO/RPTC
+                has_static = bool(ts1_tgs or ts2_tgs)
+                if has_static and call_type == "group":
+                    in_ts1 = (dst_tg in ts1_tgs) or (dyn_tgs.get(1) == dst_tg)
+                    in_ts2 = (dst_tg in ts2_tgs) or (dyn_tgs.get(2) == dst_tg)
+                    is_last = (client.get("last_tg") == dst_tg)
+                    if not (in_ts1 or in_ts2 or is_last):
+                        continue
+                    if in_ts2 and not in_ts1:
+                        target_slot = 2
+                    elif in_ts1 and not in_ts2:
+                        target_slot = 1
+
                 # Adapt slot for Simplex MMDVM hotspots (slots_mode 1, 2, or 4)
                 if slots_mode == 1:
                     target_slot = 1
