@@ -405,6 +405,8 @@ DEFAULT_CONFIG = {
     "server_callsign": os.getenv("SERVER_CALLSIGN", "N1NJA"),
     "server_dmr_id": int(os.getenv("SERVER_DMR_ID", 5109999)),
     "server_name": "NinjaRadio Master Core",
+    "software_id": "NinjaRadio",
+    "package_id": "NinjaRadio",
     "default_tg": 510,
     "rx_freq": "438.8000",
     "tx_freq": "438.8000",
@@ -2560,8 +2562,10 @@ usrpAGC = -20,10,100
                     tx_freq = str(p.get("tx_freq") or p.get("txFreq") or cfg.get("tx_freq", "438.8000"))
                     color_code = int(p.get("color_code") or p.get("colorCode") or cfg.get("color_code", 1))
                     tx_pwr = int(p.get("tx_pwr") or p.get("txPwr") or cfg.get("tx_pwr", 25))
+                    software_id = str(p.get("software_id") or p.get("softwareId") or cfg.get("software_id", "NinjaRadio")).strip()
+                    package_id = str(p.get("package_id") or p.get("packageId") or cfg.get("package_id", "NinjaRadio")).strip()
 
-                    logger.info(f"[Peering] 🌐 Connecting HomeBrew peer client: {name} -> {peer_key}")
+                    logger.info(f"[Peering] 🌐 Connecting HomeBrew peer client: {name} -> {peer_key} (Software: {software_id})")
                     client = HomeBrewClient(
                         name=name,
                         host=host,
@@ -2574,6 +2578,8 @@ usrpAGC = -20,10,100
                         tx_freq=tx_freq,
                         color_code=color_code,
                         tx_pwr=tx_pwr,
+                        software_id=software_id,
+                        package_id=package_id,
                         on_traffic=self.handle_peer_traffic,
                         on_status_change=self.handle_peer_status_change
                     )
