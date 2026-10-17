@@ -142,6 +142,22 @@ def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, ca
     )
     return bytes([TLV_TAG_SET_INFO, len(body)]) + body
 
+def get_db_path() -> Optional[str]:
+    """Finds ninjaradio.db across Docker container and host filesystem paths."""
+    candidates = [
+        os.environ.get("NINJARADIO_DB_PATH", ""),
+        "/app/data/ninjaradio.db",
+        "/home/ubuntu/ninjaRadio/data/ninjaradio.db",
+        os.path.join(os.path.dirname(__file__), "../data/ninjaradio.db"),
+        os.path.join(os.path.dirname(__file__), "data/ninjaradio.db"),
+        "./data/ninjaradio.db",
+        "./ninjaradio.db"
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
 def resolve_mumble_identity(username: str) -> tuple:
     """
     Extracts DMR ID and Callsign from Mumble username and matches against Callbook DB.
@@ -163,8 +179,8 @@ def resolve_mumble_identity(username: str) -> tuple:
             break
 
     # 3. Lookup against SQLite Callbook DB (/app/data/ninjaradio.db)
-    db_path = "/app/data/ninjaradio.db"
-    if os.path.exists(db_path):
+    db_path = get_db_path()
+    if db_path and os.path.exists(db_path):
         try:
             import sqlite3
             with sqlite3.connect(db_path, timeout=1.0) as conn:
@@ -212,8 +228,8 @@ def check_mumble_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tu
     """
     if target_tg == 9990:
         return True, "Echo Test"
-    db_path = "/app/data/ninjaradio.db"
-    if not os.path.exists(db_path):
+    db_path = get_db_path()
+    if not db_path:
         return True, "Default (No DB)"
     try:
         import sqlite3
@@ -278,8 +294,8 @@ def check_mumble_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tu
 
 def update_user_permission_in_db(identifier: str, allowed_tgs_str: str) -> bool:
     """Updates or provisions a user in ninjaradio.db with special TG override (invoked by SuperUser)."""
-    db_path = "/app/data/ninjaradio.db"
-    if not os.path.exists(db_path):
+    db_path = get_db_path()
+    if not db_path:
         return False
     try:
         import sqlite3
@@ -305,8 +321,8 @@ def update_user_permission_in_db(identifier: str, allowed_tgs_str: str) -> bool:
 
 def revoke_user_permission_in_db(identifier: str) -> bool:
     """Revokes special TG override in ninjaradio.db, reverting user to org policy."""
-    db_path = "/app/data/ninjaradio.db"
-    if not os.path.exists(db_path):
+    db_path = get_db_path()
+    if not db_path:
         return False
     try:
         import sqlite3

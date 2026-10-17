@@ -26,10 +26,28 @@ RPTO = b"RPTO"
 RPTS = b"RPTS"
 DMRD = b"DMRD"
 
+def get_db_path() -> Optional[str]:
+    """Finds ninjaradio.db across Docker container and host filesystem paths."""
+    candidates = [
+        os.environ.get("NINJARADIO_DB_PATH", ""),
+        "/app/data/ninjaradio.db",
+        "/home/ubuntu/ninjaRadio/data/ninjaradio.db",
+        os.path.join(os.path.dirname(__file__), "../data/ninjaradio.db"),
+        os.path.join(os.path.dirname(__file__), "data/ninjaradio.db"),
+        "./data/ninjaradio.db",
+        "./ninjaradio.db"
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
 def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
     """Resolves amateur callsign for DMR ID from SQLite Callbook DB."""
-    db_path = "/app/data/ninjaradio.db"
-    if not os.path.exists(db_path):
+    if not dmr_id or dmr_id <= 0:
+        return None
+    db_path = get_db_path()
+    if not db_path:
         return None
     try:
         import sqlite3
@@ -638,29 +656,29 @@ class HomeBrewMasterServer:
             is_local_bridge = (addr[0] == "127.0.0.1")
             target_slot = orig_slot
 
+            ts1_tgs = client.get("ts1_tgs") or []
+            ts2_tgs = client.get("ts2_tgs") or []
+            dyn_tgs = client.get("dynamic_tgs") or {}
+            slots_mode = client.get("slots_mode", 3)
+
+            # Determine if this client (hotspot or local MMDVM_Bridge worker) has explicit static subscriptions via RPTO/RPTC
+            has_static = bool(ts1_tgs or ts2_tgs)
+            if has_static and call_type == "group":
+                in_ts1 = (dst_tg in ts1_tgs) or (dyn_tgs.get(1) == dst_tg)
+                in_ts2 = (dst_tg in ts2_tgs) or (dyn_tgs.get(2) == dst_tg)
+                is_last = (client.get("last_tg") == dst_tg)
+                if not (in_ts1 or in_ts2 or is_last):
+                    continue
+                if in_ts2 and not in_ts1:
+                    target_slot = 2
+                elif in_ts1 and not in_ts2:
+                    target_slot = 1
+
             if is_local_bridge:
-                # Local MMDVM_Bridge (DVSwitch.ini) listens on Slot 2 by default
-                target_slot = 2
+                # If local bridge has no explicit static TG option, default to slot 2
+                if not has_static:
+                    target_slot = 2
             else:
-                ts1_tgs = client.get("ts1_tgs") or []
-                ts2_tgs = client.get("ts2_tgs") or []
-                dyn_tgs = client.get("dynamic_tgs") or {}
-                slots_mode = client.get("slots_mode", 3)
-
-                # Determine if this hotspot has explicit static subscriptions via RPTO/RPTC
-                has_static = bool(ts1_tgs or ts2_tgs)
-                if has_static and call_type == "group":
-                    # Check if dst_tg is in static TS1/TS2 or dynamic TGs or last_tg
-                    in_ts1 = (dst_tg in ts1_tgs) or (dyn_tgs.get(1) == dst_tg)
-                    in_ts2 = (dst_tg in ts2_tgs) or (dyn_tgs.get(2) == dst_tg)
-                    is_last = (client.get("last_tg") == dst_tg)
-                    if not (in_ts1 or in_ts2 or is_last):
-                        continue
-                    if in_ts2 and not in_ts1:
-                        target_slot = 2
-                    elif in_ts1 and not in_ts2:
-                        target_slot = 1
-
                 # Adapt slot for Simplex MMDVM hotspots (slots_mode 1, 2, or 4)
                 if slots_mode == 1:
                     target_slot = 1

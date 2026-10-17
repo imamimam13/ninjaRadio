@@ -84,10 +84,29 @@ def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
     }
 
 
+def get_db_path() -> Optional[str]:
+    """Finds ninjaradio.db across Docker container and host filesystem paths."""
+    candidates = [
+        os.environ.get("NINJARADIO_DB_PATH", ""),
+        "/app/data/ninjaradio.db",
+        "/home/ubuntu/ninjaRadio/data/ninjaradio.db",
+        os.path.join(os.path.dirname(__file__), "../data/ninjaradio.db"),
+        os.path.join(os.path.dirname(__file__), "data/ninjaradio.db"),
+        "./data/ninjaradio.db",
+        "./ninjaradio.db"
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
 def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optional[str]:
     """Resolves amateur callsign (and optionally operator name) for DMR ID from SQLite Callbook DB."""
-    db_path = "/app/data/ninjaradio.db"
-    if not os.path.exists(db_path):
+    if not dmr_id or dmr_id <= 0:
+        return None
+    db_path = get_db_path()
+    if not db_path:
         return None
     try:
         import sqlite3
@@ -106,47 +125,96 @@ def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optiona
     return None
 
 
+def lookup_callbook_dmr_id(callsign: str) -> Optional[int]:
+    """Resolves true numeric DMR ID for Callsign from SQLite Callbook DB."""
+    if not callsign:
+        return None
+    c_clean = callsign.strip().upper()
+    db_path = get_db_path()
+    if not db_path:
+        return None
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT dmr_id FROM callbook WHERE UPPER(callsign) = ? LIMIT 1", (c_clean,))
+            row = cursor.fetchone()
+            if row and row[0] and int(row[0]) > 0:
+                return int(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def lookup_subscriber_csv_id(callsign: str) -> Optional[int]:
+    """Finds DMR ID for a callsign from /var/lib/dvswitch/subscriber_ids.csv or /app/data/subscriber_ids.csv."""
+    if not callsign:
+        return None
+    c_clean = callsign.strip().upper()
+    for p in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv"]:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        parts = line.strip().split(",")
+                        if len(parts) >= 2 and parts[0].strip().isdigit():
+                            if parts[1].strip().upper() == c_clean:
+                                return int(parts[0].strip())
+            except Exception:
+                pass
+    return None
+
+
 def sync_callbook_to_subscriber_csv(default_id: int = 5109999, default_call: str = "N1NJA"):
     """Exports all Callbook records from SQLite into /var/lib/dvswitch/subscriber_ids.csv for Analog_Bridge."""
-    db_path = "/app/data/ninjaradio.db"
+    db_path = get_db_path()
     sub_csv = "/var/lib/dvswitch/subscriber_ids.csv"
     app_sub_csv = "/app/data/subscriber_ids.csv"
-    os.makedirs("/var/lib/dvswitch", exist_ok=True)
-    os.makedirs("/app/data", exist_ok=True)
+    for p in ["/var/lib/dvswitch", "/app/data"]:
+        try:
+            os.makedirs(p, exist_ok=True)
+        except Exception:
+            pass
     lines = [f"{default_id},{default_call},{default_call},NinjaRadio,ID,0"]
     seen_ids = {default_id}
-    if os.path.exists(db_path):
+    if db_path and os.path.exists(db_path):
         try:
             import sqlite3
             with sqlite3.connect(db_path, timeout=1.5) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT dmr_id, callsign, name, qth FROM callbook WHERE dmr_id > 0")
-                for d_id, call, name, qth in cursor.fetchall():
-                    d_id = int(d_id)
+                cursor.execute("PRAGMA table_info(callbook)")
+                cols = {str(col[1]).lower(): col[1] for col in cursor.fetchall()}
+                city_col = cols.get("city", cols.get("qth", "''"))
+                prov_col = cols.get("province_state", cols.get("state", "''"))
+                cursor.execute(f"SELECT dmr_id, callsign, name, {city_col}, {prov_col} FROM callbook WHERE dmr_id > 0")
+                for row in cursor.fetchall():
+                    d_id = int(row[0])
                     if d_id in seen_ids:
                         continue
                     seen_ids.add(d_id)
-                    c_str = str(call or f"ID-{d_id}").strip().upper().replace(",", "")
-                    n_str = str(name or c_str).strip().replace(",", " ")
-                    q_str = str(qth or "ID").strip().replace(",", " ")
-                    lines.append(f"{d_id},{c_str},{n_str},{q_str},ID,0")
+                    c_str = str(row[1] or f"ID-{d_id}").strip().upper().replace(",", "")
+                    n_str = str(row[2] or c_str).strip().replace(",", " ")
+                    city_str = str(row[3] or "Indonesia").strip().replace(",", " ")
+                    prov_str = str(row[4] or "ID").strip().replace(",", " ")
+                    lines.append(f"{d_id},{c_str},{n_str},{city_str},{prov_str},0")
         except Exception as e:
             logger.debug(f"sync_callbook_to_subscriber_csv DB read note: {e}")
 
-    # Preserve any extra lines from existing /app/data/subscriber_ids.csv
-    if os.path.exists(app_sub_csv):
-        try:
-            with open(app_sub_csv, "r", encoding="utf-8", errors="ignore") as f:
-                for raw_l in f:
-                    l = raw_l.strip()
-                    if not l or l.startswith(";"):
-                        continue
-                    first_col = l.split(",", 1)[0].strip()
-                    if first_col.isdigit() and int(first_col) not in seen_ids:
-                        seen_ids.add(int(first_col))
-                        lines.append(l)
-        except Exception:
-            pass
+    # Preserve any extra lines from existing /app/data/subscriber_ids.csv or /var/lib/dvswitch/subscriber_ids.csv
+    for existing_file in [app_sub_csv, sub_csv]:
+        if os.path.exists(existing_file):
+            try:
+                with open(existing_file, "r", encoding="utf-8", errors="ignore") as f:
+                    for raw_l in f:
+                        l = raw_l.strip()
+                        if not l or l.startswith(";"):
+                            continue
+                        first_col = l.split(",", 1)[0].strip()
+                        if first_col.isdigit() and int(first_col) not in seen_ids:
+                            seen_ids.add(int(first_col))
+                            lines.append(l)
+            except Exception:
+                pass
 
     content = "\n".join(lines) + "\n"
     for target in (sub_csv, app_sub_csv):
@@ -164,8 +232,8 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
     """
     if target_tg in (9990, 99990, 4000):
         return True, "Special Service TG"
-    db_path = "/app/data/ninjaradio.db"
-    if not os.path.exists(db_path):
+    db_path = get_db_path()
+    if not db_path:
         return True, "Default (No DB)"
     try:
         import sqlite3
@@ -235,9 +303,9 @@ def get_matrix_translated_targets(tg: int, slot: int = 2, source_mode: str = "DM
     Supports manual cross-TG and cross-slot mapping (e.g., Local TG 1025 TS2 <-> Peer TG 510 TS1)
     and independent rules without editing Peer Settings.
     """
-    db_path = "/app/data/ninjaradio.db"
+    db_path = get_db_path()
     targets = []
-    if not os.path.exists(db_path):
+    if not db_path:
         return targets
     try:
         import sqlite3
@@ -292,10 +360,10 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: l
     3. If the peer is configured with `subscribedTgs` containing `tg`, auto-approve immediately!
     4. Otherwise, if peer has no explicit restrictions, allow DMR traffic.
     """
-    db_path = "/app/data/ninjaradio.db"
+    db_path = get_db_path()
     peer_upper = (peer_name or "").strip().upper()
 
-    if os.path.exists(db_path):
+    if db_path:
         try:
             import sqlite3
             with sqlite3.connect(db_path, timeout=1.0) as conn:
@@ -1492,26 +1560,40 @@ usrpAGC = -20,10,100
                     for line in lines:
                         m = ab_pattern.search(line)
                         if m:
-                            src = int(m.group(1))
+                            raw_src = int(m.group(1))
                             dst = int(m.group(2))
                             raw_slot = int(m.group(3))
                             slot = 1 if raw_slot <= 1 else 2
-                            call = m.group(4).strip() if (m.lastindex and m.lastindex >= 4 and m.group(4)) else (lookup_callbook_callsign(src) or f"ID-{src}")
-                            if src > 0 and dst > 0:
-                                self.current_rx_src = src
+                            call = m.group(4).strip() if (m.lastindex and m.lastindex >= 4 and m.group(4)) else ""
+                            now = time.time()
+
+                            src = raw_src
+                            if src <= 0:
+                                talker = self.active_talkers_by_tg.get(dst)
+                                if talker and talker.get("src", 0) > 10000 and (now - talker.get("time", 0) < 15.0):
+                                    src = int(talker["src"])
+                                elif call:
+                                    src = lookup_callbook_dmr_id(call) or 0
+                            if not call:
+                                call = lookup_callbook_callsign(src) or (f"ID-{src}" if src > 0 else "")
+
+                            if dst > 0:
+                                if src > 0:
+                                    self.current_rx_src = src
+                                    self.last_rx_src = src
+                                    self.active_talkers_by_tg[dst] = {
+                                        "src": src,
+                                        "callsign": call or f"ID-{src}",
+                                        "slot": slot,
+                                        "time": now
+                                    }
+                                if call:
+                                    self.current_rx_call = call
                                 self.current_rx_tg = dst
                                 self.current_rx_slot = slot
-                                self.current_rx_call = call
-                                self.current_rx_time = time.time()
+                                self.current_rx_time = now
                                 self.current_rx_active = True
-                                self.last_rx_src = src
-                                self.active_talkers_by_tg[dst] = {
-                                    "src": src,
-                                    "callsign": call,
-                                    "slot": slot,
-                                    "time": self.current_rx_time
-                                }
-                                logger.info(f"🎙️ DMR Active Call: Call={call} ID={src} -> TG={dst} (Slot {slot})")
+                                logger.info(f"🎙️ DMR Active Call: Call={call or 'Unknown'} ID={src} -> TG={dst} (Slot {slot})")
 
                 # 2. MMDVM_Bridge log follower
                 today_str = time.strftime("%Y-%m-%d")
@@ -1539,29 +1621,47 @@ usrpAGC = -20,10,100
                             slot = int(sm.group(1))
                             raw_src = sm.group(2).strip()
                             dst = int(sm.group(3))
+                            now = time.time()
+                            src = 0
+                            call = ""
+
                             if raw_src.isdigit():
                                 src = int(raw_src)
                                 call = lookup_callbook_callsign(src) or f"ID-{src}"
                             else:
                                 call = raw_src
-                                digits_only = re.sub(r'\D', '', raw_src)
-                                src = int(digits_only) if digits_only else abs(hash(call)) % 10000000
+                                # 1. Check if our active DMR talkers cache already has the real DMR ID for this TG!
+                                talker = self.active_talkers_by_tg.get(dst)
+                                if talker and talker.get("src", 0) > 10000 and (now - talker.get("time", 0) < 15.0):
+                                    src = int(talker["src"])
+                                # 2. Lookup genuine DMR ID from Callbook DB
+                                if src <= 0:
+                                    src = lookup_callbook_dmr_id(raw_src) or 0
+                                # 3. Lookup genuine DMR ID from subscriber CSV
+                                if src <= 0:
+                                    src = lookup_subscriber_csv_id(raw_src) or 0
+                                # 4. Fallback: if current_rx_src is already a valid DMR ID on this TG, preserve it!
+                                if src <= 0 and self.current_rx_src > 10000 and self.current_rx_tg == dst:
+                                    src = self.current_rx_src
 
-                            if src > 0 and dst > 0:
-                                self.current_rx_src = src
+                            if dst > 0:
+                                if src > 0:
+                                    self.current_rx_src = src
+                                    self.last_rx_src = src
+                                if call:
+                                    self.current_rx_call = call
                                 self.current_rx_tg = dst
                                 self.current_rx_slot = slot
-                                self.current_rx_call = call
-                                self.current_rx_time = time.time()
+                                self.current_rx_time = now
                                 self.current_rx_active = True
-                                self.last_rx_src = src
-                                self.active_talkers_by_tg[dst] = {
-                                    "src": src,
-                                    "callsign": call,
-                                    "slot": slot,
-                                    "time": self.current_rx_time
-                                }
-                                logger.info(f"🎙️ MMDVM Call Header: {call} ({src}) -> TG={dst} (Slot {slot})")
+                                if src > 0:
+                                    self.active_talkers_by_tg[dst] = {
+                                        "src": src,
+                                        "callsign": call or f"ID-{src}",
+                                        "slot": slot,
+                                        "time": self.current_rx_time
+                                    }
+                                logger.info(f"🎙️ MMDVM Call Header: {call or 'Unknown'} ({src}) -> TG={dst} (Slot {slot})")
 
                         em = mmdvm_end_pat.search(mline)
                         if em:
@@ -1632,40 +1732,57 @@ usrpAGC = -20,10,100
                             # 1. Official binary TLV SET_INFO frame (tag 0x08)
                             tlv_info = parse_set_info_tlv(pcm_payload)
                             if tlv_info:
-                                self.current_rx_src = tlv_info["src"]
-                                self.current_rx_tg = tlv_info["tg"]
-                                self.current_rx_slot = tlv_info["slot"]
+                                tlv_src = tlv_info["src"]
+                                tlv_tg = tlv_info["tg"]
+                                tlv_slot = tlv_info["slot"]
                                 raw_call = (tlv_info["callsign"] or "").strip()
-                                cb_call_full = lookup_callbook_callsign(tlv_info["src"], include_name=True)
-                                cb_call_only = lookup_callbook_callsign(tlv_info["src"], include_name=False)
+
+                                # If Analog_Bridge sends src=0 or missing, recover from active_talkers_by_tg
+                                if tlv_src <= 0:
+                                    talker = self.active_talkers_by_tg.get(tlv_tg or self.current_rx_tg, {})
+                                    if talker.get("src", 0) > 10000:
+                                        tlv_src = int(talker["src"])
+                                    elif raw_call:
+                                        tlv_src = lookup_callbook_dmr_id(raw_call) or 0
+
+                                if tlv_src > 0:
+                                    self.current_rx_src = tlv_src
+                                    self.last_rx_src = tlv_src
+
+                                if tlv_tg > 0:
+                                    self.current_rx_tg = tlv_tg
+                                self.current_rx_slot = tlv_slot
+
+                                cb_call_full = lookup_callbook_callsign(tlv_src, include_name=True) if tlv_src > 0 else None
+                                cb_call_only = lookup_callbook_callsign(tlv_src, include_name=False) if tlv_src > 0 else None
                                 if cb_call_only:
                                     self.current_rx_call = cb_call_only
                                     mobile_display_call = cb_call_full or cb_call_only
-                                elif raw_call and not raw_call.isdigit() and raw_call != str(self.current_rx_src):
+                                elif raw_call and not raw_call.isdigit() and raw_call != str(tlv_src):
                                     self.current_rx_call = raw_call.split()[0]
                                     mobile_display_call = raw_call
                                 else:
-                                    self.current_rx_call = f"ID-{tlv_info['src']}"
+                                    self.current_rx_call = f"ID-{tlv_src}" if tlv_src > 0 else "DMR Station"
                                     mobile_display_call = self.current_rx_call
 
-                                self.last_rx_src = tlv_info["src"]
-                                self.active_talkers_by_tg[self.current_rx_tg] = {
-                                    "src": self.current_rx_src,
-                                    "callsign": self.current_rx_call,
-                                    "slot": self.current_rx_slot,
-                                    "time": time.time()
-                                }
-                                logger.info(f"📋 USRP TLV SET_INFO: Call={self.current_rx_call} ID={self.current_rx_src} TG={self.current_rx_tg} (Slot {self.current_rx_slot})")
-                                # Forward clean 320-byte padded TLV SET_INFO to DVSwitch Mobile clients (never overwrite with non-standard ASCII src=...)
-                                try:
-                                    rpt_id = int(self.config.get("server_dmr_id", 5109999))
-                                    rich_tlv = build_set_info_tlv(
-                                        self.current_rx_src, rpt_id, self.current_rx_tg, self.current_rx_slot, 1, mobile_display_call, pad_320=True
-                                    )
-                                    self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, rich_tlv))
-                                    last_tlv_push_time = time.time()
-                                except Exception as ex:
-                                    logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
+                                if tlv_src > 0 and self.current_rx_tg > 0:
+                                    self.active_talkers_by_tg[self.current_rx_tg] = {
+                                        "src": tlv_src,
+                                        "callsign": self.current_rx_call,
+                                        "slot": self.current_rx_slot,
+                                        "time": time.time()
+                                    }
+                                    logger.info(f"📋 USRP TLV SET_INFO: Call={mobile_display_call} ID={tlv_src} TG={self.current_rx_tg} (Slot {self.current_rx_slot})")
+                                    # Forward clean 320-byte padded TLV SET_INFO to DVSwitch Mobile clients
+                                    try:
+                                        rpt_id = int(self.config.get("server_dmr_id", 5109999))
+                                        rich_tlv = build_set_info_tlv(
+                                            tlv_src, rpt_id, self.current_rx_tg, self.current_rx_slot, 1, mobile_display_call, pad_320=True
+                                        )
+                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, rich_tlv))
+                                        last_tlv_push_time = time.time()
+                                    except Exception as ex:
+                                        logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
                             else:
                                 meta_str = pcm_payload.decode("ascii", errors="ignore").strip()
                                 logger.info(f"📋 USRP Text Metadata: {meta_str}")
@@ -1851,10 +1968,10 @@ usrpAGC = -20,10,100
             info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
             self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 5, 0, USRP_TYPE_TEXT, info_bytes), addr)
 
-            # 3. Send 320-byte padded TLV_TAG_SET_INFO (0x08) so DVSwitch Mobile displays Callsign & TG on screen immediately
-            display_call = f"{op_call} TG {primary_tg_val}"[:24]
-            tlv_init = build_set_info_tlv(op_id, rpt_id, primary_tg_val, slot_val, cc_val, display_call, pad_320=True)
-            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 6, 0, USRP_TYPE_TEXT, tlv_init), addr)
+            # NOTE: Never send TLV_TAG_SET_INFO (0x08) during client initialization or idle!
+            # TLV SET_INFO sets the remote RX Talker banner in DVSwitch Mobile.
+            # Sending operator identity here causes DVSwitch Mobile to flicker self-callsign.
+            # TLV SET_INFO is dispatched exclusively when genuine incoming RX voice arrives.
 
             logger.info(f"📱 Initialized DVSwitch Mobile client at {addr} -> Mode: DMR, Call: {op_call} ({op_id}), TG: {primary_tg_val} TS{slot_val}")
         except Exception as ex:
@@ -1916,7 +2033,7 @@ usrpAGC = -20,10,100
                             self.usrp_ingress_sock.sendto(pong_pkt, addr)
                         except Exception:
                             pass
-                        self.initialize_dvswitch_client(addr, seq, force=False)
+                        # PING only requires PONG; do not re-run full client initialization
                         continue
 
                     if payload.startswith(b"MODES:"):
