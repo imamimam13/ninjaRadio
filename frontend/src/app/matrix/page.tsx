@@ -43,6 +43,7 @@ interface RouteItem {
 
 interface BridgeWorker {
   id: string;
+  name?: string;
   tg: number;
   slot: number;
   usrp_rx_port: number;

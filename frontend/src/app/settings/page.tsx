@@ -431,7 +431,7 @@ export default function SettingsPage() {
       const res = await fetch("/api/mumla/channels");
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data.channels) && data.channels.length > 0) {
+        if (Array.isArray(data.channels)) {
           const formatted: MumbleRoomBridge[] = data.channels.map((c: any, idx: number) => ({
             id: c.id || `mroom_${idx}`,
             name: c.name || c.channel,
@@ -525,10 +525,11 @@ export default function SettingsPage() {
       handleToggleAdminMode();
       return;
     }
+    fetchMumbleRooms();
     const def = mumbleRooms.length > 0 ? mumbleRooms[0] : null;
     setIsCustomBotChannel(false);
     setNewBotName("");
-    setNewBotChannel(def ? def.name : "NinjaRadio-Nasional");
+    setNewBotChannel(def ? def.name : "");
     setNewBotTg(def ? def.targetTg : 510);
     setNewBotSlot(2);
     setShowAddBotModal(true);
@@ -551,6 +552,7 @@ export default function SettingsPage() {
       if (res.ok) {
         setShowAddBotModal(false);
         fetchMumbleBots();
+        fetchMumbleRooms();
         beepPlayer?.playTalkGrant();
       }
     } catch {}
@@ -876,7 +878,7 @@ export default function SettingsPage() {
       serverLocation,
       defaultTg,
       hotspot: { hotspotPort, hotspotPassword, maxHotspots, allowLoop },
-      peering: { peerHost, peerPort, peerPassword, subscribedTgs },
+      peering: peerList,
       crossmode: { usrpPort, ysfRoomId, aslNode, xlxReflector },
       mumble: { mumbleHost, mumblePort, mumbleChannel, mumbleTargetTg },
       hardware: { pttKey },
@@ -1430,7 +1432,7 @@ export default function SettingsPage() {
                             if (!raw) return <span className="text-[10px] text-slate-500 italic">Semua TG (Dynamic / Pass-through)</span>;
 
                             const tsRegex = /TS([12])(?:_\d+)?\s*[=:;_]\s*([0-9, ]+)/gi;
-                            const matches = [...raw.matchAll(tsRegex)];
+                            const matches = Array.from(raw.matchAll(tsRegex));
                             if (matches.length > 0) {
                               return matches.map((m, mIdx) => {
                                 const slot = m[1];

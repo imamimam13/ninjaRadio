@@ -48,7 +48,7 @@ export interface RadioTalkgroup {
   category: string;
 }
 
-export const ALL_TALKGROUPS: RadioTalkgroup[] = [
+const ALL_TALKGROUPS: RadioTalkgroup[] = [
   { id: 510, name: "Indo National DMR", slot: 1, mode: "DMR", category: "Amatir" },
   { id: 5101, name: "Jawa Barat Regional", slot: 2, mode: "YSF", category: "Amatir" },
   { id: 5102, name: "Jawa Tengah Regional", slot: 1, mode: "DMR", category: "Amatir" },
@@ -60,7 +60,7 @@ export const ALL_TALKGROUPS: RadioTalkgroup[] = [
   { id: 91, name: "BrandMeister WorldWide", slot: 1, mode: "DMR", category: "Amatir" },
 ];
 
-export function resolveTalkgroup(tgId: number, category: string = "Amatir"): RadioTalkgroup {
+function resolveTalkgroup(tgId: number, category: string = "Amatir"): RadioTalkgroup {
   const found = ALL_TALKGROUPS.find((t) => t.id === tgId);
   if (found) return found;
   return {
@@ -369,7 +369,7 @@ export default function RadioPocketMode() {
       // Arm the mic now (foreground + user gesture) so it can be re-enabled from the lockscreen.
       try {
         const s = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         });
         s.getAudioTracks().forEach((t) => { t.enabled = false; });
         armedMicStreamRef.current = s;
@@ -516,11 +516,11 @@ export default function RadioPocketMode() {
         const gainNode = ctx.createGain();
         gainNode.gain.value = 1.0;
 
-        // 4. Dynamics Compressor: prevents digital clipping & distortion on loud voice peaks
+        // 4. Relaxed Dynamics Compressor: gentle peak leveling without robotic distortion
         const comp = ctx.createDynamicsCompressor();
-        comp.threshold.value = -16;
-        comp.knee.value = 10;
-        comp.ratio.value = 3;
+        comp.threshold.value = -6;
+        comp.knee.value = 20;
+        comp.ratio.value = 1.8;
         comp.attack.value = 0.01;
         comp.release.value = 0.20;
 
@@ -736,9 +736,9 @@ export default function RadioPocketMode() {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
           }
         });
         if (lockscreenPttRef.current) armedMicStreamRef.current = stream;
