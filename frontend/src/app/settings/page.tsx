@@ -153,10 +153,10 @@ export default function SettingsPage() {
           setParrotTgs(Array.isArray(data.parrot_tgs) ? data.parrot_tgs.join(", ") : String(data.parrot_tgs));
         }
         if (data.parrot_delay !== undefined) setParrotDelay(Number(data.parrot_delay));
-        if (Array.isArray(data.mumble_rooms) && data.mumble_rooms.length > 0) {
+        if (Array.isArray(data.mumble_rooms)) {
           setMumbleRooms(data.mumble_rooms);
         }
-        if (Array.isArray(data.mumble_bots) && data.mumble_bots.length > 0) {
+        if (Array.isArray(data.mumble_bots)) {
           setMumbleBots(data.mumble_bots);
         }
         if (Array.isArray(data.peering) && data.peering.length > 0) {
@@ -385,36 +385,7 @@ export default function SettingsPage() {
     isActive: boolean;
   }
 
-  const [mumbleRooms, setMumbleRooms] = useState<MumbleRoomBridge[]>([
-    {
-      id: "room_1",
-      name: "NinjaRadio-Nasional",
-      targetTg: 510,
-      description: "DMR TG 510 Nasional Indonesia",
-      isActive: true,
-    },
-    {
-      id: "room_2",
-      name: "NinjaRadio-Nusantara",
-      targetTg: 5109,
-      description: "DMR TG 5109 Komunitas & RAPI",
-      isActive: true,
-    },
-    {
-      id: "room_3",
-      name: "NinjaRadio-Darurat-SAR",
-      targetTg: 5108,
-      description: "DMR TG 5108 Bencana Alam & SAR Rescue",
-      isActive: true,
-    },
-    {
-      id: "room_4",
-      name: "NinjaRadio-Worldwide-DX",
-      targetTg: 91,
-      description: "DMR TG 91 BrandMeister Global Worldwide",
-      isActive: true,
-    },
-  ]);
+  const [mumbleRooms, setMumbleRooms] = useState<MumbleRoomBridge[]>([]);
   const [showAddMumbleModal, setShowAddMumbleModal] = useState(false);
   const [editingMumbleRoomId, setEditingMumbleRoomId] = useState<string | null>(null);
   const [newRoomName, setNewRoomName] = useState("");
