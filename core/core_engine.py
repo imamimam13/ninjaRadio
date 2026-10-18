@@ -2136,6 +2136,15 @@ usrpAGC = -20,10,100
                                 "is_transmitting": False,
                                 "data_type": 2
                             }))
+                            # Forward unkey frame to Mumble Bridge
+                            unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0) + (b"\x00" * 320)
+                            try:
+                                self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                try:
+                                    self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                                except Exception:
+                                    pass
                         try:
                             ack_pkt = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
                             self.usrp_ingress_sock.sendto(ack_pkt, addr)
@@ -2203,24 +2212,37 @@ usrpAGC = -20,10,100
                             self.current_tx_dmr_id = target_dmr_id
                             self.current_tx_start_time = now
                             logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot}, Port: {target_worker_port})")
-                            asyncio.create_task(self.dispatch_event_to_backend({
-                                "network": "DVSwitch Mobile / USRP (32345)",
-                                "host": f"{addr[0]}:{addr[1]}",
-                                "src_id": target_dmr_id,
-                                "dst_tg": target_tg,
-                                "slot": target_slot,
-                                "callsign": target_call,
-                                "is_tx": True,
-                                "is_transmitting": True,
-                                "data_type": 1
-                            }))
 
                         self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
-                        std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, payload)
+                        chunk_pcm = payload[:320]
+                        std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk_pcm)
                         try:
                             self.bridge_sock.sendto(std_pkt, ("127.0.0.1", target_worker_port))
                         except Exception as e:
                             logger.debug(f"Error forwarding USRP to Analog_Bridge port {target_worker_port}: {e}")
+
+                        # Forward audio burst to Mumble Bridge so Mumble clients hear DVSwitch Mobile
+                        mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq & 0x7FFFFFFF, 0, 1, target_tg, target_dmr_id, target_slot, 0) + chunk_pcm
+                        try:
+                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                        except Exception:
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                pass
+
+                        # Forward audio burst to Web Audio Player & keep ACTIVE_STREAMS alive (eliminates 2s cutoff)
+                        traffic_event = {
+                            "network": f"DVSwitch Mobile ({addr[0]})",
+                            "src_id": target_dmr_id,
+                            "dst_tg": target_tg,
+                            "slot": target_slot,
+                            "callsign": target_call,
+                            "payload": chunk_pcm,
+                            "data_type": 1,
+                            "is_tx": False
+                        }
+                        asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
             except Exception as e:
                 if self.running:
                     logger.debug(f"usrp_ingress_loop note: {e}")
