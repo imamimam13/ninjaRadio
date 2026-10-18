@@ -93,9 +93,22 @@ def ensure_channels_created():
     logger.info("Synchronizing Murmur channels as SuperUser...")
     try:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
+        su.set_application_name("NinjaRadio-SuperUser")
         su.start()
-        su.is_ready()
-        time.sleep(1.0)
+        # Wait up to 3 seconds for connection
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            if su.is_alive():
+                break
+            time.sleep(0.2)
+        if not su.is_alive():
+            logger.error(f"❌ SuperUser authentication FAILED on Murmur ({MUMBLE_HOST}:{MUMBLE_PORT})! SuperUser password in Murmur database might differ from MUMBLE_SUPERUSER_PASSWORD='{superuser_pwd}'.")
+            try:
+                su.stop()
+            except Exception:
+                pass
+            return
+        time.sleep(0.8)
 
         existing_chs = {}
         for ch in list(su.channels.values()):
@@ -183,9 +196,18 @@ def create_murmur_channel(name: str, parent: int = 0) -> bool:
     logger.info(f"Connecting as SuperUser to create channel '{name}' in Murmur...")
     try:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
+        su.set_application_name("NinjaRadio-SuperUser")
         su.start()
-        su.is_ready()
-        time.sleep(0.8)
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            if su.is_alive():
+                break
+            time.sleep(0.2)
+        if not su.is_alive():
+            logger.error(f"❌ SuperUser authentication FAILED to create channel '{name}'! Check MUMBLE_SUPERUSER_PASSWORD.")
+            su.stop()
+            return False
+        time.sleep(0.5)
         exists = False
         for ch in list(su.channels.values()):
             cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
@@ -209,9 +231,18 @@ def delete_murmur_channel(name_or_id: str) -> bool:
     logger.info(f"Connecting as SuperUser to delete channel '{name_or_id}' from Murmur...")
     try:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
+        su.set_application_name("NinjaRadio-SuperUser")
         su.start()
-        su.is_ready()
-        time.sleep(0.8)
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            if su.is_alive():
+                break
+            time.sleep(0.2)
+        if not su.is_alive():
+            logger.error(f"❌ SuperUser authentication FAILED to delete channel '{name_or_id}'! Check MUMBLE_SUPERUSER_PASSWORD.")
+            su.stop()
+            return False
+        time.sleep(0.5)
         deleted = False
         for ch in list(su.channels.values()):
             cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
