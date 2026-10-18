@@ -520,19 +520,38 @@ export default function SettingsPage() {
     } catch {}
   };
 
-  const handleOpenAddBotModal = () => {
+  const handleOpenAddBotModal = async () => {
     if (!isAdminUnlocked) {
       handleToggleAdminMode();
       return;
     }
-    fetchMumbleRooms();
-    const def = mumbleRooms.length > 0 ? mumbleRooms[0] : null;
     setIsCustomBotChannel(false);
     setNewBotName("");
-    setNewBotChannel(def ? def.name : "");
-    setNewBotTg(def ? def.targetTg : 510);
     setNewBotSlot(2);
     setShowAddBotModal(true);
+    try {
+      const res = await fetch("/api/mumla/channels");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.channels) && data.channels.length > 0) {
+          const formatted: MumbleRoomBridge[] = data.channels.map((c: any, idx: number) => ({
+            id: c.id || `mroom_${idx}`,
+            name: c.name || c.channel,
+            targetTg: Number(c.targetTg !== undefined ? c.targetTg : c.tg) || 510,
+            description: c.description || `DMR TG ${c.targetTg || c.tg || 510}`,
+            isActive: c.isActive !== false
+          }));
+          setMumbleRooms(formatted);
+          const def = formatted[0];
+          setNewBotChannel(def.name);
+          setNewBotTg(def.targetTg);
+          return;
+        }
+      }
+    } catch {}
+    const def = mumbleRooms.length > 0 ? mumbleRooms[0] : null;
+    setNewBotChannel(def ? def.name : "");
+    setNewBotTg(def ? def.targetTg : 510);
   };
 
   const handleAddBot = async (e: React.FormEvent) => {
@@ -558,7 +577,7 @@ export default function SettingsPage() {
     } catch {}
   };
 
-  const handleOpenMoveBotModal = (bot: any) => {
+  const handleOpenMoveBotModal = async (bot: any) => {
     if (!isAdminUnlocked) {
       handleToggleAdminMode();
       return;
@@ -567,6 +586,9 @@ export default function SettingsPage() {
     setMoveBotChannel(bot.channel);
     setMoveBotTg(bot.tg);
     setShowMoveBotModal(true);
+    try {
+      await fetchMumbleRooms();
+    } catch {}
   };
 
   const handleMoveBot = async (e: React.FormEvent) => {
