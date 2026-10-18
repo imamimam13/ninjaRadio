@@ -95,20 +95,25 @@ def ensure_channels_created():
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
         su.set_application_name("NinjaRadio-SuperUser")
         su.start()
-        # Wait up to 3 seconds for connection
-        t0 = time.time()
-        while time.time() - t0 < 3.0:
-            if su.is_alive():
-                break
-            time.sleep(0.2)
-        if not su.is_alive():
+        # Wait up to 4 seconds for SuperUser connection and ServerSync
+        is_ready = False
+        try:
+            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
+                is_ready = su.ready.wait(timeout=4.0)
+            else:
+                su.is_ready()
+                is_ready = su.is_alive()
+        except Exception:
+            is_ready = False
+
+        if not is_ready or not su.is_alive():
             logger.error(f"❌ SuperUser authentication FAILED on Murmur ({MUMBLE_HOST}:{MUMBLE_PORT})! SuperUser password in Murmur database might differ from MUMBLE_SUPERUSER_PASSWORD='{superuser_pwd}'.")
             try:
                 su.stop()
             except Exception:
                 pass
             return
-        time.sleep(0.8)
+        time.sleep(0.5)
 
         existing_chs = {}
         for ch in list(su.channels.values()):
@@ -172,7 +177,18 @@ def get_live_murmur_channels():
         superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
         su.start()
-        su.is_ready()
+        is_ready = False
+        try:
+            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
+                is_ready = su.ready.wait(timeout=4.0)
+            else:
+                su.is_ready()
+                is_ready = su.is_alive()
+        except Exception:
+            is_ready = False
+        if not is_ready or not su.is_alive():
+            su.stop()
+            return []
         time.sleep(0.5)
         res = []
         for ch in list(su.channels.values()):
@@ -198,12 +214,16 @@ def create_murmur_channel(name: str, parent: int = 0) -> bool:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
         su.set_application_name("NinjaRadio-SuperUser")
         su.start()
-        t0 = time.time()
-        while time.time() - t0 < 3.0:
-            if su.is_alive():
-                break
-            time.sleep(0.2)
-        if not su.is_alive():
+        is_ready = False
+        try:
+            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
+                is_ready = su.ready.wait(timeout=4.0)
+            else:
+                su.is_ready()
+                is_ready = su.is_alive()
+        except Exception:
+            is_ready = False
+        if not is_ready or not su.is_alive():
             logger.error(f"❌ SuperUser authentication FAILED to create channel '{name}'! Check MUMBLE_SUPERUSER_PASSWORD.")
             su.stop()
             return False
@@ -233,12 +253,16 @@ def delete_murmur_channel(name_or_id: str) -> bool:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
         su.set_application_name("NinjaRadio-SuperUser")
         su.start()
-        t0 = time.time()
-        while time.time() - t0 < 3.0:
-            if su.is_alive():
-                break
-            time.sleep(0.2)
-        if not su.is_alive():
+        is_ready = False
+        try:
+            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
+                is_ready = su.ready.wait(timeout=4.0)
+            else:
+                su.is_ready()
+                is_ready = su.is_alive()
+        except Exception:
+            is_ready = False
+        if not is_ready or not su.is_alive():
             logger.error(f"❌ SuperUser authentication FAILED to delete channel '{name_or_id}'! Check MUMBLE_SUPERUSER_PASSWORD.")
             su.stop()
             return False
