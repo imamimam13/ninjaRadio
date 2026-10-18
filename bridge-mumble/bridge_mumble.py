@@ -36,14 +36,44 @@ ROOM_MAPPINGS = {}
 GATEWAY_POOL = {}  # room_name -> MumbleGatewayBot
 
 def load_room_mappings():
-    """Loads talkgroups dynamically from config.json and merges with defaults."""
+    """Loads talkgroups dynamically from config.json as the single source of truth."""
+    mappings = {}
+
+    # 1. Read from /app/data/config.json if present
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # If user configured mumble_rooms, use it directly without injecting unwanted defaults
+            if "mumble_rooms" in data and isinstance(data["mumble_rooms"], list):
+                for r in data["mumble_rooms"]:
+                    ch = r.get("name") or r.get("channel")
+                    tg = r.get("targetTg") if r.get("targetTg") is not None else r.get("tg")
+                    if ch and tg is not None:
+                        try:
+                            mappings[ch.strip()] = int(tg)
+                        except (ValueError, TypeError):
+                            pass
+                # Include any room assigned to bots
+                for b in data.get("mumble_bots", []):
+                    ch = b.get("channel")
+                    tg = b.get("tg", 510)
+                    if ch:
+                        try:
+                            mappings[ch.strip()] = int(tg)
+                        except (ValueError, TypeError):
+                            pass
+                return mappings
+        except Exception as e:
+            logger.debug(f"Could not parse config.json for rooms: {e}")
+
+    # Fallback initial defaults only if config.json has no rooms
     mappings = {
         "NinjaRadio-Nasional": 510,
         "NinjaRadio-Nusantara": 5109,
         "Echo-Parrot": 9990,
     }
-
-    # Fallback env mappings
     raw_map = os.getenv("MUMBLE_ROOM_MAP", "")
     if raw_map:
         for item in raw_map.split(","):
@@ -54,80 +84,57 @@ def load_room_mappings():
                 except ValueError:
                     pass
 
-    # Read from /app/data/config.json if mounted
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                custom_rooms = data.get("mumble_rooms", [])
-                for r in custom_rooms:
-                    ch = r.get("name") or r.get("channel")
-                    tg = r.get("targetTg") if r.get("targetTg") is not None else r.get("tg")
-                    if ch and tg is not None:
-                        try:
-                            mappings[ch.strip()] = int(tg)
-                        except (ValueError, TypeError):
-                            pass
-
-                custom_bots = data.get("mumble_bots", [])
-                for b in custom_bots:
-                    ch = b.get("channel")
-                    tg = b.get("tg")
-                    if ch and tg is not None:
-                        try:
-                            mappings[ch.strip()] = int(tg)
-                        except (ValueError, TypeError):
-                            pass
-
-                peers = data.get("peering", [])
-                for p in peers:
-                    tgs_str = p.get("subscribedTgs", "")
-                    for tg_part in re.split(r"[,; ]+", tgs_str):
-                        tg_part = tg_part.strip()
-                        if tg_part.isdigit():
-                            tg_num = int(tg_part)
-                            mappings[f"TG-{tg_num}"] = tg_num
-        except Exception as e:
-            logger.debug(f"Could not parse config.json for rooms: {e}")
-
     return mappings
 
 def ensure_channels_created():
-    """Connects as SuperUser to create permanent channels in Murmur if not present."""
+    """Connects as SuperUser to create permanent channels in Murmur and remove channels that were deleted."""
     import pymumble_py3 as pymumble
     superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
-    logger.info("Initializing Murmur channels as SuperUser...")
+    logger.info("Synchronizing Murmur channels as SuperUser...")
     try:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
         su.start()
         su.is_ready()
         time.sleep(1.0)
 
-        existing_names = set()
+        existing_chs = {}
         for ch in list(su.channels.values()):
             try:
-                name = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-                if name:
-                    existing_names.add(str(name))
+                cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
+                cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
+                if cname and cid is not None and int(cid) != 0:
+                    existing_chs[str(cname)] = int(cid)
             except Exception:
                 pass
 
-        logger.info(f"Existing Murmur channels before init: {list(existing_names)}")
+        logger.info(f"Existing Murmur channels: {list(existing_chs.keys())}")
+
+        # 1. Create channels defined in ROOM_MAPPINGS that do not yet exist
         for room_name, tg_val in ROOM_MAPPINGS.items():
-            if room_name not in existing_names:
+            if room_name not in existing_chs:
                 try:
                     su.channels.new_channel(0, room_name, temporary=False)
                     logger.info(f"✓ SuperUser created permanent Mumble Room: '{room_name}' (TG {tg_val})")
                     time.sleep(0.3)
                 except Exception as ce:
                     logger.warning(f"Could not create channel '{room_name}': {ce}")
-            else:
-                logger.info(f"✓ Channel '{room_name}' already exists.")
+
+        # 2. Delete channels from Murmur that were removed from ROOM_MAPPINGS
+        if os.path.exists(CONFIG_PATH):
+            for ex_name, ex_id in list(existing_chs.items()):
+                if ex_name not in ROOM_MAPPINGS and ex_id != 0:
+                    try:
+                        su.channels.remove_channel(ex_id)
+                        logger.info(f"✓ SuperUser removed decommissioned room '{ex_name}' (ID: {ex_id}) from Murmur")
+                        time.sleep(0.3)
+                    except Exception as de:
+                        logger.warning(f"Could not remove channel '{ex_name}': {de}")
+
         su.stop()
-        time.sleep(0.8)
+        time.sleep(0.5)
         persist_live_channels_cache(get_live_murmur_channels())
     except Exception as e:
-        logger.warning(f"SuperUser channel initialization warning: {e}")
+        logger.warning(f"SuperUser channel synchronization error: {e}")
 
 def get_live_murmur_channels():
     """Returns list of all active non-root channels currently in Murmur."""
@@ -354,7 +361,9 @@ class BridgeApiHandler(BaseHTTPRequestHandler):
 
         elif parsed.path in ("/sync", "/sync/", "/bots", "/bots/"):
             try:
-                load_room_mappings()
+                global ROOM_MAPPINGS
+                ROOM_MAPPINGS = load_room_mappings()
+                ensure_channels_created()
                 if self.usrp_socket:
                     sync_gateway_bots(self.usrp_socket)
                 live_chs = get_live_murmur_channels()
@@ -1119,7 +1128,7 @@ def config_file_watcher_loop(usrp_sock):
                 if last_mtime > 0 and mtime > last_mtime:
                     logger.info("⚡ Detected changes in config.json! Reloading Mumble rooms...")
                     new_mappings = load_room_mappings()
-                    ROOM_MAPPINGS.update(new_mappings)
+                    ROOM_MAPPINGS = new_mappings
                     ensure_channels_created()
                     sync_gateway_bots(usrp_sock)
                 last_mtime = mtime
