@@ -11,9 +11,17 @@ import numpy as np
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
 
+log_handlers = [logging.StreamHandler()]
+try:
+    os.makedirs("/app/data", exist_ok=True)
+    log_handlers.append(logging.FileHandler("/app/data/mumble_bridge.log", mode="a", encoding="utf-8"))
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [Mumble-Bridge] %(message)s"
+    format="%(asctime)s [%(levelname)s] [Mumble-Bridge] %(message)s",
+    handlers=log_handlers
 )
 logger = logging.getLogger("mumble-bridge")
 
@@ -377,6 +385,37 @@ class BridgeApiHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "SUCCESS", "channels": result, "raw_channels": live_chs}).encode("utf-8"))
+            return
+
+        elif parsed.path in ("/logs", "/logs/"):
+            log_lines = []
+            if os.path.exists("/app/data/mumble_bridge.log"):
+                try:
+                    with open("/app/data/mumble_bridge.log", "r", encoding="utf-8") as f:
+                        log_lines = [l.strip() for l in f.readlines()[-100:]]
+                except Exception:
+                    pass
+            live_chs = get_live_murmur_channels()
+            active_bots = [
+                {
+                    "name": bot.bot_user,
+                    "channel": bot.room_name,
+                    "tg": bot.tg,
+                    "slot": bot.slot,
+                    "connected": bool(bot.mumble and bot.mumble.is_alive())
+                }
+                for bot in GATEWAY_POOL.values()
+            ]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": "SUCCESS",
+                "murmur_host": f"{MUMBLE_HOST}:{MUMBLE_PORT}",
+                "live_channels": live_chs,
+                "active_bots": active_bots,
+                "recent_logs": log_lines
+            }).encode("utf-8"))
             return
 
         self.send_response(404)

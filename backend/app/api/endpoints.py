@@ -1756,6 +1756,33 @@ async def delete_mumla_bot(bot_name: str):
 
     return {"status": "SUCCESS", "message": f"Bot '{bot_name}' removed"}
 
+@router.get("/mumla/logs")
+async def get_mumla_logs():
+    """Returns live logs, bot states, and channel diagnostics from Mumble Bridge."""
+    import httpx
+    import json
+    import os
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.get("http://mumble-bridge:12347/logs")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+
+    log_path = "/app/data/mumble_bridge.log"
+    logs = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                logs = [l.strip() for l in f.readlines()[-100:]]
+        except Exception as e:
+            logs = [f"Error reading log: {e}"]
+    return {
+        "status": "FALLBACK",
+        "recent_logs": logs
+    }
+
 # ----------------- DMR Master Server Settings -----------------
 
 @router.get("/serverdmr/config")

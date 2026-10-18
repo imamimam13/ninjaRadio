@@ -50,9 +50,9 @@ services:
     ports:
       - "64738:64738/tcp"
       - "64738:64738/udp"
-    entrypoint: ["/bin/bash", "-c", "/usr/bin/mumble-server -ini /data/mumble_server_config.ini -supw ninjaradio_admin 2>/dev/null || true; exec /entrypoint.sh /usr/bin/mumble-server"]
+    command: ["bash", "-c", "/usr/bin/mumble-server -ini /data/mumble_server_config.ini -supw ${MUMBLE_SUPERUSER_PASSWORD:-ninjaradio_admin} && exec /usr/bin/mumble-server -ini /data/mumble_server_config.ini -fg"]
     environment:
-      - MUMBLE_SUPERUSER_PASSWORD=ninjaradio_admin
+      - MUMBLE_SUPERUSER_PASSWORD=${MUMBLE_SUPERUSER_PASSWORD:-ninjaradio_admin}
       - MUMBLE_CONFIG_AUTOBANATTEMPTS=0
     volumes:
       - mumble_data:/data
