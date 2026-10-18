@@ -1927,6 +1927,7 @@ usrpAGC = -20,10,100
                 data, addr = await loop.sock_recvfrom(self.usrp_ingress_sock, 2048)
                 if len(data) >= 32 and data.startswith(b"USRP"):
                     self.tx_packet_count += 1
+                    is_new_client = (addr not in self.registered_usrp_clients)
                     self.registered_usrp_clients[addr] = time.time()
 
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
@@ -1947,6 +1948,16 @@ usrpAGC = -20,10,100
                         if hdr_tg > 0:
                             self.client_metadata[addr]["tg"] = hdr_tg
                         self.client_metadata[addr[0]] = self.client_metadata[addr]
+
+                    # Auto-register and auto-switch mode to DMR upon first connect from any DVSwitch client
+                    if is_new_client and addr[0] != "127.0.0.1" and not payload.startswith(b"REG:UNREG"):
+                        try:
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00"), addr)
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
+                            logger.info(f"📱 Auto-registered & auto-switched mode to DMR for client at {addr}")
+                        except Exception:
+                            pass
 
                     if is_control_pkt or key_flag == 0 or len(payload) != 320:
                         logger.info(f"🔍 [USRP-RAW] from {addr}: key={key_flag}, type={packet_type}, tg={tg}, dmr_id={dmr_id}, slot={slot}, len={len(payload)}, hex={payload[:64].hex()}")
@@ -1979,7 +1990,6 @@ usrpAGC = -20,10,100
                             reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
                             try:
                                 self.usrp_ingress_sock.sendto(reply_pkt, addr)
-                                # Back to basic: otomatis mode DMR saja (tanpa paksa TG)
                                 self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
                                 self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
                             except Exception:
@@ -1998,6 +2008,7 @@ usrpAGC = -20,10,100
                     if payload.startswith(b"MODES:"):
                         self.registered_usrp_clients[addr] = time.time()
                         try:
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"MODES:DMR\x00"), addr)
                             self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
                             self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
                         except Exception:

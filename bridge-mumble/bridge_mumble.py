@@ -1067,7 +1067,7 @@ def load_configured_bots():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if "mumble_bots" in data and isinstance(data["mumble_bots"], list) and len(data["mumble_bots"]) > 0:
+                if "mumble_bots" in data and isinstance(data["mumble_bots"], list):
                     return data["mumble_bots"]
         except Exception:
             pass

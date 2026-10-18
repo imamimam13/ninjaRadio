@@ -1592,16 +1592,15 @@ async def get_mumla_bots():
     import json
     import os
     config_path = "/app/data/config.json"
-    bots = DEFAULT_MUMBLE_BOTS
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if "mumble_bots" in data and isinstance(data["mumble_bots"], list) and len(data["mumble_bots"]) > 0:
-                    bots = data["mumble_bots"]
+                if "mumble_bots" in data and isinstance(data["mumble_bots"], list):
+                    return {"bots": data["mumble_bots"]}
         except Exception:
             pass
-    return {"bots": bots}
+    return {"bots": DEFAULT_MUMBLE_BOTS}
 
 @router.post("/mumla/bots")
 async def create_or_update_bot(payload: dict):
@@ -1627,7 +1626,7 @@ async def create_or_update_bot(payload: dict):
         except Exception:
             data = {}
 
-    bots = list(data.get("mumble_bots", list(DEFAULT_MUMBLE_BOTS)))
+    bots = list(data.get("mumble_bots", []))
     existing_idx = next((i for i, b in enumerate(bots) if b.get("name") == name), None)
     bot_entry = {
         "name": name,
@@ -1694,7 +1693,7 @@ async def move_mumla_bot(payload: dict):
         except Exception:
             data = {}
 
-    bots = list(data.get("mumble_bots", list(DEFAULT_MUMBLE_BOTS)))
+    bots = list(data.get("mumble_bots", []))
     target_bot = next((b for b in bots if b.get("name") == name), None)
     if not target_bot:
         tg = int(payload.get("tg", 510))
@@ -1739,7 +1738,7 @@ async def delete_mumla_bot(bot_name: str):
         except Exception:
             data = {}
 
-    bots = list(data.get("mumble_bots", list(DEFAULT_MUMBLE_BOTS)))
+    bots = list(data.get("mumble_bots", []))
     bots = [b for b in bots if b.get("name") != bot_name]
     data["mumble_bots"] = bots
     try:
