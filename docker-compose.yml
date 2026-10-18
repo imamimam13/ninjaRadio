@@ -50,7 +50,6 @@ services:
     ports:
       - "64738:64738/tcp"
       - "64738:64738/udp"
-    command: ["bash", "-c", "/usr/bin/mumble-server -ini /data/mumble_server_config.ini -supw ${MUMBLE_SUPERUSER_PASSWORD:-ninjaradio_admin} && exec /usr/bin/mumble-server -ini /data/mumble_server_config.ini -fg"]
     environment:
       - MUMBLE_SUPERUSER_PASSWORD=${MUMBLE_SUPERUSER_PASSWORD:-ninjaradio_admin}
       - MUMBLE_CONFIG_AUTOBANATTEMPTS=0
@@ -81,7 +80,9 @@ services:
       - mumble-server
       - core
     volumes:
+      - ./bridge-mumble:/app
       - ninjaradio_data:/app/data
+      - mumble_data:/mumble_data:rw
     networks:
       ninjaradio_net:
         aliases:
@@ -105,6 +106,7 @@ services:
       - ADMIN_PIN=${ADMIN_PIN:-1234}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/ninjaradio.db
     volumes:
+      - ./backend:/app
       - ninjaradio_data:/app/data
     depends_on:
       - core
