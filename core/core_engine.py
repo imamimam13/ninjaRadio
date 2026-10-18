@@ -1949,13 +1949,22 @@ usrpAGC = -20,10,100
                             self.client_metadata[addr]["tg"] = hdr_tg
                         self.client_metadata[addr[0]] = self.client_metadata[addr]
 
-                    # Auto-register and auto-switch mode to DMR upon first connect from any DVSwitch client
-                    if is_new_client and addr[0] != "127.0.0.1" and not payload.startswith(b"REG:UNREG"):
+                    # Helper task to send MODE:DMR delayed by 250ms (avoids flooding Android UDP socket and causing force-close)
+                    async def send_mode_dmr_delayed(client_addr, client_seq):
+                        await asyncio.sleep(0.25)
+                        try:
+                            mode_pkt = build_usrp_frame((client_seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00")
+                            self.usrp_ingress_sock.sendto(mode_pkt, client_addr)
+                            logger.info(f"📱 Sent paced Mode: DMR (delayed 250ms) to DVSwitch client at {client_addr}")
+                        except Exception:
+                            pass
+
+                    # Auto-register and auto-switch mode to DMR upon first connect from any DVSwitch client (only if not REG)
+                    if is_new_client and addr[0] != "127.0.0.1" and not payload.startswith(b"REG:"):
                         try:
                             self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00"), addr)
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
-                            logger.info(f"📱 Auto-registered & auto-switched mode to DMR for client at {addr}")
+                            asyncio.create_task(send_mode_dmr_delayed(addr, seq))
+                            logger.info(f"📱 Auto-registered & scheduled paced Mode: DMR for client at {addr}")
                         except Exception:
                             pass
 
@@ -1990,8 +1999,7 @@ usrpAGC = -20,10,100
                             reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
                             try:
                                 self.usrp_ingress_sock.sendto(reply_pkt, addr)
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
+                                asyncio.create_task(send_mode_dmr_delayed(addr, seq))
                             except Exception:
                                 pass
                         continue
@@ -2009,8 +2017,7 @@ usrpAGC = -20,10,100
                         self.registered_usrp_clients[addr] = time.time()
                         try:
                             self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"MODES:DMR\x00"), addr)
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, b"*DMR\x00"), addr)
+                            asyncio.create_task(send_mode_dmr_delayed(addr, seq))
                         except Exception:
                             pass
                         continue
