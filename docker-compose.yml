@@ -106,7 +106,7 @@ services:
       - ADMIN_PIN=${ADMIN_PIN:-1234}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/ninjaradio.db
     volumes:
-      - ./backend:/app
+      - ./backend:/app/backend
       - ninjaradio_data:/app/data
     depends_on:
       - core
