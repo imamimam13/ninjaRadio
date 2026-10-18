@@ -1949,25 +1949,6 @@ usrpAGC = -20,10,100
                             self.client_metadata[addr]["tg"] = hdr_tg
                         self.client_metadata[addr[0]] = self.client_metadata[addr]
 
-                    # Helper task to send MODE:DMR delayed by 250ms (avoids flooding Android UDP socket and causing force-close)
-                    async def send_mode_dmr_delayed(client_addr, client_seq):
-                        await asyncio.sleep(0.25)
-                        try:
-                            mode_pkt = build_usrp_frame((client_seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00")
-                            self.usrp_ingress_sock.sendto(mode_pkt, client_addr)
-                            logger.info(f"📱 Sent paced Mode: DMR (delayed 250ms) to DVSwitch client at {client_addr}")
-                        except Exception:
-                            pass
-
-                    # Auto-register and auto-switch mode to DMR upon first connect from any DVSwitch client (only if not REG)
-                    if is_new_client and addr[0] != "127.0.0.1" and not payload.startswith(b"REG:"):
-                        try:
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00"), addr)
-                            asyncio.create_task(send_mode_dmr_delayed(addr, seq))
-                            logger.info(f"📱 Auto-registered & scheduled paced Mode: DMR for client at {addr}")
-                        except Exception:
-                            pass
-
                     if is_control_pkt or key_flag == 0 or len(payload) != 320:
                         logger.info(f"🔍 [USRP-RAW] from {addr}: key={key_flag}, type={packet_type}, tg={tg}, dmr_id={dmr_id}, slot={slot}, len={len(payload)}, hex={payload[:64].hex()}")
 
@@ -1996,10 +1977,14 @@ usrpAGC = -20,10,100
                                         self.client_metadata[addr]["callsign"] = token.upper()
                                 self.client_metadata[addr[0]] = self.client_metadata[addr]
                             logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({reg_str})")
-                            reply_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00")
                             try:
-                                self.usrp_ingress_sock.sendto(reply_pkt, addr)
-                                asyncio.create_task(send_mode_dmr_delayed(addr, seq))
+                                # Standard registration acknowledgment
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00"), addr)
+                                # Automatically switch mode to DMR (without forcing any TG)
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
+                                cmd_mode = b"mode=DMR"
+                                tlv_mode = struct.pack("BB", 5, len(cmd_mode)) + cmd_mode
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, tlv_mode), addr)
                             except Exception:
                                 pass
                         continue
@@ -2016,8 +2001,10 @@ usrpAGC = -20,10,100
                     if payload.startswith(b"MODES:"):
                         self.registered_usrp_clients[addr] = time.time()
                         try:
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"MODES:DMR\x00"), addr)
-                            asyncio.create_task(send_mode_dmr_delayed(addr, seq))
+                            # Standard JSON array of modes for DVSwitch Mobile client
+                            modes_reply = b'MODES:["DMR"]\x00'
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, modes_reply), addr)
+                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
                         except Exception:
                             pass
                         continue
