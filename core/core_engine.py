@@ -499,6 +499,8 @@ class DVSwitchCoreManager:
         self.active_talkers_by_tg: Dict[int, dict] = {}
         # Track initialized DVSwitch Mobile clients (addr -> timestamp of last mode/identity init)
         self.initialized_usrp_clients: Dict[tuple, float] = {}
+        # Track active talker currently displayed on DVSwitch Mobile clients (0 = idle banner)
+        self.current_dvswitch_talker_src: int = 0
 
         # Modular Dynamic Analog_Bridge Worker Pool (Metode B)
         self.bridge_workers: Dict[str, dict] = {}
@@ -1684,6 +1686,9 @@ usrpAGC = -20,10,100
                                 self.current_rx_tg = 0
                                 self.current_rx_src = 0
                                 self.current_rx_call = ""
+                                if self.current_dvswitch_talker_src != 0:
+                                    self.current_dvswitch_talker_src = 0
+                                    self.restore_dvswitch_idle_banner(1)
 
                 # 3. Timeout watchdog: If transmission has been quiet for > 2.0s, mark inactive
                 if self.current_rx_active and (time.time() - self.current_rx_time > 2.0):
@@ -1703,6 +1708,9 @@ usrpAGC = -20,10,100
                     self.current_rx_tg = 0
                     self.current_rx_src = 0
                     self.current_rx_call = ""
+                    if self.current_dvswitch_talker_src != 0:
+                        self.current_dvswitch_talker_src = 0
+                        self.restore_dvswitch_idle_banner(1)
 
                 await asyncio.sleep(0.05)
             except Exception as e:
@@ -1724,9 +1732,14 @@ usrpAGC = -20,10,100
                 if len(data) >= 32 and data.startswith(b"USRP"):
                     self.rx_packet_count += 1
                     magic, seq, mem, key_flag, talkgroup = struct.unpack(">4sIIII", data[:20])
-                    usrp_type, = struct.unpack("<I", data[20:24])
+                    field4, = struct.unpack(">I", data[20:24])
+                    usrp_type = (field4 >> 24) & 0xFF
+                    if usrp_type == 0 and field4 in (2, 3, 4):
+                        usrp_type = field4
                     mpxid, res = struct.unpack(">II", data[24:32])
                     pcm_payload = data[32:]
+                    if len(pcm_payload) > 0 and pcm_payload[0] == TLV_TAG_SET_INFO:
+                        usrp_type = USRP_TYPE_TEXT
 
                     # Handle USRP_TYPE_TEXT (2) metadata packets exported by Analog_Bridge
                     if usrp_type == 2 and len(pcm_payload) > 0:
@@ -1775,16 +1788,19 @@ usrpAGC = -20,10,100
                                         "time": time.time()
                                     }
                                     logger.info(f"📋 USRP TLV SET_INFO: Call={mobile_display_call} ID={tlv_src} TG={self.current_rx_tg} (Slot {self.current_rx_slot})")
-                                    # Forward clean 320-byte padded TLV SET_INFO to DVSwitch Mobile clients
-                                    try:
-                                        rpt_id = int(self.config.get("server_dmr_id", 5109999))
-                                        rich_tlv = build_set_info_tlv(
-                                            tlv_src, rpt_id, self.current_rx_tg, self.current_rx_slot, 1, mobile_display_call, pad_320=True
-                                        )
-                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, rich_tlv))
-                                        last_tlv_push_time = time.time()
-                                    except Exception as ex:
-                                        logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
+                                    # Forward clean 320-byte padded TLV SET_INFO to DVSwitch Mobile clients ONCE per burst
+                                    if self.current_dvswitch_talker_src != tlv_src:
+                                        self.current_dvswitch_talker_src = tlv_src
+                                        try:
+                                            rpt_id = int(self.config.get("server_dmr_id", 5109999))
+                                            rich_tlv = build_set_info_tlv(
+                                                tlv_src, rpt_id, self.current_rx_tg, self.current_rx_slot, 1, mobile_display_call, pad_320=True
+                                            )
+                                            self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, rich_tlv))
+                                            last_tlv_push_time = time.time()
+                                            logger.info(f"📱 Dispatched TLV remote banner to DVSwitch: {mobile_display_call} ({tlv_src}) -> TG {self.current_rx_tg}")
+                                        except Exception as ex:
+                                            logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
                             else:
                                 meta_str = pcm_payload.decode("ascii", errors="ignore").strip()
                                 logger.info(f"📋 USRP Text Metadata: {meta_str}")
@@ -1805,21 +1821,40 @@ usrpAGC = -20,10,100
                     # Resolve incoming talker info (never use operator's own identity as RX talker)
                     primary_tg = int(self.primary_tg or self.config.get("primary_tg", 1025))
                     active_tg = self.current_rx_tg if self.current_rx_tg > 0 else (talkgroup if (0 < talkgroup < 16777215) else primary_tg)
+
+                    now = time.time()
+                    # If talker identity or TG is not yet known, inspect active_talkers_by_tg for the most recent active talker (within 4.0s)
+                    if self.current_rx_src <= 0 or self.current_rx_tg <= 0:
+                        recent_tg = 0
+                        recent_time = 0
+                        for tg_cand, t_info in self.active_talkers_by_tg.items():
+                            if t_info.get("time", 0) > recent_time and (now - t_info.get("time", 0) < 4.0):
+                                recent_time = t_info["time"]
+                                recent_tg = tg_cand
+                        if recent_tg > 0:
+                            active_tg = recent_tg
+                            self.current_rx_tg = recent_tg
+                            talker_for_tg = self.active_talkers_by_tg.get(active_tg, {})
+                            self.current_rx_src = talker_for_tg.get("src", 0)
+                            self.current_rx_call = talker_for_tg.get("callsign", "")
+                            self.current_rx_slot = talker_for_tg.get("slot", 2)
+
                     talker_for_tg = self.active_talkers_by_tg.get(active_tg, {})
                     active_slot = self.current_rx_slot if self.current_rx_slot > 0 else (talker_for_tg.get("slot") or 2)
                     active_src = self.current_rx_src if self.current_rx_src > 0 else (talker_for_tg.get("src") or self.last_rx_src)
                     active_call = self.current_rx_call or talker_for_tg.get("callsign") or (lookup_callbook_callsign(active_src) if active_src > 0 else None) or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
 
-                    now = time.time()
-                    # Ensure DVSwitch Mobile clients receive 320B-padded TLV SET_INFO once on burst start (prevents flickering)
-                    if not self.current_rx_active and active_src > 0:
+                    # Dispatch remote talker banner to DVSwitch Mobile ONCE per burst (ensures remote callsign appears, zero flicker!)
+                    if active_src > 0 and self.current_dvswitch_talker_src != active_src:
+                        self.current_dvswitch_talker_src = active_src
                         try:
                             rpt_id = int(self.config.get("server_dmr_id", 5109999))
                             mobile_call = lookup_callbook_callsign(active_src, include_name=True) or active_call
                             tlv_burst = build_set_info_tlv(active_src, rpt_id, active_tg, active_slot, 1, mobile_call, pad_320=True)
                             self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, tlv_burst))
-                        except Exception:
-                            pass
+                            logger.info(f"📱 Dispatched remote talker banner to DVSwitch Mobile: {mobile_call} ({active_src}) -> TG {active_tg}")
+                        except Exception as ex:
+                            logger.debug(f"Error dispatching remote talker banner: {ex}")
 
                     # Refresh active timestamp while receiving audio packets
                     self.current_rx_time = now
@@ -1886,9 +1921,10 @@ usrpAGC = -20,10,100
                         self.current_rx_tg = 0
                         self.current_rx_src = 0
                         self.current_rx_call = ""
-                        # Re-send clean idle banner to DVSwitch Mobile clients
-                        for client_addr in list(self.registered_usrp_clients.keys()):
-                            self.initialize_dvswitch_client(client_addr, seq, force=True)
+                        # Smoothly restore operator idle banner on DVSwitch Mobile without flickering
+                        if self.current_dvswitch_talker_src != 0:
+                            self.current_dvswitch_talker_src = 0
+                            self.restore_dvswitch_idle_banner(seq)
             except Exception as e:
                 if self.running:
                     logger.debug(f"ab_pcm_rx_loop note: {e}")
@@ -1906,6 +1942,35 @@ usrpAGC = -20,10,100
             logger.info(f"📋 Sent TLV SET_INFO to Analog_Bridge (port {port}): {callsign} ({src}) -> TG {tg} Slot {slot}")
         except Exception as e:
             logger.debug(f"Failed to send SET_INFO: {e}")
+
+    def restore_dvswitch_idle_banner(self, seq: int = 1):
+        """
+        Smoothly restores the operator's standby banner on connected DVSwitch Mobile clients
+        WITHOUT re-sending MODES: or MODE:DMR, ensuring ZERO screen flicker.
+        """
+        if not self.usrp_ingress_sock:
+            return
+        rpt_id = int(self.config.get("server_dmr_id", 5109999))
+        for client_addr in list(self.registered_usrp_clients.keys()):
+            if client_addr[0] == "127.0.0.1":
+                continue
+            meta = self.client_metadata.get(client_addr) or self.client_metadata.get(client_addr[0], {})
+            primary_tg_val = int(meta.get("tg") or self.primary_tg or self.config.get("primary_tg") or self.config.get("default_tg", 1025))
+            slot_val = int(meta.get("slot") or self.primary_slot or 2)
+            op_id = int(meta.get("src") or self.current_operator_dmr_id or self.config.get("server_dmr_id", 1022057))
+            op_call = (
+                meta.get("callsign")
+                or lookup_callbook_callsign(op_id, include_name=False)
+                or self.current_operator_callsign
+                or str(self.config.get("server_callsign", "BD62BOT"))
+            )
+            cc_val = int(self.config.get("color_code", 1))
+            display_call = f"{op_call} TG {primary_tg_val}"[:24]
+            tlv_idle = build_set_info_tlv(op_id, rpt_id, primary_tg_val, slot_val, cc_val, display_call, pad_320=True)
+            try:
+                self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, tlv_idle), client_addr)
+            except Exception:
+                pass
 
     def initialize_dvswitch_client(self, addr: tuple, seq: int = 1, force: bool = False):
         """
@@ -2089,7 +2154,9 @@ usrpAGC = -20,10,100
                                 self.client_metadata[addr[0]] = self.client_metadata[addr]
                         except Exception:
                             pass
-                        self.initialize_dvswitch_client(addr, seq, force=True)
+                        # Only initialize client if not yet initialized, avoiding periodic screen redraws
+                        if addr not in self.initialized_usrp_clients:
+                            self.initialize_dvswitch_client(addr, seq, force=False)
                         continue
 
                     # Handle DTMF dialing / Talkgroup tuning from DVSwitch Mobile
