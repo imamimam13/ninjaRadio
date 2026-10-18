@@ -352,6 +352,24 @@ class BridgeApiHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
                 return
 
+        elif parsed.path in ("/sync", "/sync/", "/bots", "/bots/"):
+            try:
+                load_room_mappings()
+                if self.usrp_socket:
+                    sync_gateway_bots(self.usrp_socket)
+                live_chs = get_live_murmur_channels()
+                persist_live_channels_cache(live_chs)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "SUCCESS", "message": "Synced gateway bots with Murmur", "channels": live_chs}).encode("utf-8"))
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                return
+
         self.send_response(404)
         self.end_headers()
 
@@ -814,9 +832,12 @@ class MumbleGatewayBot:
                 self.last_rx_play_time = time.time()
                 # Resample 8kHz 16-bit mono PCM to 48kHz for Mumble Opus encoder
                 samples_8k = np.frombuffer(pcm_8k, dtype=np.int16)
-                # Apply 1.5x digital gain cushion for punchy clear Mumla audio
-                samples_8k = np.clip(samples_8k.astype(np.float32) * 1.5, -32768, 32767).astype(np.int16)
-                samples_48k = np.repeat(samples_8k, 6)
+                # Gentle 1.1x gain cushion to prevent digital distortion
+                samples_8k_f = np.clip(samples_8k.astype(np.float32) * 1.1, -32768, 32767)
+                # Linear interpolation to 48kHz (eliminates harsh vocoder stair-step harmonics)
+                idx_orig = np.arange(len(samples_8k_f))
+                idx_target = np.linspace(0, len(samples_8k_f) - 1, len(samples_8k_f) * 6)
+                samples_48k = np.interp(idx_target, idx_orig, samples_8k_f).astype(np.int16)
                 self.mumble.sound_output.add_sound(samples_48k.tobytes())
             except Exception:
                 pass
@@ -880,9 +901,14 @@ class MumbleGatewayBot:
                         return
 
                     try:
-                        # Downsample 48kHz -> 8kHz PCM (decimate by 6)
+                        # Downsample 48kHz -> 8kHz PCM with anti-aliasing box filter
                         samples_48k = np.frombuffer(pcm_48k, dtype=np.int16)
-                        samples_8k = samples_48k[::6]
+                        n_blocks = len(samples_48k) // 6
+                        if n_blocks > 0:
+                            # Averaging each 6-sample block acts as a sinc lowpass filter (cuts ultrasonic aliasing)
+                            samples_8k = samples_48k[:n_blocks * 6].reshape(-1, 6).mean(axis=1).astype(np.int16)
+                        else:
+                            samples_8k = samples_48k[::6]
                         pcm_8k = samples_8k.tobytes()
 
                         # Dispatch binary TLV SET_INFO at start of transmission to carry over callsign and DMR ID

@@ -1389,12 +1389,32 @@ async def get_mumla_channels():
 
     # 1. Try querying bridge-mumble internal HTTP API
     try:
-        async with httpx.AsyncClient(timeout=1.5) as client:
+        async with httpx.AsyncClient(timeout=3.5) as client:
             resp = await client.get("http://mumble-bridge:12347/channels")
             if resp.status_code == 200:
                 data = resp.json()
-                if "channels" in data and isinstance(data["channels"], list) and len(data["channels"]) > 0:
-                    return {"status": "SUCCESS", "source": "mumble_live", "channels": data["channels"]}
+                live_chs = data.get("channels", [])
+                if isinstance(live_chs, list) and len(live_chs) > 0:
+                    live_names = {c.get("name") for c in live_chs if c.get("name")}
+                    # Prune stale rooms and bots from config.json if they no longer exist in live Murmur
+                    config_path = "/app/data/config.json"
+                    if os.path.exists(config_path):
+                        try:
+                            with open(config_path, "r", encoding="utf-8") as cf:
+                                cdata = json.load(cf)
+                            dirty = False
+                            if "mumble_rooms" in cdata:
+                                old_rooms = cdata["mumble_rooms"]
+                                filtered_rooms = [r for r in old_rooms if (r.get("name") or r.get("channel")) in live_names]
+                                if len(filtered_rooms) != len(old_rooms):
+                                    cdata["mumble_rooms"] = filtered_rooms
+                                    dirty = True
+                            if dirty:
+                                with open(config_path, "w", encoding="utf-8") as cf:
+                                    json.dump(cdata, cf, indent=2)
+                        except Exception:
+                            pass
+                    return {"status": "SUCCESS", "source": "mumble_live", "channels": live_chs}
     except Exception:
         pass
 
@@ -1515,6 +1535,13 @@ async def save_mumla_channels(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save config: {e}")
 
+    # 3. Notify mumble-bridge to synchronize bots with Murmur
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post("http://mumble-bridge:12347/sync")
+    except Exception:
+        pass
+
     return {
         "status": "SUCCESS",
         "message": f"Saved {len(cleaned_channels)} Mumble channels. Bridge bot is synchronizing...",
@@ -1570,6 +1597,13 @@ async def delete_mumla_channel(channel_name: str):
                 json.dump(live, f, indent=2)
         except Exception:
             pass
+
+    # 4. Trigger sync in mumble-bridge
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post("http://mumble-bridge:12347/sync")
+    except Exception:
+        pass
 
     return {
         "status": "SUCCESS",
@@ -1667,11 +1701,20 @@ async def create_or_update_bot(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save bot config: {e}")
 
+    # Notify mumble-bridge to spawn/update bot in Murmur immediately
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post("http://mumble-bridge:12347/sync")
+    except Exception:
+        pass
+
     return {"status": "SUCCESS", "message": f"Bot '{name}' created/updated in channel '{channel}'", "bot": bot_entry}
 
 @router.post("/mumla/bots/move")
 async def move_mumla_bot(payload: dict):
     """Moves an active Mumble bot to a different room/channel."""
+    import httpx
     import json
     import os
     name = str(payload.get("name", "")).strip()
@@ -1709,11 +1752,19 @@ async def move_mumla_bot(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save move: {e}")
 
+    # Notify mumble-bridge to move bot in Murmur immediately
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post("http://mumble-bridge:12347/sync")
+    except Exception:
+        pass
+
     return {"status": "SUCCESS", "message": f"Bot '{name}' moved to '{target_channel}'", "bot": target_bot}
 
 @router.delete("/mumla/bots/{bot_name}")
 async def delete_mumla_bot(bot_name: str):
     """Removes a bot from configuration."""
+    import httpx
     import json
     import os
     config_path = "/app/data/config.json"
@@ -1733,6 +1784,13 @@ async def delete_mumla_bot(bot_name: str):
             json.dump(data, f, indent=2)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete bot: {e}")
+
+    # Notify mumble-bridge to remove bot from Murmur immediately
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post("http://mumble-bridge:12347/sync")
+    except Exception:
+        pass
 
     return {"status": "SUCCESS", "message": f"Bot '{bot_name}' removed"}
 

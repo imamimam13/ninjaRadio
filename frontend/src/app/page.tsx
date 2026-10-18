@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor, registerAudioRxListener, AudioRxData } from "@/hooks/useLiveMonitor";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
+import { beepPlayer } from "@/components/BeepPlayer";
 import { 
   Radio, 
   Wifi, 
@@ -54,17 +55,17 @@ export default function DashboardPage() {
         hpf.frequency.value = 250;
         hpf.Q.value = 0.707;
 
-        // 3. Clear voice gain
+        // 3. Clear voice gain (natural level)
         const gainNode = ctx.createGain();
-        gainNode.gain.value = 1.8;
+        gainNode.gain.value = 1.1;
 
-        // 4. Dynamics Compressor: prevents digital clipping & distortion
+        // 4. Relaxed Dynamics Compressor: transparent peak protection without robotic squashing
         const comp = ctx.createDynamicsCompressor();
-        comp.threshold.value = -12;
-        comp.knee.value = 6;
-        comp.ratio.value = 4;
-        comp.attack.value = 0.003;
-        comp.release.value = 0.15;
+        comp.threshold.value = -6;
+        comp.knee.value = 20;
+        comp.ratio.value = 1.8;
+        comp.attack.value = 0.01;
+        comp.release.value = 0.20;
 
         // Pipeline: hpf -> lpf -> gainNode -> comp -> destination
         hpf.connect(lpf);

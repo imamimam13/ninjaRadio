@@ -1788,13 +1788,13 @@ usrpAGC = -20,10,100
                                         "time": time.time()
                                     }
                                     logger.info(f"📋 USRP TLV SET_INFO: Call={mobile_display_call} ID={tlv_src} TG={self.current_rx_tg} (Slot {self.current_rx_slot})")
-                                    # Forward clean 320-byte padded TLV SET_INFO to DVSwitch Mobile clients ONCE per burst
+                                    # Forward clean exact TLV SET_INFO to DVSwitch Mobile clients ONCE per burst
                                     if self.current_dvswitch_talker_src != tlv_src:
                                         self.current_dvswitch_talker_src = tlv_src
                                         try:
                                             rpt_id = int(self.config.get("server_dmr_id", 5109999))
                                             rich_tlv = build_set_info_tlv(
-                                                tlv_src, rpt_id, self.current_rx_tg, self.current_rx_slot, 1, mobile_display_call, pad_320=True
+                                                tlv_src, rpt_id, self.current_rx_tg, self.current_rx_slot, 1, mobile_display_call, pad_320=False
                                             )
                                             self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, rich_tlv))
                                             last_tlv_push_time = time.time()
@@ -1850,7 +1850,7 @@ usrpAGC = -20,10,100
                         try:
                             rpt_id = int(self.config.get("server_dmr_id", 5109999))
                             mobile_call = lookup_callbook_callsign(active_src, include_name=True) or active_call
-                            tlv_burst = build_set_info_tlv(active_src, rpt_id, active_tg, active_slot, 1, mobile_call, pad_320=True)
+                            tlv_burst = build_set_info_tlv(active_src, rpt_id, active_tg, active_slot, 1, mobile_call, pad_320=False)
                             self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, tlv_burst))
                             logger.info(f"📱 Dispatched remote talker banner to DVSwitch Mobile: {mobile_call} ({active_src}) -> TG {active_tg}")
                         except Exception as ex:
@@ -1965,17 +1965,28 @@ usrpAGC = -20,10,100
                 or str(self.config.get("server_callsign", "BD62BOT"))
             )
             cc_val = int(self.config.get("color_code", 1))
-            display_call = f"{op_call} TG {primary_tg_val}"[:24]
-            tlv_idle = build_set_info_tlv(op_id, rpt_id, primary_tg_val, slot_val, cc_val, display_call, pad_320=True)
+            info_dict = {
+                "ab": "Analog_Bridge",
+                "digital": {
+                    "call": op_call,
+                    "gw": op_id,
+                    "rpt": rpt_id,
+                    "tg": primary_tg_val,
+                    "ts": slot_val,
+                    "cc": cc_val
+                },
+                "last_tune": str(primary_tg_val)
+            }
+            info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
             try:
-                self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, tlv_idle), client_addr)
+                self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, info_bytes), client_addr)
             except Exception:
                 pass
 
     def initialize_dvswitch_client(self, addr: tuple, seq: int = 1, force: bool = False):
         """
-        Pushes automatic DMR mode selection, available modes, INFO JSON, and initial TLV SET_INFO
-        (Callsign, DMR ID, and active Talkgroup) to a connected DVSwitch Mobile / USRP client.
+        Pushes automatic DMR mode selection, available modes, and INFO JSON (Callsign, DMR ID,
+        and active Talkgroup) to a connected DVSwitch Mobile / USRP client.
         Works even when DVSwitch Mobile connects without sending 'REG:' first!
         """
         if not self.usrp_ingress_sock or addr[0] == "127.0.0.1":
@@ -2036,11 +2047,6 @@ usrpAGC = -20,10,100
             }
             info_bytes = b"INFO:" + json.dumps(info_dict).encode("ascii") + b"\x00"
             self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 5, 0, USRP_TYPE_TEXT, info_bytes), addr)
-
-            # 3. Send 320-byte padded TLV_TAG_SET_INFO (0x08) so DVSwitch Mobile displays Callsign & TG on screen immediately
-            display_call = f"{op_call} TG {primary_tg_val}"[:24]
-            tlv_init = build_set_info_tlv(op_id, rpt_id, primary_tg_val, slot_val, cc_val, display_call, pad_320=True)
-            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 6, 0, USRP_TYPE_TEXT, tlv_init), addr)
 
             logger.info(f"📱 Initialized DVSwitch Mobile client at {addr} -> Mode: DMR, Call: {op_call} ({op_id}), TG: {primary_tg_val} TS{slot_val}")
         except Exception as ex:
