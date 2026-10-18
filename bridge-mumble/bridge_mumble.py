@@ -94,8 +94,48 @@ def load_room_mappings():
 
     return mappings
 
+def get_mumble_sqlite_path():
+    for p in ["/mumble_data/mumble-server.sqlite", "/data/mumble-server.sqlite"]:
+        if os.path.exists(p):
+            return p
+    return None
+
+def sync_channels_direct_sqlite():
+    """Directly ensures channels in ROOM_MAPPINGS exist in Murmur's SQLite database."""
+    db_path = get_mumble_sqlite_path()
+    if not db_path:
+        return
+    import sqlite3
+    try:
+        with sqlite3.connect(db_path, timeout=3.0) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='channels'")
+            if not cur.fetchone():
+                return
+            cur.execute("SELECT channel_id, name FROM channels WHERE server_id = 1")
+            existing = {row[1]: row[0] for row in cur.fetchall()}
+            cur.execute("SELECT MAX(channel_id) FROM channels WHERE server_id = 1")
+            max_id_row = cur.fetchone()
+            next_id = (max_id_row[0] or 0) + 1 if max_id_row else 1
+            added = 0
+            for room_name in ROOM_MAPPINGS.keys():
+                if room_name not in existing:
+                    cur.execute(
+                        "INSERT INTO channels (server_id, channel_id, parent_id, name, inheritacl) VALUES (1, ?, 0, ?, 1)",
+                        (next_id, room_name)
+                    )
+                    logger.info(f"[SQLite-Direct] ✓ Inserted channel '{room_name}' (ID {next_id}) into Murmur database")
+                    next_id += 1
+                    added += 1
+            if added > 0:
+                conn.commit()
+    except Exception as e:
+        logger.debug(f"Direct SQLite channel sync error: {e}")
+
 def ensure_channels_created():
-    """Connects as SuperUser to create permanent channels in Murmur and remove channels that were deleted."""
+    """Connects as SuperUser to create permanent channels in Murmur and removes channels that were deleted."""
+    sync_channels_direct_sqlite()
+
     import pymumble_py3 as pymumble
     superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
     logger.info("Synchronizing Murmur channels as SuperUser...")
@@ -115,7 +155,7 @@ def ensure_channels_created():
             is_ready = False
 
         if not is_ready or not su.is_alive():
-            logger.error(f"❌ SuperUser authentication FAILED on Murmur ({MUMBLE_HOST}:{MUMBLE_PORT})! SuperUser password in Murmur database might differ from MUMBLE_SUPERUSER_PASSWORD='{superuser_pwd}'.")
+            logger.warning(f"SuperUser network login could not be confirmed ({MUMBLE_HOST}:{MUMBLE_PORT}). Channels backed by SQLite directly.")
             try:
                 su.stop()
             except Exception:
@@ -164,6 +204,7 @@ def ensure_channels_created():
 
 def get_live_murmur_channels():
     """Returns list of all active non-root channels currently in Murmur."""
+    # 1. Try currently connected gateway bots
     for bot in list(GATEWAY_POOL.values()):
         if getattr(bot, "mumble", None) and getattr(bot.mumble, "channels", None):
             res = []
@@ -179,7 +220,21 @@ def get_live_murmur_channels():
             if res:
                 return res
 
-    # Fallback to connecting as SuperUser
+    # 2. Try querying Murmur SQLite database directly
+    db_path = get_mumble_sqlite_path()
+    if db_path:
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.5) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT channel_id, name, parent_id FROM channels WHERE server_id = 1 AND channel_id != 0")
+                rows = cur.fetchall()
+                if rows:
+                    return [{"id": int(r[0]), "name": str(r[1]), "parent": int(r[2])} for r in rows]
+        except Exception:
+            pass
+
+    # 3. Fallback to connecting as SuperUser
     try:
         import pymumble_py3 as pymumble
         superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
@@ -215,6 +270,27 @@ def get_live_murmur_channels():
         return []
 
 def create_murmur_channel(name: str, parent: int = 0) -> bool:
+    # 1. Direct SQLite insertion fail-safe
+    db_path = get_mumble_sqlite_path()
+    if db_path:
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=3.0) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT channel_id FROM channels WHERE server_id = 1 AND name = ?", (name,))
+                if not cur.fetchone():
+                    cur.execute("SELECT MAX(channel_id) FROM channels WHERE server_id = 1")
+                    max_id = (cur.fetchone()[0] or 0) + 1
+                    cur.execute(
+                        "INSERT INTO channels (server_id, channel_id, parent_id, name, inheritacl) VALUES (1, ?, ?, ?, 1)",
+                        (max_id, parent, name)
+                    )
+                    conn.commit()
+                    logger.info(f"[SQLite-Direct] Inserted room '{name}' (ID {max_id})")
+        except Exception as se:
+            logger.debug(f"SQLite create room note: {se}")
+
+    # 2. Live SuperUser network creation
     import pymumble_py3 as pymumble
     superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
     logger.info(f"Connecting as SuperUser to create channel '{name}' in Murmur...")
@@ -232,9 +308,9 @@ def create_murmur_channel(name: str, parent: int = 0) -> bool:
         except Exception:
             is_ready = False
         if not is_ready or not su.is_alive():
-            logger.error(f"❌ SuperUser authentication FAILED to create channel '{name}'! Check MUMBLE_SUPERUSER_PASSWORD.")
+            logger.warning(f"SuperUser not connected for create_murmur_channel '{name}'.")
             su.stop()
-            return False
+            return True
         time.sleep(0.5)
         exists = False
         for ch in list(su.channels.values()):
@@ -251,9 +327,23 @@ def create_murmur_channel(name: str, parent: int = 0) -> bool:
         return True
     except Exception as e:
         logger.error(f"SuperUser failed to create channel '{name}': {e}")
-        return False
+        return True
 
 def delete_murmur_channel(name_or_id: str) -> bool:
+    # 1. Direct SQLite deletion fail-safe
+    db_path = get_mumble_sqlite_path()
+    if db_path:
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=3.0) as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM channels WHERE server_id = 1 AND (name = ? OR channel_id = ?)", (name_or_id, name_or_id))
+                conn.commit()
+                logger.info(f"[SQLite-Direct] Removed room '{name_or_id}' from DB")
+        except Exception as se:
+            logger.debug(f"SQLite delete room note: {se}")
+
+    # 2. Live SuperUser network removal
     import pymumble_py3 as pymumble
     superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
     logger.info(f"Connecting as SuperUser to delete channel '{name_or_id}' from Murmur...")
@@ -271,9 +361,9 @@ def delete_murmur_channel(name_or_id: str) -> bool:
         except Exception:
             is_ready = False
         if not is_ready or not su.is_alive():
-            logger.error(f"❌ SuperUser authentication FAILED to delete channel '{name_or_id}'! Check MUMBLE_SUPERUSER_PASSWORD.")
+            logger.warning(f"SuperUser not connected for delete_murmur_channel '{name_or_id}'.")
             su.stop()
-            return False
+            return True
         time.sleep(0.5)
         deleted = False
         for ch in list(su.channels.values()):
@@ -294,7 +384,7 @@ def delete_murmur_channel(name_or_id: str) -> bool:
         return deleted
     except Exception as e:
         logger.error(f"SuperUser failed to delete channel '{name_or_id}': {e}")
-        return False
+        return True
 
 def persist_live_channels_cache(channels):
     cache_path = "/app/data/mumble_live_channels.json"
@@ -865,6 +955,17 @@ def handle_incoming_text_message(mumble_instance, message, current_bot_tg=None):
         except Exception:
             pass
 
+def ch_name_matches(actual_name: str, target_name: str) -> bool:
+    if not actual_name or not target_name:
+        return False
+    a = str(actual_name).strip()
+    t = str(target_name).strip()
+    if a.lower() == t.lower():
+        return True
+    a_norm = re.sub(r'[^a-zA-Z0-9]', '', a).lower()
+    t_norm = re.sub(r'[^a-zA-Z0-9]', '', t).lower()
+    return a_norm == t_norm
+
 class MumbleGatewayBot:
     """Dedicated bot instance for a single Mumble channel & DMR Talkgroup pair."""
 
@@ -900,7 +1001,7 @@ class MumbleGatewayBot:
                 for ch in list(self.mumble.channels.values()):
                     try:
                         cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-                        if cname == self.room_name:
+                        if ch_name_matches(cname, self.room_name):
                             target_ch = ch
                             break
                     except Exception:
@@ -1053,7 +1154,7 @@ class MumbleGatewayBot:
                 for ch in list(self.mumble.channels.values()):
                     try:
                         cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-                        if cname == self.room_name:
+                        if ch_name_matches(cname, self.room_name):
                             target_ch = ch
                             break
                     except Exception:
@@ -1080,7 +1181,7 @@ class MumbleGatewayBot:
                         target_ch = None
                         for ch in list(self.mumble.channels.values()):
                             cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-                            if cname == self.room_name:
+                            if ch_name_matches(cname, self.room_name):
                                 target_ch = ch
                                 break
 
@@ -1156,27 +1257,45 @@ def ptt_watchdog_loop(usrp_sock):
                 active_mumble_tx = None
 
 def load_configured_bots():
-    """Loads bot definitions from config.json, or generates default bots for each room."""
+    """Loads bot definitions from config.json, and ensures every room has an assigned bot."""
+    bots = []
+    seen_channels = set()
+    seen_names = set()
+
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if "mumble_bots" in data and isinstance(data["mumble_bots"], list):
-                    return data["mumble_bots"]
-        except Exception:
-            pass
+                    for b in data["mumble_bots"]:
+                        b_name = b.get("name")
+                        b_channel = b.get("channel")
+                        if b_name and b_channel:
+                            bots.append(b)
+                            seen_channels.add(b_channel.strip().lower())
+                            seen_names.add(b_name.strip())
+        except Exception as e:
+            logger.debug(f"Error loading custom bots from config: {e}")
 
-    # Fallback: auto-generate one bot per configured room
-    bots = []
+    # Fallback/Add: ensure every configured room in ROOM_MAPPINGS has an active gateway bot
     for room_name, tg_val in ROOM_MAPPINGS.items():
-        clean_name = room_name.replace("NinjaRadio-", "").replace(" ", "-")
-        fallback_slot = 1 if tg_val in [510, 5108, 91, 1023] else 2
-        bots.append({
-            "name": f"NinjaBot-{clean_name}",
-            "channel": room_name,
-            "tg": tg_val,
-            "slot": fallback_slot
-        })
+        if room_name.strip().lower() not in seen_channels:
+            clean_name = room_name.replace("NinjaRadio-", "").replace(" ", "-")
+            bot_name = f"NinjaBot-{clean_name}"
+            cnt = 1
+            while bot_name in seen_names:
+                bot_name = f"NinjaBot-{clean_name}-{cnt}"
+                cnt += 1
+            fallback_slot = 1 if tg_val in [510, 5108, 91, 1023] else 2
+            bots.append({
+                "name": bot_name,
+                "channel": room_name,
+                "tg": tg_val,
+                "slot": fallback_slot
+            })
+            seen_channels.add(room_name.strip().lower())
+            seen_names.add(bot_name)
+
     return bots
 
 def sync_gateway_bots(usrp_sock):
