@@ -26,3 +26,10 @@
 - Remote VPS: `43.173.13.117` (`/home/ubuntu/ninjaRadio`)
 - Official Operator Profile: `BD62BOT` (`1022057`)
 - Primary Talkgroup: TG 1025, Slot 2
+
+## 6. Strict Regression Prevention & Codebase Stability
+- **STRICT RULE - Minimal Surgical Changes**: Ketika memperbaiki bug atau laporan masalah, perbaiki HANYA baris/komponen yang bermasalah secara langsung. DILARANG merombak fungsi atau alur pipeline TX/RX yang sudah stabil sebelumnya ("jangan gali lobang tutup lobang").
+- **Talkgroup Priority Invariant**: Talkgroup yang dipilih secara eksplisit oleh pengguna (baik di Web PTT `/radio` maupun DVSwitch Mobile) HARUS selalu menjadi prioritas utama. DILARANG menimpa target TG pengguna dengan TG bawaan (fallback / primary TG 1025) selama transmisi aktif.
+- **Client Identity Isolation**: Klien DVSwitch Mobile eksternal (UDP 32345) dan Klien WebRTC/Web PTT adalah entitas terpisah. Pergantian profil di Web Frontend TIDAK BOLEH menimpa data pendaftaran/identitas DVSwitch Mobile (`REG:`, `INFO:`, DTMF).
+- **Session Cleanup Invariant**: Flag sesi transmisi (`_tx_session_active`, carrier PTT) HARUS selalu di-reset secara bersih saat unkey agar transmisi berikutnya tidak mewarisi parameter lama.
+
