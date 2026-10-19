@@ -143,34 +143,41 @@ class CallbookService:
         if not call_upper or call_upper in ["SWL-MONITOR", "MONITOR", "LISTENER", "GUEST", "TAMU"] or dmr_id == 0:
             return False, "Mode Monitor (SWL) tidak memiliki izin memancar. Gunakan profil berlisensi atau PIN Operator."
 
-        # 1. Find callbook entry
+        # 1. Strict Callbook Matching: Cocokkan identitas profil dengan data Callbook resmi
         cb = None
         if dmr_id > 0:
             cb = await CallbookService.get_by_dmr_id(session, dmr_id)
         if not cb and call_upper:
             cb = await CallbookService.get_by_callsign(session, call_upper)
 
-        # 2. Check user-specific override if present
-        if cb and cb.allowed_tgs_override:
+        if not cb:
+            return False, f"Stasiun {call_upper} (ID: {dmr_id}) tidak terdaftar di Callbook resmi. Daftarkan profil di menu Callbook untuk izin transmit."
+
+        # 2. Validasi konsistensi Callsign & DMR ID (mencegah pemalsuan identitas / asal buat profil)
+        if cb.dmr_id and dmr_id > 0 and cb.dmr_id != dmr_id:
+            return False, f"DMR ID {dmr_id} tidak cocok dengan Callbook resmi untuk {call_upper} (ID Resmi: {cb.dmr_id})."
+        if cb.callsign and call_upper and cb.callsign.upper() != call_upper:
+            return False, f"Callsign {call_upper} tidak cocok dengan DMR ID {dmr_id} (Callsign Resmi: {cb.callsign})."
+
+        # 3. Pembatas Khusus Allowed TGs dari Callbook (Prioritas Tertinggi)
+        if cb.allowed_tgs_override:
             rule_str = cb.allowed_tgs_override.strip()
-            if rule_str == "*":
+            if rule_str == "*" or rule_str == "" or rule_str.upper() == "ALL":
                 return True, cb.organization or "User Override (*)"
             allowed_list = [int(x.strip()) for x in rule_str.split(",") if x.strip().isdigit()]
             if target_tg in allowed_list:
                 return True, cb.organization or "User Override"
-            else:
-                return False, f"Operator {call_upper} hanya memiliki izin khusus pada TG: {rule_str}"
+            return False, f"Stasiun {call_upper} dibatasi oleh Callbook hanya pada TG [{rule_str}]. Akses ke TG {target_tg} ditolak."
 
-        # 3. Dynamic lookup of Organization from database
+        # 4. Aturan Organisasi (jika user tidak memiliki override khusus di Callbook)
         await CallbookService.seed_initial_organizations(session)
         orgs = await CallbookService.get_all_organizations(session)
 
-        org_code = cb.organization.upper() if (cb and cb.organization) else None
+        org_code = cb.organization.upper() if cb.organization else None
         target_org = None
         if org_code:
             target_org = next((o for o in orgs if o.code.upper() == org_code), None)
 
-        # 4. If not assigned to an organization, dynamically match callsign prefixes from DB
         if not target_org:
             fallback_org = None
             for o in orgs:
@@ -180,24 +187,18 @@ class CallbookService:
                 if any(call_upper.startswith(p) for p in prefixes if p != "*"):
                     target_org = o
                     break
-            if not target_org:
-                target_org = fallback_org or (orgs[0] if orgs else None)
+            target_org = target_org or fallback_org or (orgs[0] if orgs else None)
 
-        if not target_org:
-            return True, "Open Access"
+        if target_org:
+            if not target_org.allow_tx:
+                return False, f"Organisasi {target_org.name} saat ini diset Monitor Only oleh Sysop."
+            rule = (target_org.allowed_tgs or "*").strip()
+            if rule != "*" and rule != "" and rule.upper() != "ALL":
+                allowed_tgs = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+                if target_tg not in allowed_tgs:
+                    return False, f"Stasiun {call_upper} ({target_org.name}) hanya diizinkan di TG [{rule}]. Akses ke TG {target_tg} diblokir oleh TX Firewall."
 
-        if not target_org.allow_tx:
-            return False, f"Organisasi {target_org.name} saat ini diset Monitor Only oleh Sysop."
-
-        rule = (target_org.allowed_tgs or "*").strip()
-        if rule == "*" or rule == "" or rule.upper() == "ALL":
-            return True, target_org.name
-
-        allowed_tgs = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
-        if target_tg in allowed_tgs:
-            return True, target_org.name
-
-        return False, f"Stasiun {call_upper} ({target_org.name}) hanya diizinkan di TG [{rule}]. Akses ke TG {target_tg} diblokir oleh TX Firewall."
+        return True, cb.organization or "Verified Callbook Station"
 
     @staticmethod
     async def add_organization(session: AsyncSession, code: str, name: str, description: str = "") -> Organization:
