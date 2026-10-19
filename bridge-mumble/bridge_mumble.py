@@ -142,7 +142,6 @@ def ensure_channels_created():
     logger.info("Synchronizing Murmur channels as SuperUser...")
     try:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
-        su.set_application_name("NinjaRadio-SuperUser")
         su.start()
         # Wait up to 4 seconds for SuperUser connection and ServerSync
         is_ready = False
@@ -297,7 +296,6 @@ def create_murmur_channel(name: str, parent: int = 0) -> bool:
     logger.info(f"Connecting as SuperUser to create channel '{name}' in Murmur...")
     try:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
-        su.set_application_name("NinjaRadio-SuperUser")
         su.start()
         is_ready = False
         try:
@@ -350,7 +348,6 @@ def delete_murmur_channel(name_or_id: str) -> bool:
     logger.info(f"Connecting as SuperUser to delete channel '{name_or_id}' from Murmur...")
     try:
         su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
-        su.set_application_name("NinjaRadio-SuperUser")
         su.start()
         is_ready = False
         try:
