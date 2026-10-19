@@ -266,13 +266,11 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
             call_upper = (callsign or "").strip().upper()
-            if call_upper in ["BD62BOT", "N1NJA", "SUPERUSER"] or dmr_id in [1022057, 5109999]:
-                return True, "Master Server Operator / SuperUser"
             cursor.execute("SELECT organization, allowed_tgs_override FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, call_upper))
             row = cursor.fetchone()
             if row and row[1]:
                 override = row[1].strip()
-                if override == "*":
+                if override == "*" or override.upper() == "ALL":
                     return True, "User Override (*)"
                 allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
                 if target_tg in allowed:
@@ -306,13 +304,13 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
                     target_org_row = fallback_org_row or org_rows[0]
 
             if not target_org_row:
-                return False, f"Organisasi tidak ditemukan untuk {call_upper}"
+                return True, "Open Access"
 
             org_c, allowed_tgs, allow_tx, _ = target_org_row
             if not allow_tx:
                 return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
             rule = (allowed_tgs or "*").strip()
-            if rule == "*":
+            if rule == "*" or not rule or rule.upper() == "ALL":
                 return True, org_c
             allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
             if target_tg in allowed:

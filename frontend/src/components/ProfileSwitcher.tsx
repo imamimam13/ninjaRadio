@@ -16,13 +16,15 @@ export interface UserProfile {
   defaultTg?: number;
 }
 
+const ALL_STANDARD_TGS = [510, 5101, 5102, 5103, 5109, 5108, 5100, 1025, 510990, 9990, 91];
+
 export const DEFAULT_MONITOR_PROFILE: UserProfile = {
   id: "prof_monitor",
   category: "Monitor",
   callsign: "SWL-MONITOR",
   displayName: "Mode Monitor (Listen Only)",
   dmrId: 0,
-  allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
+  allowedTalkgroups: ALL_STANDARD_TGS,
   badgeColor: "bg-slate-700 text-cyan-300",
   networkTag: "Hanya Monitor (TX Terkunci)",
   isMonitorOnly: true,
@@ -59,7 +61,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   const [isCustomTg, setIsCustomTg] = useState(false);
   const [customTgInput, setCustomTgInput] = useState("");
 
-  // Load from local storage, purging legacy test profiles
+  // Load from local storage, purging legacy test profiles and unlocking all TGs
   useEffect(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("ninjaradio_user_profiles") || localStorage.getItem("ninjadmr_user_profiles");
@@ -77,7 +79,10 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                 p.callsign !== "BD62BOT" &&
                 p.id !== "prof_bd62bot" &&
                 p.id !== "prof_monitor"
-            );
+            ).map((p: UserProfile) => ({
+              ...p,
+              allowedTalkgroups: Array.from(new Set([...ALL_STANDARD_TGS, ...(p.allowedTalkgroups || [])]))
+            }));
             const fullList = [DEFAULT_MONITOR_PROFILE, ...cleaned];
             setProfiles(fullList);
             localStorage.setItem("ninjaradio_user_profiles", JSON.stringify(fullList));
@@ -113,20 +118,17 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
 
     let badgeColor = "bg-emerald-500 text-slate-950";
     let networkTag = "ORARI / BrandMeister";
-    let allowedTalkgroups = [510, 5101, 5102, 5103, 9990, 91];
+    let allowedTalkgroups = [...ALL_STANDARD_TGS];
 
     if (newCategory === "RAPI") {
       badgeColor = "bg-blue-500 text-white";
       networkTag = "RAPI KRAP Gateway";
-      allowedTalkgroups = [5109, 9990];
     } else if (newCategory === "CB") {
       badgeColor = "bg-amber-500 text-slate-950";
       networkTag = "11 Meter Citizens Band";
-      allowedTalkgroups = [5108, 9990];
     } else if (newCategory === "Komunitas") {
       badgeColor = "bg-purple-500 text-white";
       networkTag = "Posko Relawan & SAR";
-      allowedTalkgroups = [5100, 9990];
     }
 
     const chosenTg = isCustomTg ? (Number(customTgInput) || 510) : Number(newTargetTg);
