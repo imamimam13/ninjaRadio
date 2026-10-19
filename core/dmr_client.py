@@ -75,8 +75,9 @@ class HomeBrewClient:
         tx_freq: str = "438.8000",
         color_code: int = 1,
         tx_pwr: int = 25,
-        software_id: str = "NinjaRadio",
-        package_id: str = "NinjaRadio",
+        software_id: str = "2026N1NjA.v1",
+        package_id: str = "N1NJA_Radio_Repeater",
+        url: str = "https://github.com/imamimam13/ninjaRadio",
         on_traffic: Optional[Callable] = None,
         on_status_change: Optional[Callable] = None
     ):
@@ -90,8 +91,9 @@ class HomeBrewClient:
         self.tx_freq = str(tx_freq).strip()
         self.color_code = int(color_code)
         self.tx_pwr = int(tx_pwr)
-        self.software_id = str(software_id or "NinjaRadio").strip()
-        self.package_id = str(package_id or "NinjaRadio").strip()
+        self.software_id = str(software_id or "2026N1NjA.v1").strip()
+        self.package_id = str(package_id or "N1NJA_Radio_Repeater").strip()
+        self.url = str(url or "https://github.com/imamimam13/ninjaRadio").strip()
         self.raw_tgs_str = str(subscribed_tgs).strip()
         self.ts1_tgs: List[int] = []
         self.ts2_tgs: List[int] = []
@@ -283,7 +285,7 @@ class HomeBrewClient:
         location = "Jakarta, ID".ljust(20)[:20].encode("utf-8")     # 20 bytes
         desc = "NinjaRadio".ljust(19)[:19].encode("utf-8")          # 19 bytes
         slots = b"3"                                                # 1 byte (Both Slots 1 & 2 enabled)
-        url = "https://ninjaradio.id".ljust(124)[:124].encode("utf-8") # 124 bytes
+        url = self.url.ljust(124)[:124].encode("utf-8")             # 124 bytes
         soft_id = self.software_id.ljust(40)[:40].encode("utf-8")     # 40 bytes (DMR software identifier)
         pkg_id = self.package_id.ljust(40)[:40].encode("utf-8")         # 40 bytes (DMR package identifier)
 

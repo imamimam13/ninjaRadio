@@ -101,27 +101,53 @@ def get_db_path() -> Optional[str]:
     return None
 
 
+_CALLSIGN_MEM_CACHE: Dict[int, str] = {}
+
 def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optional[str]:
-    """Resolves amateur callsign (and optionally operator name) for DMR ID from SQLite Callbook DB."""
+    """Resolves amateur callsign for DMR ID dynamically from SQLite Callbook DB or subscriber_ids.csv."""
     if not dmr_id or dmr_id <= 0:
         return None
+    
+    if not include_name and dmr_id in _CALLSIGN_MEM_CACHE:
+        return _CALLSIGN_MEM_CACHE[dmr_id]
+
+    # 1. Check SQLite Callbook table
     db_path = get_db_path()
-    if not db_path:
-        return None
-    try:
-        import sqlite3
-        with sqlite3.connect(db_path, timeout=1.0) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ?", (dmr_id,))
-            row = cursor.fetchone()
-            if row and row[0]:
-                call = str(row[0]).strip().upper()
-                name = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
-                if include_name and name and name.upper() != call:
-                    return f"{call} {name}"[:24]
-                return call
-    except Exception:
-        pass
+    if db_path:
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ?", (dmr_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    call = str(row[0]).strip().upper()
+                    name = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
+                    _CALLSIGN_MEM_CACHE[dmr_id] = call
+                    if include_name and name and name.upper() != call:
+                        return f"{call} {name}"[:24]
+                    return call
+        except Exception:
+            pass
+
+    # 2. Dynamic Fallback: Check /var/lib/dvswitch/subscriber_ids.csv or /app/data/subscriber_ids.csv
+    for p in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv"]:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        parts = line.strip().split(",")
+                        if len(parts) >= 2 and parts[0].strip().isdigit():
+                            if int(parts[0].strip()) == dmr_id:
+                                call = parts[1].strip().upper()
+                                name = parts[2].strip() if len(parts) > 2 else ""
+                                _CALLSIGN_MEM_CACHE[dmr_id] = call
+                                if include_name and name and name.upper() != call:
+                                    return f"{call} {name}"[:24]
+                                return call
+            except Exception:
+                pass
+
     return None
 
 
@@ -1783,9 +1809,15 @@ usrpAGC = -20,10,100
                                         "slot": self.current_rx_slot,
                                         "time": time.time()
                                     }
-                                    # Forward authentic Analog_Bridge TLV SET_INFO directly to DVSwitch Mobile clients
+                                    # Forward authentic TLV SET_INFO + INFO JSON directly to DVSwitch Mobile clients
                                     try:
-                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, pcm_payload))
+                                        fwd_tlv = pcm_payload
+                                        if mobile_display_call and (not raw_call or raw_call.isdigit() or raw_call == str(tlv_src)):
+                                            fwd_tlv = build_set_info_tlv(tlv_src, tlv_info.get("rpt", 0), self.current_rx_tg, self.current_rx_slot, tlv_info.get("cc", 1), mobile_display_call)
+                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv))
+                                        if self.current_rx_call and not self.current_rx_call.startswith("ID-"):
+                                            info_json = json.dumps({"digital": {"call": self.current_rx_call, "src": tlv_src, "tg": self.current_rx_tg, "slot": self.current_rx_slot}})
+                                            self.broadcast_to_usrp_clients(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")))
                                     except Exception as ex:
                                         logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
                             else:
@@ -2131,7 +2163,7 @@ usrpAGC = -20,10,100
                                 "src_id": active_id,
                                 "dst_tg": active_tg,
                                 "slot": active_slot,
-                                "callsign": self.current_operator_callsign or "BD62BOT",
+                                "callsign": self.current_operator_callsign or lookup_callbook_callsign(active_id) or f"ID-{active_id}",
                                 "is_tx": False,
                                 "is_transmitting": False,
                                 "data_type": 2
@@ -2167,8 +2199,8 @@ usrpAGC = -20,10,100
                             meta_slot = 2
 
                         if client_meta and (not hdr_dmr_id or client_meta.get("src") == hdr_dmr_id):
-                            target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or self.current_operator_dmr_id or 1022057
-                            target_call = client_meta.get("callsign") or lookup_callbook_callsign(target_dmr_id) or "DVSWITCH"
+                            target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or self.current_operator_dmr_id or 0
+                            target_call = client_meta.get("callsign") or lookup_callbook_callsign(target_dmr_id) or self.current_operator_callsign or (f"ID-{target_dmr_id}" if target_dmr_id else "DVSWITCH")
                             target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
                             target_slot = hdr_slot if hdr_tg else meta_slot
                         elif hdr_dmr_id:
@@ -2177,8 +2209,8 @@ usrpAGC = -20,10,100
                             target_tg = hdr_tg or default_fallback_tg
                             target_slot = hdr_slot
                         else:
-                            target_dmr_id = self.current_operator_dmr_id or 1022057
-                            target_call = self.current_operator_callsign or lookup_callbook_callsign(target_dmr_id) or "BD62BOT"
+                            target_dmr_id = self.current_operator_dmr_id or 0
+                            target_call = self.current_operator_callsign or lookup_callbook_callsign(target_dmr_id) or (f"ID-{target_dmr_id}" if target_dmr_id else "DMR-STATION")
                             target_tg = hdr_tg or default_fallback_tg
                             target_slot = hdr_slot
 
@@ -2561,10 +2593,11 @@ usrpAGC = -20,10,100
                     tx_freq = str(p.get("tx_freq") or p.get("txFreq") or cfg.get("tx_freq", "438.8000"))
                     color_code = int(p.get("color_code") or p.get("colorCode") or cfg.get("color_code", 1))
                     tx_pwr = int(p.get("tx_pwr") or p.get("txPwr") or cfg.get("tx_pwr", 25))
-                    software_id = str(p.get("software_id") or p.get("softwareId") or cfg.get("software_id", "NinjaRadio")).strip()
-                    package_id = str(p.get("package_id") or p.get("packageId") or cfg.get("package_id", "NinjaRadio")).strip()
+                    software_id = str(p.get("software_id") or p.get("softwareId") or cfg.get("software_id", "2026N1NjA.v1")).strip()
+                    package_id = str(p.get("package_id") or p.get("packageId") or cfg.get("package_id", "N1NJA_Radio_Repeater")).strip()
+                    url = str(p.get("url") or cfg.get("url", "https://github.com/imamimam13/ninjaRadio")).strip()
 
-                    logger.info(f"[Peering] 🌐 Connecting HomeBrew peer client: {name} -> {peer_key} (Software: {software_id})")
+                    logger.info(f"[Peering] 🌐 Connecting HomeBrew peer client: {name} -> {peer_key} (Software: {software_id}, Package: {package_id})")
                     client = HomeBrewClient(
                         name=name,
                         host=host,
@@ -2579,6 +2612,7 @@ usrpAGC = -20,10,100
                         tx_pwr=tx_pwr,
                         software_id=software_id,
                         package_id=package_id,
+                        url=url,
                         on_traffic=self.handle_peer_traffic,
                         on_status_change=self.handle_peer_status_change
                     )

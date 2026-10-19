@@ -42,23 +42,46 @@ def get_db_path() -> Optional[str]:
             return p
     return None
 
+_CALLSIGN_MEM_CACHE: Dict[int, str] = {}
+
 def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
-    """Resolves amateur callsign for DMR ID from SQLite Callbook DB."""
+    """Resolves amateur callsign for DMR ID dynamically from SQLite Callbook DB or subscriber_ids.csv."""
     if not dmr_id or dmr_id <= 0:
         return None
+    if dmr_id in _CALLSIGN_MEM_CACHE:
+        return _CALLSIGN_MEM_CACHE[dmr_id]
+
+    # 1. Check SQLite Callbook table
     db_path = get_db_path()
-    if not db_path:
-        return None
-    try:
-        import sqlite3
-        with sqlite3.connect(db_path, timeout=1.0) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (dmr_id,))
-            row = cursor.fetchone()
-            if row and row[0]:
-                return str(row[0]).strip().upper()
-    except Exception:
-        pass
+    if db_path:
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (dmr_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    call = str(row[0]).strip().upper()
+                    _CALLSIGN_MEM_CACHE[dmr_id] = call
+                    return call
+        except Exception:
+            pass
+
+    # 2. Dynamic Fallback: Check /var/lib/dvswitch/subscriber_ids.csv or /app/data/subscriber_ids.csv
+    for p in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv"]:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        parts = line.strip().split(",")
+                        if len(parts) >= 2 and parts[0].strip().isdigit():
+                            if int(parts[0].strip()) == dmr_id:
+                                call = parts[1].strip().upper()
+                                _CALLSIGN_MEM_CACHE[dmr_id] = call
+                                return call
+            except Exception:
+                pass
+
     return None
 
 class HomeBrewMasterServer:
