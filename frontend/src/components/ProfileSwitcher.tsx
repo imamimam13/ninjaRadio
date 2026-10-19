@@ -70,30 +70,36 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   } | null>(null);
   const [isCheckingCb, setIsCheckingCb] = useState(false);
 
-  const checkCallbookMatch = async (query: string) => {
+  const checkCallbookMatch = async (query: string, explicitDmrId?: number) => {
     const q = query.trim().toUpperCase();
     if (!q || q === "YB" || q === "JZ" || q === "91-DX-" || q === "RESCUE-") return;
     setIsCheckingCb(true);
     try {
-      const res = await fetch(`/api/callbook?q=${encodeURIComponent(q)}`);
+      const targetDmrId = explicitDmrId !== undefined ? explicitDmrId : (newDmrId ? Number(newDmrId) : undefined);
+      const res = await fetch("/api/callbook/verify-station", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          callsign: q,
+          dmr_id: targetDmrId && targetDmrId > 0 ? targetDmrId : undefined,
+        }),
+      });
       if (res.ok) {
         const data = await res.json();
-        const match = Array.isArray(data)
-          ? data.find((e: any) => e.callsign?.toUpperCase() === q || String(e.dmr_id) === q)
-          : null;
-        if (match) {
+        if (data && data.verified) {
           setCbStatus({
             checked: true,
             found: true,
-            name: match.name,
-            org: match.organization,
-            dmrId: match.dmr_id,
-            allowedTgs: match.allowed_tgs_override,
+            name: data.name,
+            org: data.organization,
+            dmrId: data.dmr_id,
+            allowedTgs: data.allowed_tgs,
           });
-          if (match.name) setNewName(match.name);
-          if (match.dmr_id) setNewDmrId(match.dmr_id);
-          if (match.organization) {
-            const orgUp = match.organization.toUpperCase();
+          if (data.name) setNewName(data.name);
+          if (data.dmr_id) setNewDmrId(data.dmr_id);
+          if (data.default_tg) setNewTargetTg(data.default_tg);
+          if (data.organization) {
+            const orgUp = data.organization.toUpperCase();
             if (orgUp.includes("RAPI")) setNewCategory("RAPI");
             else if (orgUp.includes("CB") || orgUp.includes("11M")) setNewCategory("CB");
             else if (orgUp.includes("KOMUNITAS") || orgUp.includes("SAR")) setNewCategory("Komunitas");
@@ -112,7 +118,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
     }
   };
 
-  // Load from local storage, purging legacy test profiles and unlocking all TGs
+  // Load from local storage, purging legacy test dummy profiles and unlocking all TGs
   useEffect(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("ninjaradio_user_profiles") || localStorage.getItem("ninjadmr_user_profiles");
@@ -120,14 +126,12 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
-            // Purge hardcoded legacy profiles (N1NJA, BD62AA, BD62BOT) and duplicate monitors
+            // Purge hardcoded dummy test profiles and duplicate monitors
             const cleaned = parsed.filter(
               (p: UserProfile) =>
                 p.callsign !== "N1NJA" &&
                 p.id !== "prof_default" &&
-                p.callsign !== "BD62AA" &&
                 p.id !== "prof_bd62aa" &&
-                p.callsign !== "BD62BOT" &&
                 p.id !== "prof_bd62bot" &&
                 p.id !== "prof_monitor"
             ).map((p: UserProfile) => ({
@@ -137,7 +141,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
             const fullList = [DEFAULT_MONITOR_PROFILE, ...cleaned];
             setProfiles(fullList);
             localStorage.setItem("ninjaradio_user_profiles", JSON.stringify(fullList));
-            if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA" || activeProfile.callsign === "BD62BOT") {
+            if (activeProfile.callsign === "N1NJA" || activeProfile.id === "prof_default" || activeProfile.id === "prof_bd62aa" || activeProfile.id === "prof_bd62bot") {
               onProfileChange(DEFAULT_MONITOR_PROFILE);
             }
             return;
@@ -145,7 +149,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
         } catch {}
       }
       setProfiles([DEFAULT_MONITOR_PROFILE]);
-      if (activeProfile.callsign === "N1NJA" || activeProfile.callsign === "BD62AA" || activeProfile.callsign === "BD62BOT") {
+      if (activeProfile.callsign === "N1NJA" || activeProfile.id === "prof_default" || activeProfile.id === "prof_bd62aa" || activeProfile.id === "prof_bd62bot") {
         onProfileChange(DEFAULT_MONITOR_PROFILE);
       }
     }
@@ -167,6 +171,8 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
     e.preventDefault();
     if (!newCallsign || !newName) return;
 
+    const chosenTg = isCustomTg && customTgInput ? Number(customTgInput) : (newTargetTg || 510);
+
     let badgeColor = "bg-emerald-500 text-slate-950";
     let networkTag = "ORARI / BrandMeister";
     let allowedTalkgroups = [...ALL_STANDARD_TGS];
@@ -187,12 +193,14 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
       ? cbStatus.allowedTgs.split(",").map((x: string) => Number(x.trim())).filter((n: number) => !isNaN(n))
       : Array.from(new Set([...allowedTalkgroups, chosenTg, 9990]));
 
+    const userDmrId = Number(newDmrId) > 0 ? Number(newDmrId) : (cbStatus?.dmrId || (5100000 + Math.floor(Math.random() * 9000)));
+
     const created: UserProfile = {
       id: `prof_${Date.now()}`,
       category: newCategory,
       callsign: newCallsign.toUpperCase().trim(),
       displayName: newName.trim(),
-      dmrId: Number(newDmrId) || (5100000 + Math.floor(Math.random() * 9000)),
+      dmrId: userDmrId,
       allowedTalkgroups: finalAllowedTgs,
       badgeColor,
       networkTag: isVerified ? `Callbook: ${cbStatus?.org || newCategory}` : networkTag,
@@ -207,6 +215,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
     setIsOpen(false);
     setNewCallsign("");
     setNewName("");
+    setNewDmrId(0);
     setCbStatus(null);
     setIsCustomTg(false);
     setCustomTgInput("");
@@ -519,7 +528,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                   </label>
                   <button
                     type="button"
-                    onClick={() => checkCallbookMatch(newCallsign)}
+                    onClick={() => checkCallbookMatch(newCallsign, newDmrId)}
                     disabled={isCheckingCb || !newCallsign}
                     className="text-[10px] text-ninja-cyan hover:underline font-mono flex items-center gap-1 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/50"
                   >
@@ -544,7 +553,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                     setCbStatus(null);
                   }}
                   onBlur={() => {
-                    if (newCallsign && !cbStatus) checkCallbookMatch(newCallsign);
+                    if (newCallsign) checkCallbookMatch(newCallsign, newDmrId);
                   }}
                   className="w-full px-3 py-2.5 bg-ninja-dark border border-slate-700 rounded-xl text-white font-mono uppercase font-bold focus:border-ninja-cyan"
                 />
@@ -599,8 +608,15 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                 </label>
                 <input
                   type="number"
-                  value={newDmrId}
-                  onChange={(e) => setNewDmrId(Number(e.target.value))}
+                  value={newDmrId || ""}
+                  placeholder="Contoh: 1022057"
+                  onChange={(e) => {
+                    const val = e.target.value ? Number(e.target.value) : 0;
+                    setNewDmrId(val);
+                  }}
+                  onBlur={() => {
+                    if (newCallsign) checkCallbookMatch(newCallsign, newDmrId);
+                  }}
                   className="w-full px-3 py-2 bg-ninja-dark border border-slate-700 rounded-xl text-white font-mono focus:border-ninja-cyan"
                 />
               </div>
