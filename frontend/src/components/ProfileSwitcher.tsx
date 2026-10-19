@@ -60,6 +60,57 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   const [newTargetTg, setNewTargetTg] = useState<number>(510);
   const [isCustomTg, setIsCustomTg] = useState(false);
   const [customTgInput, setCustomTgInput] = useState("");
+  const [cbStatus, setCbStatus] = useState<{
+    checked: boolean;
+    found: boolean;
+    name?: string;
+    org?: string;
+    dmrId?: number;
+    allowedTgs?: string;
+  } | null>(null);
+  const [isCheckingCb, setIsCheckingCb] = useState(false);
+
+  const checkCallbookMatch = async (query: string) => {
+    const q = query.trim().toUpperCase();
+    if (!q || q === "YB" || q === "JZ" || q === "91-DX-" || q === "RESCUE-") return;
+    setIsCheckingCb(true);
+    try {
+      const res = await fetch(`/api/callbook?q=${encodeURIComponent(q)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const match = Array.isArray(data)
+          ? data.find((e: any) => e.callsign?.toUpperCase() === q || String(e.dmr_id) === q)
+          : null;
+        if (match) {
+          setCbStatus({
+            checked: true,
+            found: true,
+            name: match.name,
+            org: match.organization,
+            dmrId: match.dmr_id,
+            allowedTgs: match.allowed_tgs_override,
+          });
+          if (match.name) setNewName(match.name);
+          if (match.dmr_id) setNewDmrId(match.dmr_id);
+          if (match.organization) {
+            const orgUp = match.organization.toUpperCase();
+            if (orgUp.includes("RAPI")) setNewCategory("RAPI");
+            else if (orgUp.includes("CB") || orgUp.includes("11M")) setNewCategory("CB");
+            else if (orgUp.includes("KOMUNITAS") || orgUp.includes("SAR")) setNewCategory("Komunitas");
+            else setNewCategory("Amatir");
+          }
+        } else {
+          setCbStatus({ checked: true, found: false });
+        }
+      } else {
+        setCbStatus({ checked: true, found: false });
+      }
+    } catch {
+      setCbStatus({ checked: true, found: false });
+    } finally {
+      setIsCheckingCb(false);
+    }
+  };
 
   // Load from local storage, purging legacy test profiles and unlocking all TGs
   useEffect(() => {
@@ -131,8 +182,10 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
       networkTag = "Posko Relawan & SAR";
     }
 
-    const chosenTg = isCustomTg ? (Number(customTgInput) || 510) : Number(newTargetTg);
-    const finalAllowedTgs = Array.from(new Set([...allowedTalkgroups, chosenTg, 9990]));
+    const isVerified = cbStatus?.found === true;
+    const finalAllowedTgs = cbStatus?.allowedTgs && cbStatus.allowedTgs !== "*"
+      ? cbStatus.allowedTgs.split(",").map((x: string) => Number(x.trim())).filter((n: number) => !isNaN(n))
+      : Array.from(new Set([...allowedTalkgroups, chosenTg, 9990]));
 
     const created: UserProfile = {
       id: `prof_${Date.now()}`,
@@ -142,8 +195,9 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
       dmrId: Number(newDmrId) || (5100000 + Math.floor(Math.random() * 9000)),
       allowedTalkgroups: finalAllowedTgs,
       badgeColor,
-      networkTag,
+      networkTag: isVerified ? `Callbook: ${cbStatus?.org || newCategory}` : networkTag,
       defaultTg: chosenTg,
+      isMonitorOnly: !isVerified,
     };
 
     const updated = [...profiles.filter(p => p.id !== created.id), created];
@@ -153,6 +207,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
     setIsOpen(false);
     setNewCallsign("");
     setNewName("");
+    setCbStatus(null);
     setIsCustomTg(false);
     setCustomTgInput("");
   };
@@ -458,9 +513,19 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
 
               {/* Step 2: Callsign */}
               <div>
-                <label className="block text-gray-400 mb-1 font-semibold">
-                  2. Callsign / Identitas Panggil ({newCategory})
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-gray-400 font-semibold">
+                    2. Callsign / Identitas Panggil ({newCategory})
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => checkCallbookMatch(newCallsign)}
+                    disabled={isCheckingCb || !newCallsign}
+                    className="text-[10px] text-ninja-cyan hover:underline font-mono flex items-center gap-1 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/50"
+                  >
+                    {isCheckingCb ? "Mencari..." : "🔍 Cocokkan Callbook"}
+                  </button>
+                </div>
                 <input
                   type="text"
                   required
@@ -474,9 +539,44 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                       : "Contoh: RESCUE-01"
                   }
                   value={newCallsign}
-                  onChange={(e) => setNewCallsign(e.target.value.toUpperCase())}
+                  onChange={(e) => {
+                    setNewCallsign(e.target.value.toUpperCase());
+                    setCbStatus(null);
+                  }}
+                  onBlur={() => {
+                    if (newCallsign && !cbStatus) checkCallbookMatch(newCallsign);
+                  }}
                   className="w-full px-3 py-2.5 bg-ninja-dark border border-slate-700 rounded-xl text-white font-mono uppercase font-bold focus:border-ninja-cyan"
                 />
+
+                {/* Callbook Match Telemetry Banner */}
+                {cbStatus?.checked && (
+                  <div className={`mt-1.5 p-2 rounded-xl text-[11px] font-mono flex items-start gap-1.5 ${
+                    cbStatus.found
+                      ? "bg-emerald-950/50 border border-emerald-500/50 text-emerald-300"
+                      : "bg-amber-950/50 border border-amber-500/50 text-amber-300"
+                  }`}>
+                    {cbStatus.found ? (
+                      <div>
+                        <div className="font-bold flex items-center gap-1 text-emerald-400">
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Terverifikasi di Callbook Resmi</span>
+                        </div>
+                        <div className="text-[10px] text-slate-300 mt-0.5">
+                          Nama: <span className="text-white font-semibold">{cbStatus.name}</span> | DMR ID: <span className="text-white font-semibold">{cbStatus.dmrId}</span>
+                          {cbStatus.allowedTgs && <span> | Izin TG: [{cbStatus.allowedTgs}]</span>}
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="font-bold text-amber-400">⚠ Belum Terdaftar di Callbook</div>
+                        <div className="text-[10px] text-slate-300 mt-0.5">
+                          Stasiun ini belum ada di Callbook server. PTT akan diblokir kecuali stasiun didaftarkan oleh Sysop di menu Callbook.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Step 3: Nama Lengkap */}
