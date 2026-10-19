@@ -666,10 +666,6 @@ export default function RadioPocketMode() {
     // Half-duplex lockout: Do not play incoming audio while user is transmitting or muted
     if (!audioChunk || !audioChunk.pcm) return;
     if (isMutedRef.current || isTxRef.current) return;
-    // Suppress self-echo audio ONLY if NOT on Echo / Parrot test (TG 9990)
-    if (audioChunk.tg !== 9990 && audioChunk.src_id && audioChunk.src_id === activeProfileRef.current.dmrId) return;
-    // Selective Squelch: Only decode & play audio from currently tuned TG (or Echo test 9990)
-    if (currentTgRef.current && audioChunk.tg !== currentTgRef.current.id && audioChunk.tg !== 9990) return;
 
     try {
       ensureAudioUnlocked();
