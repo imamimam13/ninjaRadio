@@ -524,6 +524,8 @@ class DVSwitchCoreManager:
         self.active_talkers_by_tg: Dict[int, dict] = {}
         # Track initialized DVSwitch Mobile clients (addr -> timestamp of last mode/identity init)
         self.initialized_usrp_clients: Dict[tuple, float] = {}
+        # Dedicated set for genuine DVSwitch Mobile client socket addresses
+        self.dvswitch_client_addrs: set = set()
         # Track active talker currently displayed on DVSwitch Mobile clients (0 = idle banner)
         self.current_dvswitch_talker_src: int = 0
 
@@ -1374,6 +1376,15 @@ usrpAGC = -20,10,100
                                 "slot": w_slot,
                                 "time": time.time()
                             }
+                            # Forward TLV SET_INFO + INFO JSON to DVSwitch Mobile clients tuned to this worker's TG
+                            try:
+                                fwd_tlv = build_set_info_tlv(w_src, tlv_info.get("rpt", 0), w_tg, w_slot, tlv_info.get("cc", 1), w_call)
+                                self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=w_tg)
+                                if w_call and not w_call.startswith("ID-"):
+                                    info_json = json.dumps({"digital": {"call": w_call, "src": w_src, "tg": w_tg, "slot": w_slot}})
+                                    self.broadcast_to_usrp_clients(build_usrp_frame((seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")), tg=w_tg)
+                            except Exception as ex:
+                                logger.debug(f"Error broadcasting worker TLV to DVSwitch: {ex}")
                         continue
 
                     # Resolve talker identity for this worker's TG
@@ -1390,14 +1401,21 @@ usrpAGC = -20,10,100
 
                     if key_flag == 1 and len(pcm_payload) >= 320:
                         w["rx_active"] = True
+                        chunk_320 = pcm_payload[:320]
                         try:
-                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, tg, active_src, slot, 0) + pcm_payload
+                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, tg, active_src, slot, 0) + chunk_320
                             self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
                         except Exception:
                             try:
                                 self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                             except Exception:
                                 pass
+                        # Forward audio frame to DVSwitch Mobile clients tuned to this worker's TG
+                        try:
+                            usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, chunk_320)
+                            self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=tg)
+                        except Exception:
+                            pass
                         asyncio.create_task(self.dispatch_event_to_backend({
                             "network": f"Analog_Bridge (Worker TG {tg})",
                             "host": "127.0.0.1",
@@ -1408,10 +1426,15 @@ usrpAGC = -20,10,100
                             "is_tx": False,
                             "is_transmitting": True,
                             "data_type": 1,
-                            "payload": pcm_payload
+                            "payload": chunk_320
                         }))
                     elif key_flag == 0 and w.get("rx_active"):
                         w["rx_active"] = False
+                        try:
+                            unkey_fwd = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
+                            self.broadcast_to_usrp_clients(unkey_fwd, tg=tg)
+                        except Exception:
+                            pass
                         asyncio.create_task(self.dispatch_event_to_backend({
                             "network": f"Analog_Bridge (Worker TG {tg})",
                             "host": "127.0.0.1",
@@ -1813,10 +1836,10 @@ usrpAGC = -20,10,100
                                         fwd_tlv = pcm_payload
                                         if mobile_display_call and (not raw_call or raw_call.isdigit() or raw_call == str(tlv_src)):
                                             fwd_tlv = build_set_info_tlv(tlv_src, tlv_info.get("rpt", 0), self.current_rx_tg, self.current_rx_slot, tlv_info.get("cc", 1), mobile_display_call)
-                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv))
+                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=self.current_rx_tg)
                                         if self.current_rx_call and not self.current_rx_call.startswith("ID-"):
                                             info_json = json.dumps({"digital": {"call": self.current_rx_call, "src": tlv_src, "tg": self.current_rx_tg, "slot": self.current_rx_slot}})
-                                            self.broadcast_to_usrp_clients(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")))
+                                            self.broadcast_to_usrp_clients(build_usrp_frame((seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")), tg=self.current_rx_tg)
                                     except Exception as ex:
                                         logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
                             else:
@@ -1886,8 +1909,8 @@ usrpAGC = -20,10,100
 
                         # Forward standard voice frame to external USRP clients (DVSwitch Mobile)
                         try:
-                            usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, pcm_payload)
-                            self.broadcast_to_usrp_clients(usrp_mobile_pkt)
+                            usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, pcm_payload[:320])
+                            self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=active_tg)
                         except Exception:
                             pass
 
@@ -1900,7 +1923,7 @@ usrpAGC = -20,10,100
                                 "dst_tg": r_tg,
                                 "slot": r_slot,
                                 "callsign": active_call,
-                                "payload": pcm_payload,
+                                "payload": pcm_payload[:320],
                                 "data_type": 1,
                                 "is_tx": False
                             }
@@ -1909,7 +1932,7 @@ usrpAGC = -20,10,100
                         # Voice Terminator
                         try:
                             unkey_fwd = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
-                            self.broadcast_to_usrp_clients(unkey_fwd)
+                            self.broadcast_to_usrp_clients(unkey_fwd, tg=active_tg)
                         except Exception:
                             pass
                         for r_tg, r_slot in routed_tgs:
@@ -1997,6 +2020,7 @@ usrpAGC = -20,10,100
                             logger.info(f"📱 DVSwitch Mobile client UNREGISTERED from {addr}")
                         else:
                             self.registered_usrp_clients[addr] = time.time()
+                            self.dvswitch_client_addrs.add(addr)
                             reg_str = payload[4:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
                             if reg_str:
                                 if addr not in self.client_metadata:
@@ -2008,16 +2032,22 @@ usrpAGC = -20,10,100
                                     elif any(c.isalpha() for c in token) and len(token) >= 3:
                                         self.client_metadata[addr]["callsign"] = token.upper()
                                         self.last_dvswitch_identity["callsign"] = token.upper()
+                                # Resolve callsign from callbook if only ID was given
+                                if self.client_metadata[addr].get("src") and (not self.client_metadata[addr].get("callsign") or self.client_metadata[addr]["callsign"].isdigit()):
+                                    cb_c = lookup_callbook_callsign(self.client_metadata[addr]["src"])
+                                    if cb_c:
+                                        self.client_metadata[addr]["callsign"] = cb_c
+                                        self.last_dvswitch_identity["callsign"] = cb_c
                                 self.client_metadata[addr[0]] = self.client_metadata[addr]
                             logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({reg_str})")
                             try:
                                 # Standard registration acknowledgment
                                 self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00"), addr)
                                 # Automatically switch mode to DMR (without forcing any TG)
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
+                                self.usrp_ingress_sock.sendto(build_usrp_frame((seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
                                 cmd_mode = b"mode=DMR"
                                 tlv_mode = struct.pack("BB", 5, len(cmd_mode)) + cmd_mode
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 2, 0, USRP_TYPE_TEXT, tlv_mode), addr)
+                                self.usrp_ingress_sock.sendto(build_usrp_frame((seq + 2) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, tlv_mode), addr)
                             except Exception:
                                 pass
                         continue
@@ -2025,7 +2055,8 @@ usrpAGC = -20,10,100
                     if payload.startswith(b"PING") or packet_type == 3:
                         self.registered_usrp_clients[addr] = time.time()
                         try:
-                            pong_pkt = b"USRP" + struct.pack(">iiiiiii", seq & 0x7FFFFFFF, 0, 0, 0, 3 << 24, 0, 0) + b"PONG\x00"
+                            # Standard USRP_TYPE_TEXT (2) PONG reply - prevents native JNI crash in DVSwitch Mobile
+                            pong_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"PONG\x00")
                             self.usrp_ingress_sock.sendto(pong_pkt, addr)
                         except Exception:
                             pass
@@ -2033,37 +2064,58 @@ usrpAGC = -20,10,100
 
                     if payload.startswith(b"MODES:"):
                         self.registered_usrp_clients[addr] = time.time()
+                        self.dvswitch_client_addrs.add(addr)
                         try:
                             # Standard JSON array of modes for DVSwitch Mobile client
                             modes_reply = b'MODES:["DMR"]\x00'
                             self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, modes_reply), addr)
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq + 1, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
+                            self.usrp_ingress_sock.sendto(build_usrp_frame((seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
                         except Exception:
                             pass
                         continue
 
                     if payload.startswith(b"INFO:"):
                         self.registered_usrp_clients[addr] = time.time()
+                        self.dvswitch_client_addrs.add(addr)
                         try:
                             info_raw = payload[5:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                            c_call = None
+                            c_src = None
+                            c_tg = None
                             if info_raw.startswith("{"):
                                 info_obj = json.loads(info_raw)
                                 dig = info_obj.get("digital", {})
                                 c_call = dig.get("call") or info_obj.get("call")
                                 c_src = dig.get("gw") or dig.get("src") or info_obj.get("src")
                                 c_tg = dig.get("tg") or info_obj.get("tg")
-                                if addr not in self.client_metadata:
-                                    self.client_metadata[addr] = {}
-                                if c_call:
-                                    self.client_metadata[addr]["callsign"] = str(c_call).upper()
-                                    self.last_dvswitch_identity["callsign"] = str(c_call).upper()
-                                if c_src and int(c_src) > 0:
-                                    self.client_metadata[addr]["src"] = int(c_src)
-                                    self.last_dvswitch_identity["src"] = int(c_src)
-                                if c_tg and int(c_tg) > 0:
-                                    self.client_metadata[addr]["tg"] = int(c_tg)
-                                    self.last_dvswitch_identity["tg"] = int(c_tg)
-                                self.client_metadata[addr[0]] = self.client_metadata[addr]
+                            else:
+                                m_c = re.search(r'(?:call|callsign)\s*[:=]\s*([A-Za-z0-9/_-]+)', info_raw, re.IGNORECASE)
+                                m_s = re.search(r'(?:src|gw|id|dmr_id)\s*[:=]\s*(\d+)', info_raw, re.IGNORECASE)
+                                m_t = re.search(r'(?:tg|dst)\s*[:=]\s*(\d+)', info_raw, re.IGNORECASE)
+                                if m_c: c_call = m_c.group(1).upper()
+                                if m_s: c_src = int(m_s.group(1))
+                                if m_t: c_tg = int(m_t.group(1))
+
+                            if addr not in self.client_metadata:
+                                self.client_metadata[addr] = {}
+                            if c_call:
+                                self.client_metadata[addr]["callsign"] = str(c_call).upper()
+                                self.last_dvswitch_identity["callsign"] = str(c_call).upper()
+                            if c_src and int(c_src) > 0:
+                                self.client_metadata[addr]["src"] = int(c_src)
+                                self.last_dvswitch_identity["src"] = int(c_src)
+                            if c_tg and int(c_tg) > 0:
+                                self.client_metadata[addr]["tg"] = int(c_tg)
+                                self.last_dvswitch_identity["tg"] = int(c_tg)
+
+                            # Resolve missing callsign/ID from Callbook
+                            if self.client_metadata[addr].get("src") and (not self.client_metadata[addr].get("callsign") or self.client_metadata[addr]["callsign"].isdigit()):
+                                cb_c = lookup_callbook_callsign(self.client_metadata[addr]["src"])
+                                if cb_c:
+                                    self.client_metadata[addr]["callsign"] = cb_c
+                                    self.last_dvswitch_identity["callsign"] = cb_c
+
+                            self.client_metadata[addr[0]] = self.client_metadata[addr]
                         except Exception:
                             pass
                         continue
@@ -2072,6 +2124,7 @@ usrpAGC = -20,10,100
                     if packet_type == 1 or (is_control_pkt and len(payload) > 0 and payload[0] not in [TLV_TAG_SET_INFO, 5, 3] and not payload.startswith(b"REG:") and not payload.startswith(b"PING") and not payload.startswith(b"INFO:") and not payload.startswith(b"MODES:")):
                         text_clean = payload.split(b"\x00")[0].decode("ascii", errors="ignore").strip()
                         if text_clean:
+                            self.dvswitch_client_addrs.add(addr)
                             if text_clean.isdigit():
                                 dialed_tg = int(text_clean)
                                 if addr not in self.client_metadata:
@@ -2080,6 +2133,14 @@ usrpAGC = -20,10,100
                                 self.last_dvswitch_identity["tg"] = dialed_tg
                                 self.client_metadata[addr[0]] = self.client_metadata[addr]
                                 logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {dialed_tg} via DTMF/Send ('{text_clean}')")
+                                # Send immediate INFO update to DVSwitch Mobile screen
+                                try:
+                                    cur_call = self.client_metadata[addr].get("callsign") or self.last_dvswitch_identity.get("callsign") or "BD62BOT"
+                                    cur_src = self.client_metadata[addr].get("src") or self.last_dvswitch_identity.get("src") or 1022057
+                                    dtmf_reply = json.dumps({"digital": {"call": cur_call, "src": cur_src, "tg": dialed_tg, "slot": 2}})
+                                    self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, f"INFO:{dtmf_reply}\x00".encode("ascii")), addr)
+                                except Exception:
+                                    pass
                                 continue
                             elif text_clean.startswith("*"):
                                 digits = "".join([c for c in text_clean if c.isdigit()])
@@ -2091,6 +2152,13 @@ usrpAGC = -20,10,100
                                     self.last_dvswitch_identity["tg"] = dialed_tg
                                     self.client_metadata[addr[0]] = self.client_metadata[addr]
                                     logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {dialed_tg} via DTMF *{digits}")
+                                    try:
+                                        cur_call = self.client_metadata[addr].get("callsign") or self.last_dvswitch_identity.get("callsign") or "BD62BOT"
+                                        cur_src = self.client_metadata[addr].get("src") or self.last_dvswitch_identity.get("src") or 1022057
+                                        dtmf_reply = json.dumps({"digital": {"call": cur_call, "src": cur_src, "tg": dialed_tg, "slot": 2}})
+                                        self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, f"INFO:{dtmf_reply}\x00".encode("ascii")), addr)
+                                    except Exception:
+                                        pass
                                     continue
                                 elif text_clean.upper() in ["*DMR", "*YSF", "*DSTAR", "*P25"]:
                                     logger.info(f"📱 DVSwitch Mobile ({addr}) mode selection: {text_clean}")
@@ -2104,6 +2172,7 @@ usrpAGC = -20,10,100
                     elif len(payload) >= 5 and payload[0] == 3:  # TLV_TAG_TG_TUNE
                         tune_val = int.from_bytes(payload[2:2 + payload[1]], "big") if payload[1] <= 4 else 0
                         if tune_val > 0:
+                            self.dvswitch_client_addrs.add(addr)
                             if addr not in self.client_metadata:
                                 self.client_metadata[addr] = {}
                             self.client_metadata[addr]["tg"] = tune_val
@@ -2115,6 +2184,7 @@ usrpAGC = -20,10,100
                         cmd_str = payload.decode("ascii", errors="ignore").strip()
 
                     if cmd_str:
+                        self.dvswitch_client_addrs.add(addr)
                         if "txTg=" in cmd_str:
                             val_part = cmd_str.split("txTg=")[-1].strip().split()[0].replace("#", "")
                             if val_part.isdigit():
@@ -2138,7 +2208,7 @@ usrpAGC = -20,10,100
                                 logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {new_tg} via keypad '{cmd_str}'")
                                 continue
 
-                    # Handle TLV SET_INFO (Identity carry-over from DVSwitch Mobile)
+                    # Handle TLV SET_INFO (Identity carry-over from DVSwitch Mobile or internal bridge)
                     if is_control_pkt and len(payload) >= 14 and payload[0] == TLV_TAG_SET_INFO:
                         tlv_info = parse_set_info_tlv(payload)
                         if tlv_info:
@@ -2151,7 +2221,8 @@ usrpAGC = -20,10,100
                                 cb_c = lookup_callbook_callsign(tlv_info["src"])
                                 if cb_c:
                                     tlv_info["callsign"] = cb_c
-                            if tlv_info.get("src", 0) > 0:
+                            # Strictly protect DVSwitch Mobile identity: only update last_dvswitch_identity if client is genuine DVSwitch
+                            if addr in self.dvswitch_client_addrs and tlv_info.get("src", 0) > 0:
                                 self.last_dvswitch_identity["src"] = tlv_info["src"]
                                 if tlv_info.get("callsign"):
                                     self.last_dvswitch_identity["callsign"] = tlv_info["callsign"]
@@ -2160,7 +2231,7 @@ usrpAGC = -20,10,100
                             self.client_metadata[addr] = tlv_info
                             self.client_metadata[addr[0]] = tlv_info
                             self.registered_usrp_clients[addr] = time.time()
-                            logger.info(f"📱 DVSwitch client identity recorded from {addr}: {tlv_info['callsign']} (ID: {tlv_info['src']}, TG: {tlv_info['tg']}, Slot: {tlv_info['slot']})")
+                            logger.info(f"📱 Client identity recorded from {addr}: {tlv_info['callsign']} (ID: {tlv_info['src']}, TG: {tlv_info['tg']}, Slot: {tlv_info['slot']})")
                         continue
 
                     # 2. Handle PTT Release / Unkey (key_flag == 0)
@@ -2192,6 +2263,12 @@ usrpAGC = -20,10,100
                                     self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                                 except Exception:
                                     pass
+                            # Forward unkey frame to DVSwitch Mobile clients
+                            try:
+                                unkey_mobile = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
+                                self.broadcast_to_usrp_clients(unkey_mobile, tg=active_tg, exclude_addr=addr)
+                            except Exception:
+                                pass
                         try:
                             ack_pkt = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
                             self.usrp_ingress_sock.sendto(ack_pkt, addr)
@@ -2260,6 +2337,16 @@ usrpAGC = -20,10,100
                             self.current_tx_start_time = now
                             logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot}, Port: {target_worker_port})")
 
+                            # Forward TLV SET_INFO + INFO to external DVSwitch clients tuned to this TG so they display caller identity
+                            try:
+                                fwd_tlv = build_set_info_tlv(target_dmr_id, int(self.config.get("server_dmr_id", 5109999)), target_tg, target_slot, 1, target_call)
+                                self.broadcast_to_usrp_clients(build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=target_tg, exclude_addr=addr)
+                                if target_call and not target_call.startswith("ID-"):
+                                    info_json = json.dumps({"digital": {"call": target_call, "src": target_dmr_id, "tg": target_tg, "slot": target_slot}})
+                                    self.broadcast_to_usrp_clients(build_usrp_frame((self.ab_tx_seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")), tg=target_tg, exclude_addr=addr)
+                            except Exception as ex:
+                                logger.debug(f"Error broadcasting caller info to DVSwitch clients: {ex}")
+
                         self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                         chunk_pcm = payload[:320]
                         std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk_pcm)
@@ -2268,7 +2355,13 @@ usrpAGC = -20,10,100
                         except Exception as e:
                             logger.debug(f"Error forwarding USRP to Analog_Bridge port {target_worker_port}: {e}")
 
-                        # Forward audio burst to Mumble Bridge so Mumble clients hear DVSwitch Mobile
+                        # Forward audio burst to external DVSwitch Mobile clients tuned to target_tg
+                        try:
+                            self.broadcast_to_usrp_clients(std_pkt, tg=target_tg, exclude_addr=addr)
+                        except Exception:
+                            pass
+
+                        # Forward audio burst to Mumble Bridge so Mumble clients hear Web PTT / DVSwitch Mobile
                         mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq & 0x7FFFFFFF, 0, 1, target_tg, target_dmr_id, target_slot, 0) + chunk_pcm
                         try:
                             self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
@@ -2295,15 +2388,31 @@ usrpAGC = -20,10,100
                     logger.debug(f"usrp_ingress_loop note: {e}")
                     await asyncio.sleep(0.01)
 
-    def broadcast_to_usrp_clients(self, data: bytes):
+    def broadcast_to_usrp_clients(self, data: bytes, tg: int = None, exclude_addr: tuple = None):
         now = time.time()
         for client_addr, last_seen in list(self.registered_usrp_clients.items()):
             if now - last_seen > 120:
                 del self.registered_usrp_clients[client_addr]
                 self.initialized_usrp_clients.pop(client_addr, None)
+                self.dvswitch_client_addrs.discard(client_addr)
                 continue
-            if client_addr[0] == "127.0.0.1":
+            if client_addr[0] == "127.0.0.1" or client_addr == exclude_addr:
                 continue
+            if exclude_addr and client_addr[0] == exclude_addr[0] and client_addr[1] == exclude_addr[1]:
+                continue
+
+            # Exclude internal docker container sockets (e.g. backend / bridge-mumble)
+            if client_addr not in self.dvswitch_client_addrs:
+                if client_addr[0].startswith("172.") and client_addr[0] not in ("172.17.0.1", "172.18.0.1", "172.20.0.1"):
+                    continue
+
+            # Talkgroup filter: only broadcast if client is tuned to this talkgroup
+            if tg is not None and tg > 0:
+                client_meta = self.client_metadata.get(client_addr) or self.client_metadata.get(client_addr[0], {})
+                client_tg = client_meta.get("tg", 0) or self.last_dvswitch_identity.get("tg", 0) or int(self.primary_tg or self.config.get("primary_tg", 1025))
+                if client_tg != tg:
+                    continue
+
             try:
                 self.usrp_ingress_sock.sendto(data, client_addr)
             except Exception:
