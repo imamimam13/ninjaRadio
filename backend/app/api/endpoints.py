@@ -732,6 +732,9 @@ def _build_set_info_tlv(src_id: int, tg: int, slot: int, callsign: str) -> bytes
     )
     return bytes([0x08, len(body)]) + body
 
+_last_tx_tg = 0
+_last_tx_id = 0
+
 def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool, pcm_payload: bytes = None):
     """
     Constructs and dispatches standard 32-byte header + 320-byte payload DVSwitch / USRP UDP packets
@@ -739,7 +742,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
     Core engine automatically bridges voice to Analog_Bridge, MMDVM DMR Master, and Mumble Bridge.
     Uses continuous buffering to ensure NO zero-padding or frame chopping occurs during TX.
     """
-    global _usrp_packet_seq, _tx_pcm_buffer, _tx_session_active
+    global _usrp_packet_seq, _tx_pcm_buffer, _tx_session_active, _last_tx_tg, _last_tx_id
     try:
         import socket
         import struct
@@ -750,11 +753,13 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
         safe_slot = slot if slot in (1, 2) else 2
 
         if is_tx:
-            # On initial key-up, dispatch binary TLV SET_INFO to prime caller identity and TG in Core & DVSwitch
-            if not _tx_session_active:
+            # On initial key-up or when target TG / ID changes, dispatch binary TLV SET_INFO to prime caller identity and TG
+            if not _tx_session_active or _last_tx_tg != safe_tg or _last_tx_id != safe_dmr_id:
                 _tx_session_active = True
+                _last_tx_tg = safe_tg
+                _last_tx_id = safe_dmr_id
                 _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
-                tlv = _build_set_info_tlv(dmr_id, safe_tg, safe_slot, callsign)
+                tlv = _build_set_info_tlv(safe_dmr_id, safe_tg, safe_slot, callsign)
                 # packetType = 2 (USRP_TYPE_TEXT) for TLV metadata
                 tlv_header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, 0, 0, 2 << 24, 0, 0)
                 try:
@@ -773,8 +778,10 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                     header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, 1, safe_tg, safe_dmr_id, safe_slot, 0)
                     sock.sendto(header + chunk, (CORE_USRP_HOST, CORE_USRP_PORT))
         else:
-            # Unkey event: flush residual buffer and send standard unkey packet
+            # Unkey event: flush residual buffer, reset session flags, and send standard unkey packet
             _tx_session_active = False
+            _last_tx_tg = 0
+            _last_tx_id = 0
             _tx_pcm_buffer.clear()
             _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
             header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, 0, safe_tg, safe_dmr_id, safe_slot, 0)
