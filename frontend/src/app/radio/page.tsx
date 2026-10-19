@@ -458,16 +458,14 @@ export default function RadioPocketMode() {
     { id: "2", sender: "JZ10XYZ", target: "TG 5109", type: "group", text: "Posko 1 Jakarta Timur 10-28 aman terkendali.", time: "09:15" },
   ]);
 
-  // Filter talkgroups strictly allowed for the active profile (TG 9990 Echo is always permitted, and current tuned TG is guaranteed)
+  // Provide full talkgroup list without artificial blocking
   const availableTgs = React.useMemo(() => {
-    const list = ALL_TALKGROUPS.filter((tg) =>
-      activeProfile.allowedTalkgroups.includes(tg.id) || tg.id === 9990 || tg.id === currentTg.id
-    );
+    const list = [...ALL_TALKGROUPS];
     if (!list.some((t) => t.id === currentTg.id)) {
       list.unshift(currentTg);
     }
     return list;
-  }, [activeProfile.allowedTalkgroups, currentTg]);
+  }, [currentTg]);
 
   const selectedTgIndex = Math.max(0, availableTgs.findIndex((t) => t.id === currentTg.id));
 

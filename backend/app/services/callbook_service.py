@@ -28,14 +28,26 @@ class CallbookService:
         if not result.scalar_one_or_none():
             defaults = [
                 {"code": "ORARI", "name": "ORARI", "description": "Organisasi Amatir Radio Indonesia", "allowed_tgs": "*", "callsign_prefixes": "YB,YC,YD,YE,7A,7B,7C,7D,7E,7F,7G,7H,7I,8A,8B,8C,8D,8E,8F,8G,8H,8I", "allow_tx": True},
-                {"code": "BRIDI", "name": "BRIDI", "description": "BrandMeister & Digital Amateur Radio Indonesia", "allowed_tgs": "5100,9990", "callsign_prefixes": "BD,BD62", "allow_tx": True},
-                {"code": "RAPI", "name": "RAPI", "description": "Radio Antar Penduduk Indonesia", "allowed_tgs": "5109,9990", "callsign_prefixes": "JZ", "allow_tx": True},
-                {"code": "CB-11M", "name": "CB 11M", "description": "Citizen Band 11 Meter Indonesia", "allowed_tgs": "5108,9990", "callsign_prefixes": "11M,CB", "allow_tx": True},
-                {"code": "KOMUNITAS", "name": "Komunitas / SAR", "description": "Relawan, SAR, & Radio Komunitas", "allowed_tgs": "5100,9990", "callsign_prefixes": "*", "allow_tx": True},
+                {"code": "BRIDI", "name": "BRIDI", "description": "BrandMeister & Digital Amateur Radio Indonesia", "allowed_tgs": "*", "callsign_prefixes": "BD,BD62", "allow_tx": True},
+                {"code": "RAPI", "name": "RAPI", "description": "Radio Antar Penduduk Indonesia", "allowed_tgs": "*", "callsign_prefixes": "JZ", "allow_tx": True},
+                {"code": "CB-11M", "name": "CB 11M", "description": "Citizen Band 11 Meter Indonesia", "allowed_tgs": "*", "callsign_prefixes": "11M,CB", "allow_tx": True},
+                {"code": "KOMUNITAS", "name": "Komunitas / SAR", "description": "Relawan, SAR, & Radio Komunitas", "allowed_tgs": "*", "callsign_prefixes": "*", "allow_tx": True},
             ]
             for item in defaults:
                 session.add(Organization(**item))
             await session.commit()
+        else:
+            # Auto-migrate existing organizations to open access (*) to eliminate any restrictive talkgroup locks
+            stmt_all = select(Organization)
+            res_all = await session.execute(stmt_all)
+            all_orgs = res_all.scalars().all()
+            changed = False
+            for org in all_orgs:
+                if org.allowed_tgs in ["5100,9990", "5109,9990", "5108,9990"]:
+                    org.allowed_tgs = "*"
+                    changed = True
+            if changed:
+                await session.commit()
 
     @staticmethod
     async def get_all_organizations(session: AsyncSession) -> List[Organization]:
@@ -172,13 +184,13 @@ class CallbookService:
                 target_org = fallback_org or (orgs[0] if orgs else None)
 
         if not target_org:
-            return False, f"Tidak ada aturan organisasi untuk stasiun {call_upper}"
+            return True, "Open Access"
 
         if not target_org.allow_tx:
             return False, f"Organisasi {target_org.name} saat ini diset Monitor Only oleh Sysop."
 
         rule = (target_org.allowed_tgs or "*").strip()
-        if rule == "*":
+        if rule == "*" or rule == "" or rule.upper() == "ALL":
             return True, target_org.name
 
         allowed_tgs = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
