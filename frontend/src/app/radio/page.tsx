@@ -665,6 +665,14 @@ export default function RadioPocketMode() {
     if (!audioChunk || !audioChunk.pcm) return;
     if (isMutedRef.current || isTxRef.current) return;
 
+    // Talkgroup Filter (Physical HT + MMDVM Experience):
+    // In normal operator mode, un-mute speaker only for the tuned channel talkgroup or Parrot echo (TG 9990)
+    if (!activeProfileRef.current?.isMonitorOnly && audioChunk.tg && currentTgRef.current?.id) {
+      if (audioChunk.tg !== currentTgRef.current.id && audioChunk.tg !== 9990) {
+        return;
+      }
+    }
+
     try {
       ensureAudioUnlocked();
       const ctx = rxAudioCtxRef.current;
