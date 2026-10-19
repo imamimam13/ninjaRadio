@@ -3,8 +3,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
-import { Users, Search, Plus, MapPin, Building, ShieldCheck, ShieldAlert, Shield, ShieldX, Radio, Upload, Download, Check, AlertCircle, Lock, Edit2, Trash2, Sliders, Settings2, Copy } from "lucide-react";
+import { Users, Search, Plus, MapPin, Building, ShieldCheck, ShieldAlert, Shield, ShieldX, Radio, Upload, Download, Check, AlertCircle, Lock, Unlock, Edit2, Trash2, Sliders, Settings2, Copy } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
+import { getIsAdminUnlocked, getSavedAdminPin, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
 
 interface CallbookItem {
   id: number;
@@ -129,6 +130,26 @@ export default function CallbookPage() {
   const [addError, setAddError] = useState<string | null>(null);
   const [isSubmittingAdd, setIsSubmittingAdd] = useState<boolean>(false);
 
+  // Global Admin Unlock State
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
+  const [showGlobalPinModal, setShowGlobalPinModal] = useState(false);
+  const [globalPinInput, setGlobalPinInput] = useState("");
+  const [globalPinError, setGlobalPinError] = useState("");
+  const [isVerifyingGlobalPin, setIsVerifyingGlobalPin] = useState(false);
+
+  useEffect(() => {
+    setIsAdminUnlocked(getIsAdminUnlocked());
+    const handleAuth = () => {
+      setIsAdminUnlocked(getIsAdminUnlocked());
+    };
+    window.addEventListener(ADMIN_AUTH_EVENT, handleAuth);
+    window.addEventListener("storage", handleAuth);
+    return () => {
+      window.removeEventListener(ADMIN_AUTH_EVENT, handleAuth);
+      window.removeEventListener("storage", handleAuth);
+    };
+  }, []);
+
   const fetchOrganizations = () => {
     fetch("/api/organizations")
       .then((res) => res.json())
@@ -145,9 +166,17 @@ export default function CallbookPage() {
     if (orgFilter !== "ALL") url += `org=${orgFilter}&`;
     if (searchTerm) url += `q=${encodeURIComponent(searchTerm)}&`;
 
-    fetch(url)
+    const headers: Record<string, string> = {};
+    const savedPin = getSavedAdminPin();
+    if (savedPin) {
+      headers["X-Admin-Pin"] = savedPin;
+    }
+
+    fetch(url, { headers })
       .then((res) => res.json())
-      .then((data) => setEntries(data))
+      .then((data) => {
+        if (Array.isArray(data)) setEntries(data);
+      })
       .catch(() => {});
   };
 
@@ -157,7 +186,7 @@ export default function CallbookPage() {
 
   useEffect(() => {
     fetchCallbook();
-  }, [searchTerm, orgFilter]);
+  }, [searchTerm, orgFilter, isAdminUnlocked]);
 
   const handleCreateOrgWithPin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -470,8 +499,41 @@ export default function CallbookPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            {isAdminUnlocked ? (
+              <button
+                onClick={() => {
+                  setAdminUnlocked(false);
+                  beepPlayer?.playRogerBeep();
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-950/70 border border-emerald-500/60 hover:bg-emerald-900 text-emerald-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+                title="Kunci kembali mode Admin (Sembunyikan DMR ID)"
+              >
+                <Unlock className="w-4 h-4 text-emerald-400" />
+                <span>Admin Aktif (Kunci)</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setGlobalPinInput("");
+                  setGlobalPinError("");
+                  setShowGlobalPinModal(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-amber-500/15 border border-amber-500/50 hover:bg-amber-500/25 text-amber-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+                title="Buka PIN Admin untuk melihat DMR ID asli dan mengelola database"
+              >
+                <Lock className="w-4 h-4 text-amber-400" />
+                <span>Buka DMR ID (Admin)</span>
+              </button>
+            )}
+
             <button
-              onClick={() => setShowBatchModal(true)}
+              onClick={() => {
+                if (!isAdminUnlocked) {
+                  setShowGlobalPinModal(true);
+                  return;
+                }
+                setShowBatchModal(true);
+              }}
               className="flex items-center gap-1.5 px-3 py-2 bg-[#05080f] border border-amber-600/60 hover:border-amber-400 text-amber-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
             >
               <Sliders className="w-4 h-4 text-amber-400" />
@@ -480,6 +542,10 @@ export default function CallbookPage() {
 
             <button
               onClick={() => {
+                if (!isAdminUnlocked) {
+                  setShowGlobalPinModal(true);
+                  return;
+                }
                 setImportFile(null);
                 setImportError(null);
                 setShowImportModal(true);
@@ -502,6 +568,10 @@ export default function CallbookPage() {
 
             <button
               onClick={() => {
+                if (!isAdminUnlocked) {
+                  setShowGlobalPinModal(true);
+                  return;
+                }
                 setFirewallError(null);
                 setFirewallSuccess(null);
                 setEditingOrgCode(null);
@@ -516,6 +586,10 @@ export default function CallbookPage() {
 
             <button
               onClick={() => {
+                if (!isAdminUnlocked) {
+                  setShowGlobalPinModal(true);
+                  return;
+                }
                 setAddError(null);
                 setShowAddModal(true);
               }}
@@ -575,7 +649,26 @@ export default function CallbookPage() {
               <div className="flex items-start justify-between">
                 <div>
                   <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-400">
-                    <span>DMR ID: <strong className="text-cyan-400">{entry.dmr_id}</strong></span>
+                    <span>
+                      DMR ID:{" "}
+                      {isAdminUnlocked && entry.dmr_id ? (
+                        <strong className="text-cyan-400 font-mono font-bold">{entry.dmr_id}</strong>
+                      ) : (
+                        <span
+                          onClick={() => {
+                            setGlobalPinInput("");
+                            setGlobalPinError("");
+                            setShowGlobalPinModal(true);
+                          }}
+                          className="inline-flex items-center gap-1 text-slate-400 bg-slate-900/90 hover:bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700/80 cursor-pointer transition text-[10px]"
+                          title="DMR ID disembunyikan untuk mencegah spoofing. Ketuk untuk verifikasi Admin PIN."
+                        >
+                          <Lock className="w-2.5 h-2.5 text-amber-400" />
+                          <span className="tracking-widest font-mono text-slate-300">•••••••</span>
+                          <span className="text-[9px] text-amber-400/90 font-sans font-semibold">Admin</span>
+                        </span>
+                      )}
+                    </span>
                     {entry.default_tg && (
                       <span className="px-1.5 py-0.2 rounded bg-amber-950/70 border border-amber-600/40 text-[10px] text-amber-300 font-bold">
                         TG {entry.default_tg}
@@ -603,21 +696,38 @@ export default function CallbookPage() {
                     {entry.organization}
                   </span>
                   <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => handleOpenEditModal(entry)}
-                      title="Edit Data User & TG"
-                      className="p-1 px-1.5 rounded-lg bg-[#05080f] border border-cyan-900/60 text-slate-300 hover:text-cyan-300 hover:border-cyan-500 text-[10px] font-mono flex items-center gap-1 transition-all"
-                    >
-                      <Edit2 className="w-3 h-3 text-cyan-400" />
-                      <span>Edit</span>
-                    </button>
-                    <button
-                      onClick={() => handleDeleteEntry(entry.id, entry.callsign)}
-                      title="Hapus Pengguna"
-                      className="p-1 px-1 rounded-lg bg-[#05080f] border border-cyan-900/60 text-slate-400 hover:text-red-400 hover:border-red-500 transition-all"
-                    >
-                      <Trash2 className="w-3 h-3 text-red-400" />
-                    </button>
+                    {isAdminUnlocked ? (
+                      <>
+                        <button
+                          onClick={() => handleOpenEditModal(entry)}
+                          title="Edit Data User & TG"
+                          className="p-1 px-1.5 rounded-lg bg-[#05080f] border border-cyan-900/60 text-slate-300 hover:text-cyan-300 hover:border-cyan-500 text-[10px] font-mono flex items-center gap-1 transition-all"
+                        >
+                          <Edit2 className="w-3 h-3 text-cyan-400" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteEntry(entry.id, entry.callsign)}
+                          title="Hapus Pengguna"
+                          className="p-1 px-1 rounded-lg bg-[#05080f] border border-cyan-900/60 text-slate-400 hover:text-red-400 hover:border-red-500 transition-all"
+                        >
+                          <Trash2 className="w-3 h-3 text-red-400" />
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setGlobalPinInput("");
+                          setGlobalPinError("");
+                          setShowGlobalPinModal(true);
+                        }}
+                        title="Buka Kunci Admin untuk Mengedit atau Menghapus User"
+                        className="p-1 px-1.5 rounded-lg bg-[#05080f] border border-slate-800 hover:border-amber-500/50 text-slate-400 hover:text-amber-300 text-[10px] font-mono flex items-center gap-1 transition-all"
+                      >
+                        <Lock className="w-3 h-3 text-amber-400/80" />
+                        <span>Admin</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1713,6 +1823,94 @@ export default function CallbookPage() {
                 Tutup
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BUKA KUNCI PIN ADMIN CALLBOOK */}
+      {showGlobalPinModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0b121e] border-2 border-amber-500/60 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500 flex items-center justify-center text-amber-400">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white font-heading">PIN Admin Server</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">Buka DMR ID asli & hak edit Callbook</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowGlobalPinModal(false); setGlobalPinError(""); }}
+                className="p-1 rounded-lg text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!globalPinInput.trim()) return;
+                setIsVerifyingGlobalPin(true);
+                setGlobalPinError("");
+                const ok = await verifyAdminPin(globalPinInput.trim());
+                setIsVerifyingGlobalPin(false);
+                if (ok) {
+                  setShowGlobalPinModal(false);
+                  setGlobalPinInput("");
+                  fetchCallbook();
+                  beepPlayer?.playRogerBeep();
+                } else {
+                  setGlobalPinError("PIN Admin salah! Akses ditolak.");
+                }
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="block text-xs text-slate-300 font-mono mb-1">
+                  Masukkan PIN Admin Server
+                </label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  placeholder="PIN Admin"
+                  value={globalPinInput}
+                  onChange={(e) => {
+                    setGlobalPinInput(e.target.value);
+                    setGlobalPinError("");
+                  }}
+                  className="w-full px-3 py-2.5 bg-[#05080f] border border-slate-700 focus:border-amber-400 rounded-xl text-center text-white font-mono tracking-widest text-lg font-bold"
+                />
+              </div>
+
+              {globalPinError && (
+                <div className="text-rose-400 text-xs font-mono text-center flex items-center justify-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>{globalPinError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowGlobalPinModal(false); setGlobalPinError(""); }}
+                  className="flex-1 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-mono font-bold hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isVerifyingGlobalPin || !globalPinInput.trim()}
+                  className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-mono font-bold transition disabled:opacity-50"
+                >
+                  {isVerifyingGlobalPin ? "Memeriksa..." : "Buka Kunci"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

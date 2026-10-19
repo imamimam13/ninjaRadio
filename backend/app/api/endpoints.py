@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from datetime import datetime
@@ -126,9 +126,85 @@ async def export_adif(
 async def search_callbook(
     q: Optional[str] = Query("", description="Search by Callsign, Name, DMR ID, RAPI ID"),
     org: Optional[str] = Query("ALL", description="ORARI, RAPI, CB-11M, KOMUNITAS"),
+    pin: Optional[str] = Query(None, description="Admin PIN to reveal unmasked DMR IDs"),
+    x_admin_pin: Optional[str] = Header(None, alias="X-Admin-Pin"),
     session: AsyncSession = Depends(get_db)
 ):
-    return await CallbookService.search_callbook(session, query=q, organization=org)
+    results = await CallbookService.search_callbook(session, query=q, organization=org)
+    admin_pin = get_admin_pin()
+    supplied = (pin or x_admin_pin or "").strip()
+    is_admin = bool(supplied and supplied == admin_pin)
+
+    if not is_admin:
+        # Mask DMR ID (0) for public/non-admin viewers to prevent identity scraping & spoofing
+        masked = []
+        for r in results:
+            d = {
+                "id": r.id,
+                "dmr_id": 0,
+                "callsign": r.callsign,
+                "name": r.name,
+                "city": r.city,
+                "province_state": r.province_state,
+                "country": r.country,
+                "organization": r.organization,
+                "organization_id": r.organization_id,
+                "remarks": r.remarks,
+                "default_tg": r.default_tg,
+                "allowed_tgs_override": r.allowed_tgs_override,
+            }
+            masked.append(CallbookResponse(**d))
+        return masked
+
+    return results
+
+@router.post("/callbook/verify-station")
+async def verify_station_credentials(
+    payload: dict,
+    session: AsyncSession = Depends(get_db)
+):
+    """Enables legitimate operators to verify their personal Callsign + DMR ID pair without exposing others."""
+    callsign = str(payload.get("callsign", "")).strip().upper()
+    raw_id = payload.get("dmr_id")
+    dmr_id = int(raw_id) if raw_id is not None and str(raw_id).isdigit() else 0
+
+    if not callsign and dmr_id == 0:
+        return {"verified": False, "message": "Callsign atau DMR ID harus diisi."}
+
+    cb = None
+    if dmr_id > 0:
+        cb = await CallbookService.get_by_dmr_id(session, dmr_id)
+    if not cb and callsign:
+        cb = await CallbookService.get_by_callsign(session, callsign)
+
+    if not cb:
+        return {
+            "verified": False,
+            "message": f"Stasiun {callsign or dmr_id} tidak terdaftar di Callbook server."
+        }
+
+    # Strict match validation
+    if dmr_id > 0 and cb.dmr_id and cb.dmr_id != dmr_id:
+        return {
+            "verified": False,
+            "message": f"DMR ID yang Anda masukkan ({dmr_id}) tidak cocok dengan data resmi untuk {callsign}."
+        }
+    if callsign and cb.callsign and cb.callsign.upper() != callsign:
+        return {
+            "verified": False,
+            "message": f"Callsign {callsign} tidak cocok dengan data resmi DMR ID {dmr_id}."
+        }
+
+    return {
+        "verified": True,
+        "callsign": cb.callsign,
+        "name": cb.name,
+        "dmr_id": cb.dmr_id,
+        "organization": cb.organization,
+        "allowed_tgs": cb.allowed_tgs_override,
+        "default_tg": cb.default_tg,
+        "message": f"Stasiun {cb.callsign} terverifikasi resmi di Callbook ({cb.organization})."
+    }
 
 async def _notify_core_reload_subscribers():
     try:
