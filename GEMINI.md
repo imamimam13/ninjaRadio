@@ -33,3 +33,22 @@
 - **Client Identity Isolation**: Klien DVSwitch Mobile eksternal (UDP 32345) dan Klien WebRTC/Web PTT adalah entitas terpisah. Pergantian profil di Web Frontend TIDAK BOLEH menimpa data pendaftaran/identitas DVSwitch Mobile (`REG:`, `INFO:`, DTMF).
 - **Session Cleanup Invariant**: Flag sesi transmisi (`_tx_session_active`, carrier PTT) HARUS selalu di-reset secara bersih saat unkey agar transmisi berikutnya tidak mewarisi parameter lama.
 
+## 7. RF DMR Cadence, Dashboard Isolation & VOX Hysteresis
+
+### 7.1 Dual-Path Audio Architecture (Dashboard vs /radio)
+- Antarmuka WebRTC (`/radio`) dan Dashboard Monitor (`/`) adalah jalur audio independen:
+  - `/radio` ditenagai oleh Direct DMR Vocoder bi-directional (OpenDMR / mbelib).
+  - Dashboard monitor ditenagai oleh USRP / WebSocket monitor stream.
+- Perbaikan atau penyesuaian pada salah satu antarmuka TIDAK BOLEH mengorbankan atau mengubah format buffer audio antarmuka lainnya.
+
+### 7.2 DMR RF Superframe Cadence & Timing Invariant (Anti-Cutoff HT/Z3DMR)
+- Klien DMR fisik dan RF (MMDVMHost, Pi-Star, HT, Z3DMR) sangat bergantung pada ketepatan waktu TDMA:
+  - Paket suara DMRD (3 AMBE frame = 60ms audio) HARUS dikirimkan dengan ritme waktu berkala (pacing ~60ms) tanpa penumpukan burst (*burst bunching*).
+  - Siklus superframe 6 burst (A -> B -> C -> D -> E -> F) dengan BS Voice Sync pada burst A dan Embedded LC pada burst B-E harus dijaga tanpa ada frame yang hilang agar modem MMDVM tidak memicu timer *Loss of Sync* (cutoff 2 detik).
+
+### 7.3 VOX Energy Detector & Hysteresis Guardrails
+- Detektor VOX (baik di frontend browser maupun backend) WAJIB menerapkan:
+  - **Dual-Threshold / Hysteresis (Schmitt Trigger)**: Ambang aktivasi (*attack threshold*) harus lebih tinggi daripada ambang pelepasan (*release threshold*) untuk mencegah mic berguncang di batas noise.
+  - **Hangover Timer**: Ketika level audio turun di bawah release threshold, transmisi tidak langsung mati, melainkan menunggu jeda hangover (misal 400–600ms). Jika setelah jeda tersebut tetap hening, barulah kirim sinyal unkey secara bersih.
+  - **Hard Time-Out Timer (TOT)**: Batas maksimal transmisi terus-menerus (misal 120-180 detik) untuk mencegah open-mic permanen jika ada noise statis tinggi.
+
