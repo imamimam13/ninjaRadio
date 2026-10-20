@@ -721,6 +721,17 @@ async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
 CORE_USRP_HOST = os.getenv("CORE_HOST", "core")
 CORE_USRP_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 CORE_DIRECT_DMR_PORT = int(os.getenv("CORE_DIRECT_DMR_PORT", 32100))
+_core_resolved_ip = None
+
+def _get_core_ip() -> str:
+    global _core_resolved_ip
+    if not _core_resolved_ip:
+        import socket
+        try:
+            _core_resolved_ip = socket.gethostbyname(CORE_USRP_HOST)
+        except Exception:
+            _core_resolved_ip = CORE_USRP_HOST
+    return _core_resolved_ip
 _usrp_packet_seq = 0
 _tx_pcm_buffer = bytearray()
 _CALLBOOK_CACHE = {}
@@ -760,7 +771,7 @@ def send_direct_dmr_pcm_to_core(callsign: str, dmr_id: int, tg: int, slot: int, 
         call_b = (callsign or "WEB-OP").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
         # Header: b"NPTT" (4B) + dmr_id(4B) + tg(4B) + slot(4B) + pcm_len(4B) + is_tx(1B) + callsign(16B) = 37 bytes
         hdr = b"NPTT" + struct.pack(">IIII?16s", safe_dmr_id, safe_tg, safe_slot, len(payload), bool(is_tx), call_b)
-        _direct_dmr_sock.sendto(hdr + payload, (CORE_USRP_HOST, CORE_DIRECT_DMR_PORT))
+        _direct_dmr_sock.sendto(hdr + payload, (_get_core_ip(), CORE_DIRECT_DMR_PORT))
     except Exception as e:
         logger.error(f"Failed to send direct DMR PCM to core ({CORE_USRP_HOST}:{CORE_DIRECT_DMR_PORT}): {e}")
 
@@ -792,7 +803,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                 # packetType = 2 (USRP_TYPE_TEXT) for TLV metadata
                 tlv_header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, 0, 0, 2 << 24, 0, 0)
                 try:
-                    sock.sendto(tlv_header + tlv, (CORE_USRP_HOST, CORE_USRP_PORT))
+                    sock.sendto(tlv_header + tlv, (_get_core_ip(), CORE_USRP_PORT))
                 except Exception:
                     pass
 
@@ -805,7 +816,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
                     _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
                     # packetType = 0 (Voice PCM) with masked dmr_id so top byte is guaranteed 0
                     header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, 1, safe_tg, safe_dmr_id, safe_slot, 0)
-                    sock.sendto(header + chunk, (CORE_USRP_HOST, CORE_USRP_PORT))
+                    sock.sendto(header + chunk, (_get_core_ip(), CORE_USRP_PORT))
         else:
             # Unkey event: flush residual buffer, reset session flags, and send standard unkey packet
             _tx_session_active = False
@@ -814,7 +825,7 @@ def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int
             _tx_pcm_buffer.clear()
             _usrp_packet_seq = (_usrp_packet_seq + 1) % 65536
             header = b"USRP" + struct.pack(">iiiiiii", _usrp_packet_seq, 0, 0, safe_tg, safe_dmr_id, safe_slot, 0)
-            sock.sendto(header + (b"\x00" * 320), (CORE_USRP_HOST, CORE_USRP_PORT))
+            sock.sendto(header + (b"\x00" * 320), (_get_core_ip(), CORE_USRP_PORT))
     except Exception:
         pass
 

@@ -779,7 +779,7 @@ export default function RadioPocketMode() {
       source.connect(hpf);
       hpf.connect(lpf);
 
-      const bufferSize = 2048;
+      const bufferSize = ctx.sampleRate <= 16000 ? 512 : 1024;
       const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
       txProcessorRef.current = processor;
       lpf.connect(processor);
