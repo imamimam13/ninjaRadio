@@ -2459,12 +2459,39 @@ usrpAGC = -20,10,100
                         if session_key in active_tx_sessions:
                             active_tx_sessions.discard(session_key)
                             logger.info(f"🎙️ [WebPTT-Ingress] ⏹️ Unkeyed from {addr}: ID {dmr_id} ({callsign}) -> TG {tg} (total frames: {pkt_count})")
-                    if self.direct_dmr:
+                    if self.direct_dmr and self.direct_dmr.vocoder.is_available():
                         self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx)
+                    else:
+                        # Seamless fallback to Analog_Bridge (port 32000) if OpenDMR vocoder is compiling or unavailable
+                        self.forward_web_ptt_to_analog_bridge(callsign, dmr_id, tg, slot, pcm_chunk, is_tx)
             except Exception as e:
                 if self.running:
                     logger.debug(f"run_web_ptt_ingress_loop note: {e}")
                     await asyncio.sleep(0.01)
+
+    def forward_web_ptt_to_analog_bridge(self, callsign: str, dmr_id: int, tg: int, slot: int, pcm_chunk: bytes, is_tx: bool):
+        """
+        Seamless fallback: Forwards Web PTT PCM to Analog_Bridge (port 32000) using standard USRP packets
+        if OpenDMR vocoder is temporarily compiling or unavailable.
+        """
+        try:
+            if is_tx:
+                if not getattr(self, "_web_ptt_ab_active", False) or getattr(self, "_web_ptt_ab_tg", 0) != tg:
+                    self._web_ptt_ab_active = True
+                    self._web_ptt_ab_tg = tg
+                    self.send_set_info_to_ab(dmr_id, callsign, tg, slot, port=AB_USRP_RX_PORT)
+                if pcm_chunk and len(pcm_chunk) >= 320:
+                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                    usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, pcm_chunk[:320])
+                    self.bridge_sock.sendto(usrp_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+            else:
+                if getattr(self, "_web_ptt_ab_active", False):
+                    self._web_ptt_ab_active = False
+                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                    unkey_pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
+                    self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+        except Exception as e:
+            logger.debug(f"forward_web_ptt_to_analog_bridge error: {e}")
 
     def broadcast_direct_dmrd(self, pkt: bytes):
         """

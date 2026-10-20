@@ -236,6 +236,7 @@ class DirectOpenDmrVocoder:
             "/usr/lib/x86_64-linux-gnu/libopendmr.so",
             "/usr/lib/aarch64-linux-gnu/libopendmr.so",
             os.path.join(os.path.dirname(__file__), "opendmr/libopendmr.so"),
+            os.path.join(os.path.dirname(__file__), "opendmr/libopendmr.dylib"),
             os.path.join(os.path.dirname(__file__), "../app-android/third_party/OpenDMR/libopendmr.so"),
             os.path.join(os.path.dirname(__file__), "../app-android/third_party/OpenDMR/libopendmr.dylib"),
             "libopendmr.so",
@@ -249,6 +250,37 @@ class DirectOpenDmrVocoder:
                     return
                 except Exception:
                     continue
+
+        # If not found in standard paths, auto-compile from source just-in-time
+        opendmr_dir = os.path.join(os.path.dirname(__file__), "opendmr")
+        makefile_path = os.path.join(opendmr_dir, "Makefile")
+        if os.path.exists(makefile_path):
+            try:
+                logger.info(f"🛠️ [DirectDMR] Auto-compiling OpenDMR vocoder in {opendmr_dir}...")
+                import subprocess
+                res = subprocess.run(["make", "-C", opendmr_dir], capture_output=True, text=True, timeout=30)
+                if res.returncode == 0:
+                    so_path = os.path.join(opendmr_dir, "libopendmr.so")
+                    dylib_path = os.path.join(opendmr_dir, "libopendmr.dylib")
+                    for target in [so_path, dylib_path]:
+                        if os.path.exists(target):
+                            try:
+                                self.lib = ctypes.CDLL(target)
+                                logger.info(f"✓ [DirectDMR] Successfully compiled and loaded {target}")
+                                # Try copying to /usr/local/lib for future instant loading
+                                try:
+                                    import shutil
+                                    shutil.copyfile(target, "/usr/local/lib/libopendmr.so")
+                                    subprocess.run(["ldconfig"], check=False)
+                                except Exception:
+                                    pass
+                                return
+                            except Exception as e:
+                                logger.warning(f"Failed to load compiled {target}: {e}")
+                else:
+                    logger.error(f"❌ [DirectDMR] make failed:\n{res.stderr}")
+            except Exception as e:
+                logger.error(f"❌ [DirectDMR] Failed to run make: {e}")
 
     def _bind(self):
         lib = self.lib
@@ -484,6 +516,12 @@ class DirectDmrEngine:
             self.current_callsign = callsign
             self.tx_pcm_buffer.clear()
 
+            if self.vocoder.is_available():
+                # Pre-warm vocoder LPC predictor history with 2 primed frames so initial burst has full volume
+                warmup_pcm = bytes(320)
+                self.vocoder.encode_frame(warmup_pcm)
+                self.vocoder.encode_frame(warmup_pcm)
+
             hdr_pkt = build_dmrd_packet(
                 src_id=self.current_src_id,
                 dst_tg=self.current_tg,
@@ -511,14 +549,14 @@ class DirectDmrEngine:
                 # Check amplitude & apply adaptive speech normalizer if mic level is quiet
                 samples = list(struct.unpack("<480h", burst_pcm))
                 peak = max(abs(s) for s in samples)
-                if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
-                    logger.info(f"🎙️ [DirectDMR] Ingress PCM peak amp: {peak}/32767 (Seq: {self.current_burst_seq})")
                 if 20 < peak < 10000:
                     scale = min(3.5, 16000.0 / max(peak, 500))
                     boosted = [max(-32767, min(32767, int(s * scale))) for s in samples]
                     burst_pcm = struct.pack("<480h", *boosted)
 
                 burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq)
+                if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
+                    logger.info(f"🎙️ [DirectDMR] Ingress PCM peak: {peak}/32767 | AMBE payload: {burst[:6].hex()}... (Seq: {self.current_burst_seq})")
                 pkt = build_dmrd_packet(
                     src_id=self.current_src_id,
                     dst_tg=self.current_tg,
