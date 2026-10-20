@@ -1380,13 +1380,6 @@ usrpAGC = -20,10,100
                             try:
                                 fwd_tlv = build_set_info_tlv(w_src, tlv_info.get("rpt", 0), w_tg, w_slot, tlv_info.get("cc", 1), w_call)
                                 self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=w_tg)
-                                if w_call and not w_call.startswith("ID-"):
-                                    info_json = json.dumps({
-                                        "tlv": {"ambe_mode": "DMR"},
-                                        "digital": {"call": w_call, "src": w_src, "tg": w_tg, "slot": w_slot},
-                                        "last_tune": str(w_tg)
-                                    })
-                                    self.broadcast_to_usrp_clients(build_usrp_frame((seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")), tg=w_tg)
                             except Exception as ex:
                                 logger.debug(f"Error broadcasting worker TLV to DVSwitch: {ex}")
                         continue
@@ -1840,13 +1833,6 @@ usrpAGC = -20,10,100
                                         display_call = self.current_rx_call or mobile_display_call or f"ID-{tlv_src}"
                                         fwd_tlv = build_set_info_tlv(tlv_src, tlv_info.get("rpt", 0), self.current_rx_tg, self.current_rx_slot, tlv_info.get("cc", 1), display_call)
                                         self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=self.current_rx_tg)
-                                        if self.current_rx_call and not self.current_rx_call.startswith("ID-"):
-                                            info_json = json.dumps({
-                                                "tlv": {"ambe_mode": "DMR"},
-                                                "digital": {"call": self.current_rx_call, "src": tlv_src, "tg": self.current_rx_tg, "slot": self.current_rx_slot},
-                                                "last_tune": str(self.current_rx_tg)
-                                            })
-                                            self.broadcast_to_usrp_clients(build_usrp_frame((seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")), tg=self.current_rx_tg)
                                     except Exception as ex:
                                         logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
                             else:
@@ -1999,8 +1985,9 @@ usrpAGC = -20,10,100
                 data, addr = await loop.sock_recvfrom(self.usrp_ingress_sock, 2048)
                 if len(data) >= 32 and data.startswith(b"USRP"):
                     self.tx_packet_count += 1
-                    is_new_client = (addr not in self.registered_usrp_clients)
-                    self.registered_usrp_clients[addr] = time.time()
+                    is_internal = addr[0] == "127.0.0.1" or (addr[0].startswith("172.") and addr[0] not in ("172.17.0.1", "172.18.0.1", "172.20.0.1"))
+                    if not is_internal:
+                        self.registered_usrp_clients[addr] = time.time()
 
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                     payload = data[32:]
@@ -2037,8 +2024,9 @@ usrpAGC = -20,10,100
                                 pass
                             logger.info(f"📱 DVSwitch Mobile client UNREGISTERED from {addr}")
                         else:
-                            self.registered_usrp_clients[addr] = time.time()
-                            self.dvswitch_client_addrs.add(addr)
+                            if not is_internal:
+                                self.registered_usrp_clients[addr] = time.time()
+                                self.dvswitch_client_addrs.add(addr)
                             reg_str = payload[4:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
                             if reg_str:
                                 if addr not in self.client_metadata:
@@ -2067,31 +2055,28 @@ usrpAGC = -20,10,100
                                 pass
                         continue
 
+                    # Handle keepalive PING: simply refresh client activity timestamp (do NOT spam PONG text packets)
                     if payload.startswith(b"PING") or packet_type == 3:
-                        self.registered_usrp_clients[addr] = time.time()
-                        try:
-                            # Standard USRP_TYPE_TEXT (2) PONG reply - prevents native JNI crash in DVSwitch Mobile
-                            pong_pkt = build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"PONG\x00")
-                            self.usrp_ingress_sock.sendto(pong_pkt, addr)
-                        except Exception:
-                            pass
+                        if not is_internal:
+                            self.registered_usrp_clients[addr] = time.time()
                         continue
 
                     if payload.startswith(b"MODES:"):
-                        self.registered_usrp_clients[addr] = time.time()
-                        self.dvswitch_client_addrs.add(addr)
+                        if not is_internal:
+                            self.registered_usrp_clients[addr] = time.time()
+                            self.dvswitch_client_addrs.add(addr)
                         try:
                             # Standard JSON array of modes for DVSwitch Mobile client
                             modes_reply = b'MODES:["DMR"]\x00'
                             self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, modes_reply), addr)
-                            self.usrp_ingress_sock.sendto(build_usrp_frame((seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, b"MODE:DMR\x00"), addr)
                         except Exception:
                             pass
                         continue
 
                     if payload.startswith(b"INFO:"):
-                        self.registered_usrp_clients[addr] = time.time()
-                        self.dvswitch_client_addrs.add(addr)
+                        if not is_internal:
+                            self.registered_usrp_clients[addr] = time.time()
+                            self.dvswitch_client_addrs.add(addr)
                         try:
                             info_raw = payload[5:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
                             c_call = None
@@ -2132,17 +2117,6 @@ usrpAGC = -20,10,100
                                     self.last_dvswitch_identity["callsign"] = cb_c
 
                             self.client_metadata[addr[0]] = self.client_metadata[addr]
-
-                            # Standard DVSwitch INFO reply: provides tlv.ambe_mode and last_tune to prevent client crashes
-                            resp_tg = self.client_metadata[addr].get("tg", 0) or self.last_dvswitch_identity.get("tg", 0) or int(self.primary_tg or self.config.get("primary_tg", 1025))
-                            resp_call = self.client_metadata[addr].get("callsign") or self.last_dvswitch_identity.get("callsign") or "BD62BOT"
-                            resp_src = self.client_metadata[addr].get("src") or self.last_dvswitch_identity.get("src") or 1022057
-                            status_json = json.dumps({
-                                "tlv": {"ambe_mode": "DMR"},
-                                "digital": {"call": resp_call, "src": resp_src, "tg": resp_tg, "slot": 2},
-                                "last_tune": str(resp_tg)
-                            })
-                            self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, f"INFO:{status_json}\x00".encode("ascii")), addr)
                         except Exception:
                             pass
                         continue
@@ -2372,17 +2346,10 @@ usrpAGC = -20,10,100
                             self.current_tx_start_time = now
                             logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot}, Port: {target_worker_port})")
 
-                            # Forward TLV SET_INFO + INFO to external DVSwitch clients tuned to this TG so they display caller identity
+                            # Forward TLV SET_INFO to external DVSwitch clients tuned to this TG so they display caller identity
                             try:
                                 fwd_tlv = build_set_info_tlv(target_dmr_id, int(self.config.get("server_dmr_id", 5109999)), target_tg, target_slot, 1, target_call)
                                 self.broadcast_to_usrp_clients(build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=target_tg, exclude_addr=addr)
-                                if target_call and not target_call.startswith("ID-"):
-                                    info_json = json.dumps({
-                                        "tlv": {"ambe_mode": "DMR"},
-                                        "digital": {"call": target_call, "src": target_dmr_id, "tg": target_tg, "slot": target_slot},
-                                        "last_tune": str(target_tg)
-                                    })
-                                    self.broadcast_to_usrp_clients(build_usrp_frame((self.ab_tx_seq + 1) & 0x7FFFFFFF, 0, USRP_TYPE_TEXT, f"INFO:{info_json}\x00".encode("ascii")), tg=target_tg, exclude_addr=addr)
                             except Exception as ex:
                                 logger.debug(f"Error broadcasting caller info to DVSwitch clients: {ex}")
 
