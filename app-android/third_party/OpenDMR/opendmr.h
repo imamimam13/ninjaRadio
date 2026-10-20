@@ -163,6 +163,31 @@ void opendmr_encoder_set_gain(opendmr_encoder_t *enc, int gain_db);
  */
 const char *opendmr_version(void);
 
+/* Burst sizes */
+#define OPENDMR_BURST_BYTES         33      /* 33 bytes = 264 bits = 132 dibits */
+#define OPENDMR_BURST_SAMPLES       480     /* 60ms @ 8kHz (3 frames * 160 samples) */
+#define OPENDMR_BURST_DIBITS        132     /* 132 dibits */
+#define OPENDMR_CENTER_DIBITS       24      /* 24 center dibits (48 bits sync/EMB) */
+
+/**
+ * Decode a full 33-byte DMR burst (3 AMBE frames) to 480 samples of 8kHz PCM.
+ * Handles ETSI TS 102 361-1 Annex B de-interleaving and mbelib voice synthesis.
+ */
+bool opendmr_decode_burst(opendmr_decoder_t *dec,
+                          const uint8_t burst[OPENDMR_BURST_BYTES],
+                          int16_t pcm[OPENDMR_BURST_SAMPLES],
+                          int *errs);
+
+/**
+ * Encode 480 samples of 8kHz PCM to a full 33-byte DMR burst (3 AMBE frames).
+ * Handles OP25 MBE speech analysis, DMR AMBE Golay(23,12) & PRNG scrambling FEC,
+ * and ETSI TS 102 361-1 Annex B interleaving with center sync dibits.
+ */
+bool opendmr_encode_burst(opendmr_encoder_t *enc,
+                          const int16_t pcm[OPENDMR_BURST_SAMPLES],
+                          uint8_t burst[OPENDMR_BURST_BYTES],
+                          const uint8_t center_dibits[OPENDMR_CENTER_DIBITS]);
+
 /**
  * Convert AMBE+2 frame between byte array and bit array formats.
  *

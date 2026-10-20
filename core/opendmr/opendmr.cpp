@@ -32,12 +32,160 @@ static const char *version_string = "1.0.0";
 
 /*
  * ============================================================================
- * Internal Constants
+ * DMR AMBE+2 Interleave & FEC Constants (ETSI TS 102 361-1 Annex B)
  * ============================================================================
  */
 
-/* Golay FEC processing */
-#include "cgolay24128.h"
+/* ETSI TS 102 361-1 Annex B interleave schedule (36 dibits per AMBE frame) */
+static const uint8_t R_W[36] = {
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 2,
+    0, 2, 0, 2, 0, 2,
+    0, 2, 0, 2, 0, 2
+};
+
+static const uint8_t R_X[36] = {
+    23, 10, 22, 9, 21, 8,
+    20, 7, 19, 6, 18, 5,
+    17, 4, 16, 3, 15, 2,
+    14, 1, 13, 0, 12, 10,
+    11, 9, 10, 8, 9, 7,
+    8, 6, 7, 5, 6, 4
+};
+
+static const uint8_t R_Y[36] = {
+    0, 2, 0, 2, 0, 2,
+    0, 2, 0, 3, 0, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3
+};
+
+static const uint8_t R_Z[36] = {
+    5, 3, 4, 2, 3, 1,
+    2, 0, 1, 13, 0, 12,
+    22, 11, 21, 10, 20, 9,
+    19, 8, 18, 7, 17, 6,
+    16, 5, 15, 4, 14, 3,
+    13, 2, 12, 1, 11, 0
+};
+
+/* DMR AMBE Golay (23,12) generator polynomial matrix (identical to mbelib golayGenerator) */
+static const int dmr_golay_gen[12] = {
+    0x63a, 0x31d, 0x7b4, 0x3da, 0x1ed, 0x6cc, 0x366, 0x1b3, 0x6e3, 0x54b, 0x49f, 0x475
+};
+
+static uint32_t dmr_encode_golay2312(uint32_t d)
+{
+    uint32_t parity = 0;
+    for (int i = 0; i < 12; i++) {
+        if ((d >> (11 - i)) & 1)
+            parity ^= dmr_golay_gen[i];
+    }
+    return (d << 11) | parity;
+}
+
+/*
+ * Converts 49-bit voice parameters into standard DMR char ambe_fr[4][24].
+ * Applies Golay(23,12) to C0, PRNG scrambling + Golay(23,12) to C1, and copies C2/C3.
+ */
+static void encode_ambe_fr(const char ambe_d[49], char ambe_fr[4][24])
+{
+    memset(ambe_fr, 0, 96);
+
+    /* C0: bits 0..11 */
+    uint32_t c0 = 0;
+    for (int i = 0; i < 12; i++)
+        c0 = (c0 << 1) | (ambe_d[i] & 1);
+    uint32_t cw0 = dmr_encode_golay2312(c0);
+
+    /* C1: bits 12..23 */
+    uint32_t c1 = 0;
+    for (int i = 0; i < 12; i++)
+        c1 = (c1 << 1) | (ambe_d[12 + i] & 1);
+    uint32_t cw1 = dmr_encode_golay2312(c1);
+
+    /* PRNG mask generated from C0 */
+    uint16_t pr[24];
+    pr[0] = static_cast<uint16_t>(16U * c0);
+    for (int i = 1; i < 24; i++) {
+        pr[i] = static_cast<uint16_t>((173U * static_cast<uint32_t>(pr[i - 1]) + 13849U) % 65536U);
+    }
+    for (int i = 1; i < 24; i++) {
+        pr[i] = pr[i] / 32768U;
+    }
+
+    /* ambe_fr[0]: j=0 parity, j=1..23 is cw0 (bit 0..22) */
+    char parity0 = 0;
+    for (int j = 0; j < 23; j++) {
+        char b = (cw0 >> j) & 1;
+        parity0 ^= b;
+        ambe_fr[0][j + 1] = b;
+    }
+    ambe_fr[0][0] = parity0;
+
+    /* ambe_fr[1]: j=0..22 is cw1 ^ pr[k] for j=22 down to 0, k=1..23 */
+    int k = 1;
+    for (int j = 22; j >= 0; j--) {
+        char b = (cw1 >> j) & 1;
+        ambe_fr[1][j] = b ^ static_cast<char>(pr[k]);
+        k++;
+    }
+
+    /* ambe_fr[2]: j=10 down to 0 is ambe_d[24..34] */
+    for (int j = 0; j < 11; j++)
+        ambe_fr[2][10 - j] = ambe_d[24 + j] & 1;
+
+    /* ambe_fr[3]: j=13 down to 0 is ambe_d[35..48] */
+    for (int j = 0; j < 14; j++)
+        ambe_fr[3][13 - j] = ambe_d[35 + j] & 1;
+}
+
+/*
+ * Converts 72-bit canonical frame (9 bytes) to char ambe_fr[4][24].
+ */
+static void canonical_to_fr(const uint8_t *frame72, char ambe_fr[4][24])
+{
+    memset(ambe_fr, 0, 96);
+    auto bit = [frame72](int c) -> char {
+        return (frame72[c / 8] >> (7 - (c % 8))) & 1;
+    };
+    for (int c = 0; c < 24; c++)
+        ambe_fr[0][23 - c] = bit(c);
+    for (int c = 24; c < 47; c++)
+        ambe_fr[1][46 - c] = bit(c);
+    for (int c = 47; c < 58; c++)
+        ambe_fr[2][57 - c] = bit(c);
+    for (int c = 58; c < 72; c++)
+        ambe_fr[3][71 - c] = bit(c);
+}
+
+/*
+ * Converts char ambe_fr[4][24] to 72-bit canonical frame (9 bytes).
+ */
+static void fr_to_canonical(const char ambe_fr[4][24], uint8_t *frame72)
+{
+    memset(frame72, 0, 9);
+    for (int c = 0; c < 24; c++) {
+        if (ambe_fr[0][23 - c])
+            frame72[c / 8] |= (1 << (7 - (c % 8)));
+    }
+    for (int c = 24; c < 47; c++) {
+        if (ambe_fr[1][46 - c])
+            frame72[c / 8] |= (1 << (7 - (c % 8)));
+    }
+    for (int c = 47; c < 58; c++) {
+        if (ambe_fr[2][57 - c])
+            frame72[c / 8] |= (1 << (7 - (c % 8)));
+    }
+    for (int c = 58; c < 72; c++) {
+        if (ambe_fr[3][71 - c])
+            frame72[c / 8] |= (1 << (7 - (c % 8)));
+    }
+}
 
 /*
  * ============================================================================
@@ -72,100 +220,6 @@ void opendmr_decoder_reset(opendmr_decoder_t *dec)
     }
 }
 
-/*
- * Compute PRNG mask for B-block descrambling.
- * Uses the same algorithm as mbelib's mbe_demodulateAmbe3600Data_common.
- */
-static uint32_t compute_prng_mask_23bit(uint32_t aOrig)
-{
-    uint16_t pr[24];
-    pr[0] = static_cast<uint16_t>(16U * aOrig);
-
-    for (int i = 1; i < 24; i++) {
-        pr[i] = static_cast<uint16_t>((173U * static_cast<uint32_t>(pr[i - 1]) + 13849U) % 65536U);
-    }
-
-    for (int i = 1; i < 24; i++) {
-        pr[i] = pr[i] / 32768U;
-    }
-
-    uint32_t mask = 0;
-    for (int i = 1; i <= 23; i++) {
-        if (pr[i])
-            mask |= (1U << (23 - i));
-    }
-    return mask;
-}
-
-/*
- * Decode 72-bit AMBE+2 frame to 49-bit voice parameters.
- *
- * Frame format (DVSI/canonical order):
- *   - Bits 0-23:  A block (Golay 24,12 protected)
- *   - Bits 24-46: B block (Golay 23,12 + PRNG scrambled)
- *   - Bits 47-71: C block (raw: 11-bit C2 + 14-bit C3)
- *
- * Output format (mbelib ambe_d):
- *   - ambe_d[0-11]:  C0 data (12 bits from A)
- *   - ambe_d[12-23]: C1 data (12 bits from B)
- *   - ambe_d[24-34]: C2 data (11 bits)
- *   - ambe_d[35-48]: C3 data (14 bits)
- */
-static void decode_ambe_frame(const uint8_t *frame72, char ambe_d[49])
-{
-    /* Extract A block - bits 0-23 */
-    uint32_t a = 0;
-    for (int i = 0; i < 24; i++) {
-        int byte_idx = i / 8;
-        int bit_pos = 7 - (i % 8);
-        if ((frame72[byte_idx] >> bit_pos) & 1)
-            a |= (0x800000U >> i);
-    }
-
-    /* Extract B block - bits 24-46 */
-    uint32_t b = 0;
-    for (int i = 0; i < 23; i++) {
-        int pos = 24 + i;
-        int byte_idx = pos / 8;
-        int bit_pos = 7 - (pos % 8);
-        if ((frame72[byte_idx] >> bit_pos) & 1)
-            b |= (0x400000U >> i);
-    }
-
-    /* Extract C block - bits 47-71 */
-    uint32_t c = 0;
-    for (int i = 0; i < 25; i++) {
-        int pos = 47 + i;
-        int byte_idx = pos / 8;
-        int bit_pos = 7 - (pos % 8);
-        if ((frame72[byte_idx] >> bit_pos) & 1)
-            c |= (0x1000000U >> i);
-    }
-
-    /* Golay decode A to get 12-bit C0 data */
-    uint32_t aOrig = CGolay24128::decode24128(a);
-
-    /* Descramble B with PRNG, then Golay decode to get 12-bit C1 data */
-    uint32_t prng_mask = compute_prng_mask_23bit(aOrig);
-    uint32_t b_descrambled = b ^ prng_mask;
-    uint32_t bOrig = CGolay24128::decode23127(b_descrambled);
-
-    /* Populate ambe_d in mbelib format */
-    memset(ambe_d, 0, 49);
-
-    /* ambe_d[0-11] = C0 data (aOrig, MSB first) */
-    for (int i = 0; i < 12; i++)
-        ambe_d[i] = (aOrig >> (11 - i)) & 1;
-
-    /* ambe_d[12-23] = C1 data (bOrig, MSB first) */
-    for (int i = 0; i < 12; i++)
-        ambe_d[12 + i] = (bOrig >> (11 - i)) & 1;
-
-    /* ambe_d[24-48] = C2 + C3 (from c, MSB first) */
-    for (int i = 0; i < 25; i++)
-        ambe_d[24 + i] = (c >> (24 - i)) & 1;
-}
-
 bool opendmr_decode(opendmr_decoder_t *dec,
                     const uint8_t ambe[OPENDMR_AMBE_FRAME_BYTES],
                     int16_t pcm[OPENDMR_PCM_SAMPLES],
@@ -174,21 +228,95 @@ bool opendmr_decode(opendmr_decoder_t *dec,
     if (!dec || !ambe || !pcm)
         return false;
 
-    /* Decode 72-bit frame to 49-bit voice parameters */
-    char ambe_d[49];
-    decode_ambe_frame(ambe, ambe_d);
+    char ambe_fr[4][24];
+    canonical_to_fr(ambe, ambe_fr);
 
-    /* Decode voice parameters to PCM using mbelib */
-    int err_count = 0;
-    int err_count2 = 0;
+    int err1 = 0, err2 = 0;
     char err_str[64] = {0};
+    char ambe_d[49] = {0};
 
-    mbe_processAmbe2450Data(pcm, &err_count, &err_count2, err_str,
-                            ambe_d, &dec->cur_mp, &dec->prev_mp,
-                            &dec->prev_mp_enhanced, 3);
+    mbe_processAmbe3600x2450Frame(pcm, &err1, &err2, err_str, ambe_fr, ambe_d,
+                                  &dec->cur_mp, &dec->prev_mp, &dec->prev_mp_enhanced, 3);
 
     if (errs)
-        *errs = err_count;
+        *errs = err1 + err2;
+
+    return true;
+}
+
+bool opendmr_decode_burst(opendmr_decoder_t *dec,
+                          const uint8_t burst[OPENDMR_BURST_BYTES],
+                          int16_t pcm[OPENDMR_BURST_SAMPLES],
+                          int *errs)
+{
+    if (!dec || !burst || !pcm)
+        return false;
+
+    /* Extract 132 dibits */
+    uint8_t dibits[132];
+    for (int i = 0; i < 33; i++) {
+        uint8_t b = burst[i];
+        dibits[i * 4 + 0] = (b >> 6) & 3;
+        dibits[i * 4 + 1] = (b >> 4) & 3;
+        dibits[i * 4 + 2] = (b >> 2) & 3;
+        dibits[i * 4 + 3] = b & 3;
+    }
+
+    char fr1[4][24] = {0};
+    char fr2[4][24] = {0};
+    char fr3[4][24] = {0};
+    int idx = 0;
+
+    /* Frame 1: 36 dibits */
+    for (int i = 0; i < 36; i++) {
+        uint8_t d = dibits[idx++];
+        fr1[R_W[i]][R_X[i]] = (d >> 1) & 1;
+        fr1[R_Y[i]][R_Z[i]] = d & 1;
+    }
+
+    /* Frame 2 first half: 18 dibits */
+    for (int i = 0; i < 18; i++) {
+        uint8_t d = dibits[idx++];
+        fr2[R_W[i]][R_X[i]] = (d >> 1) & 1;
+        fr2[R_Y[i]][R_Z[i]] = d & 1;
+    }
+
+    /* Skip 24 dibits (48 bits) of sync / EMB */
+    idx += 24;
+
+    /* Frame 2 second half: 18 dibits */
+    for (int i = 18; i < 36; i++) {
+        uint8_t d = dibits[idx++];
+        fr2[R_W[i]][R_X[i]] = (d >> 1) & 1;
+        fr2[R_Y[i]][R_Z[i]] = d & 1;
+    }
+
+    /* Frame 3: 36 dibits */
+    for (int i = 0; i < 36; i++) {
+        uint8_t d = dibits[idx++];
+        fr3[R_W[i]][R_X[i]] = (d >> 1) & 1;
+        fr3[R_Y[i]][R_Z[i]] = d & 1;
+    }
+
+    int total_errs = 0;
+    int err1 = 0, err2 = 0, err3 = 0, err_dummy = 0;
+    char err_str[64] = {0};
+    char ambe_d[49] = {0};
+
+    mbe_processAmbe3600x2450Frame(&pcm[0], &err1, &err_dummy, err_str, fr1, ambe_d,
+                                  &dec->cur_mp, &dec->prev_mp, &dec->prev_mp_enhanced, 3);
+    total_errs += err1;
+
+    mbe_processAmbe3600x2450Frame(&pcm[160], &err2, &err_dummy, err_str, fr2, ambe_d,
+                                  &dec->cur_mp, &dec->prev_mp, &dec->prev_mp_enhanced, 3);
+    total_errs += err2;
+
+    mbe_processAmbe3600x2450Frame(&pcm[320], &err3, &err_dummy, err_str, fr3, ambe_d,
+                                  &dec->cur_mp, &dec->prev_mp, &dec->prev_mp_enhanced, 3);
+    total_errs += err3;
+
+    if (errs)
+        *errs = total_errs;
 
     return true;
 }
@@ -210,11 +338,10 @@ opendmr_encoder_t *opendmr_encoder_create(void)
     if (enc) {
         enc->enc = new (std::nothrow) MBEEncoder();
         if (!enc->enc) {
-            /* Allocation failed - clean up and return NULL */
             free(enc);
             return nullptr;
         }
-        enc->enc->set_dmr_mode();   /* AMBE+2 mode */
+        enc->enc->set_dmr_mode();
         enc->enc->set_gain_adjust(1.0f);
         enc->gain_db = 0;
     }
@@ -232,11 +359,9 @@ void opendmr_encoder_destroy(opendmr_encoder_t *enc)
 void opendmr_encoder_reset(opendmr_encoder_t *enc)
 {
     if (enc && enc->enc) {
-        /* Re-create encoder to reset state */
         delete enc->enc;
         enc->enc = new (std::nothrow) MBEEncoder();
         if (!enc->enc) {
-            /* Allocation failed - encoder is now in invalid state */
             return;
         }
         enc->enc->set_dmr_mode();
@@ -247,7 +372,6 @@ void opendmr_encoder_reset(opendmr_encoder_t *enc)
 void opendmr_encoder_set_gain(opendmr_encoder_t *enc, int gain_db)
 {
     if (enc && enc->enc) {
-        /* Clamp to reasonable range */
         if (gain_db < -20) gain_db = -20;
         if (gain_db > 20) gain_db = 20;
         enc->gain_db = gain_db;
@@ -255,75 +379,22 @@ void opendmr_encoder_set_gain(opendmr_encoder_t *enc, int gain_db)
     }
 }
 
-/*
- * Encode 49-bit voice parameters to 72-bit AMBE+2 frame.
- *
- * Input: b[9] voice parameters from MBEEncoder
- * Output: 72-bit frame in DVSI/canonical order
- */
-static void encode_ambe_frame(const int b[9], uint8_t *frame72)
+static void encode_single_pcm_to_fr(opendmr_encoder_t *enc, const int16_t pcm[160], char ambe_fr[4][24])
 {
-    /* Pack b[9] into 49 bits */
+    int b[9] = {0};
+    enc->enc->encode_dmr_params(pcm, b);
+
     static const int b_lengths[9] = {7, 5, 5, 9, 7, 5, 4, 4, 3};
-    uint8_t bits49[49];
+    char ambe_d[49];
     int pos = 0;
     for (int i = 0; i < 9; i++) {
         int val = b[i];
         for (int j = b_lengths[i] - 1; j >= 0; j--) {
-            bits49[pos++] = (val >> j) & 1;
+            ambe_d[pos++] = (val >> j) & 1;
         }
     }
 
-    /* Extract 12-bit values for FEC encoding */
-    /* C0 = bits49[0-11], C1 = bits49[12-23], C2 = bits49[24-34], C3 = bits49[35-48] */
-    uint32_t c0 = 0, c1 = 0;
-    for (int i = 0; i < 12; i++) {
-        c0 = (c0 << 1) | bits49[i];
-        c1 = (c1 << 1) | bits49[12 + i];
-    }
-
-    /* Golay encode C0 -> A block (24 bits) */
-    uint32_t a = CGolay24128::encode24128(c0);
-
-    /* Golay encode C1, then scramble with PRNG -> B block (23 bits) */
-    uint32_t b_codeword = CGolay24128::encode23127(c1);
-    uint32_t prng_mask = compute_prng_mask_23bit(c0);
-    b_codeword ^= prng_mask;
-
-    /* C block = raw C2 + C3 (25 bits) */
-    uint32_t c_block = 0;
-    for (int i = 24; i < 49; i++) {
-        c_block = (c_block << 1) | bits49[i];
-    }
-
-    /* Pack into 72-bit output frame (DVSI order) */
-    memset(frame72, 0, 9);
-
-    /* A block: bits 0-23 */
-    for (int i = 0; i < 24; i++) {
-        int byte_idx = i / 8;
-        int bit_pos = 7 - (i % 8);
-        if ((a >> (23 - i)) & 1)
-            frame72[byte_idx] |= (1 << bit_pos);
-    }
-
-    /* B block: bits 24-46 */
-    for (int i = 0; i < 23; i++) {
-        int pos = 24 + i;
-        int byte_idx = pos / 8;
-        int bit_pos = 7 - (pos % 8);
-        if ((b_codeword >> (22 - i)) & 1)
-            frame72[byte_idx] |= (1 << bit_pos);
-    }
-
-    /* C block: bits 47-71 */
-    for (int i = 0; i < 25; i++) {
-        int pos = 47 + i;
-        int byte_idx = pos / 8;
-        int bit_pos = 7 - (pos % 8);
-        if ((c_block >> (24 - i)) & 1)
-            frame72[byte_idx] |= (1 << bit_pos);
-    }
+    encode_ambe_fr(ambe_d, ambe_fr);
 }
 
 bool opendmr_encode(opendmr_encoder_t *enc,
@@ -333,12 +404,69 @@ bool opendmr_encode(opendmr_encoder_t *enc,
     if (!enc || !enc->enc || !pcm || !ambe)
         return false;
 
-    /* Encode PCM to voice parameters */
-    int b[9] = {0};
-    enc->enc->encode_dmr_params(pcm, b);
+    char ambe_fr[4][24];
+    encode_single_pcm_to_fr(enc, pcm, ambe_fr);
+    fr_to_canonical(ambe_fr, ambe);
 
-    /* Encode voice parameters to 72-bit frame */
-    encode_ambe_frame(b, ambe);
+    return true;
+}
+
+bool opendmr_encode_burst(opendmr_encoder_t *enc,
+                          const int16_t pcm[OPENDMR_BURST_SAMPLES],
+                          uint8_t burst[OPENDMR_BURST_BYTES],
+                          const uint8_t center_dibits[OPENDMR_CENTER_DIBITS])
+{
+    if (!enc || !enc->enc || !pcm || !burst)
+        return false;
+
+    char fr1[4][24];
+    char fr2[4][24];
+    char fr3[4][24];
+
+    encode_single_pcm_to_fr(enc, &pcm[0], fr1);
+    encode_single_pcm_to_fr(enc, &pcm[160], fr2);
+    encode_single_pcm_to_fr(enc, &pcm[320], fr3);
+
+    uint8_t dibits[132] = {0};
+    int idx = 0;
+
+    /* Frame 1: 36 dibits */
+    for (int i = 0; i < 36; i++) {
+        dibits[idx++] = (fr1[R_W[i]][R_X[i]] << 1) | (fr1[R_Y[i]][R_Z[i]] & 1);
+    }
+
+    /* Frame 2 first half: 18 dibits */
+    for (int i = 0; i < 18; i++) {
+        dibits[idx++] = (fr2[R_W[i]][R_X[i]] << 1) | (fr2[R_Y[i]][R_Z[i]] & 1);
+    }
+
+    /* 24 center dibits (sync / EMB) */
+    if (center_dibits) {
+        for (int i = 0; i < 24; i++) {
+            dibits[idx++] = center_dibits[i] & 3;
+        }
+    } else {
+        idx += 24;
+    }
+
+    /* Frame 2 second half: 18 dibits */
+    for (int i = 18; i < 36; i++) {
+        dibits[idx++] = (fr2[R_W[i]][R_X[i]] << 1) | (fr2[R_Y[i]][R_Z[i]] & 1);
+    }
+
+    /* Frame 3: 36 dibits */
+    for (int i = 0; i < 36; i++) {
+        dibits[idx++] = (fr3[R_W[i]][R_X[i]] << 1) | (fr3[R_Y[i]][R_Z[i]] & 1);
+    }
+
+    /* Pack 132 dibits into 33 bytes */
+    memset(burst, 0, 33);
+    for (int i = 0; i < 33; i++) {
+        burst[i] = ((dibits[i * 4 + 0] & 3) << 6) |
+                   ((dibits[i * 4 + 1] & 3) << 4) |
+                   ((dibits[i * 4 + 2] & 3) << 2) |
+                   (dibits[i * 4 + 3] & 3);
+    }
 
     return true;
 }
@@ -359,14 +487,12 @@ void opendmr_convert_frame(uint8_t bytes[OPENDMR_AMBE_FRAME_BYTES],
                            bool to_bits)
 {
     if (to_bits) {
-        /* bytes -> bits */
         for (int i = 0; i < 72; i++) {
             int byte_idx = i / 8;
             int bit_pos = 7 - (i % 8);
             bits[i] = (bytes[byte_idx] >> bit_pos) & 1;
         }
     } else {
-        /* bits -> bytes */
         memset(bytes, 0, 9);
         for (int i = 0; i < 72; i++) {
             int byte_idx = i / 8;
