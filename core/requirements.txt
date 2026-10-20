@@ -2,3 +2,5 @@ fastapi>=0.111.0
 uvicorn>=0.30.0
 aiohttp>=3.9.0
 requests>=2.31.0
+bitarray>=2.9.0
+dmr_utils3>=0.1.31
