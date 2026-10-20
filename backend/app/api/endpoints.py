@@ -737,15 +737,19 @@ def _build_set_info_tlv(src_id: int, tg: int, slot: int, callsign: str) -> bytes
 _last_tx_tg = 0
 _last_tx_id = 0
 
+_direct_dmr_sock = None
+
 def send_direct_dmr_pcm_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool, pcm_payload: bytes = None):
     """
     Dispatches raw 8kHz PCM audio directly to NinjaRadio Direct Z3DMR engine (core:32100).
     Zero USRP overhead, Zero Analog_Bridge contention, Zero interference with DVSwitch Mobile (32345).
     """
+    global _direct_dmr_sock
     try:
         import socket
         import struct
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if _direct_dmr_sock is None:
+            _direct_dmr_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         safe_dmr_id = dmr_id & 0xFFFFFF
         safe_tg = tg & 0xFFFFFF
         safe_slot = slot if slot in (1, 2) else 2
@@ -753,7 +757,7 @@ def send_direct_dmr_pcm_to_core(callsign: str, dmr_id: int, tg: int, slot: int, 
         call_b = (callsign or "WEB-OP").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
         # Header: b"NPTT" (4B) + dmr_id(4B) + tg(4B) + slot(4B) + pcm_len(4B) + is_tx(1B) + callsign(16B) = 37 bytes
         hdr = b"NPTT" + struct.pack(">IIII?16s", safe_dmr_id, safe_tg, safe_slot, len(payload), bool(is_tx), call_b)
-        sock.sendto(hdr + payload, (CORE_USRP_HOST, CORE_DIRECT_DMR_PORT))
+        _direct_dmr_sock.sendto(hdr + payload, (CORE_USRP_HOST, CORE_DIRECT_DMR_PORT))
     except Exception:
         pass
 
