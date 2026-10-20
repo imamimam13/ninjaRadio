@@ -147,12 +147,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         callsign = str(msg.get("callsign", last_tx_info.get("callsign", "WEB-OP")))
                         # Refresh direct DMR UDP watchdog immediately with zero overhead
                         send_direct_dmr_pcm_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=b"")
-                        try:
-                            import httpx
-                            async with httpx.AsyncClient(timeout=0.5) as client:
-                                await client.post("http://core:5000/api/tx/heartbeat")
-                        except Exception:
-                            pass
                 except Exception as e:
                     logger.debug(f"ws live message error: {e}")
     except WebSocketDisconnect:

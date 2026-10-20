@@ -733,7 +733,13 @@ class HomeBrewMasterServer:
             target_slot = orig_slot
 
             if is_local_bridge:
-                # Local MMDVM_Bridge (DVSwitch.ini) on 127.0.0.1 must ALWAYS receive DMR voice on Slot 2
+                # If this transmission originated locally from Direct Web PTT or local USRP,
+                # local MMDVM_Bridge (Analog_Bridge) does NOT need to decode it to PCM because Web PTT and
+                # DVSwitch Mobile already stream pristine PCM directly without loss.
+                # Dropping it here prevents Analog_Bridge from generating a delayed (2-3s) duplicate echo loopback.
+                if self.get_active_local_tx(src_id) is not None:
+                    continue
+                # Local MMDVM_Bridge (DVSwitch.ini) on 127.0.0.1 must receive external DMR voice on Slot 2
                 # so Analog_Bridge & Dashboard Web Audio stream flawlessly!
                 target_slot = 2
             else:

@@ -72,6 +72,12 @@ VOICE_SYNC_BS_DIBITS = [
     1, 3, 1, 1, 1, 1, 3, 3, 3, 1, 1, 3, 3, 1, 3, 3, 1, 3, 1, 1, 3, 3, 1, 3
 ]
 
+# ETSI TS 102 361-1 Table 9.1: Base Station (BS) Data Sync (48 bits = 24 dibits: 0xDFF57D75DF5D)
+# Used for signaling bursts including Voice LC Header (data_type=0) and Voice LC Terminator (data_type=2)
+DATA_SYNC_BS_DIBITS = [
+    3, 1, 3, 3, 3, 3, 1, 1, 1, 3, 3, 1, 1, 3, 1, 1, 3, 1, 3, 3, 1, 1, 3, 1
+]
+
 # ETSI TS 102 361-1 Section 9.1.4: Embedded Signalling (EMB) with Colour Code 1 (CC1) fallback
 EMB_CC1_DIBITS = [
     0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 3
@@ -81,7 +87,7 @@ EMB_CC1_DIBITS = [
 def build_dmr_header_burst(src_id: int, dst_tg: int, slot: int, call_type: str = "group") -> bytes:
     """
     Constructs a standard ETSI TS 102 361-1 compliant 33-byte Voice Header burst (data_type = 0).
-    Applies BPTC(196,96) error correction, RS(12,9,3) parity, and interleaves with BS Voice Sync.
+    Applies BPTC(196,96) error correction, RS(12,9,3) parity, and interleaves with BS Data Sync.
     """
     if bptc and const:
         try:
@@ -89,12 +95,12 @@ def build_dmr_header_burst(src_id: int, dst_tg: int, slot: int, call_type: str =
             lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
             h_lc = bptc.encode_header_lc(lc_bytes)
             slot_head = const.SLOT_TYPE["VOICE_LC_HEAD"]
-            sync_voice = const.SYNC["BS_VOICE"]
-            burst_bits = h_lc[0:98] + slot_head[0:10] + sync_voice + slot_head[10:20] + h_lc[98:196]
+            sync_data = const.SYNC["BS_DATA"]
+            burst_bits = h_lc[0:98] + slot_head[0:10] + sync_data + slot_head[10:20] + h_lc[98:196]
             return burst_bits.tobytes()
         except Exception as e:
             logger.debug(f"build_dmr_header_burst bptc error: {e}")
-    hdr_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
+    hdr_dibits = [0] * 54 + DATA_SYNC_BS_DIBITS + [0] * 54
     return dibits_to_bytes(hdr_dibits)
 
 
@@ -108,12 +114,12 @@ def build_dmr_terminator_burst(src_id: int, dst_tg: int, slot: int, call_type: s
             lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
             t_lc = bptc.encode_terminator_lc(lc_bytes)
             slot_term = const.SLOT_TYPE["VOICE_LC_TERM"]
-            sync_voice = const.SYNC["BS_VOICE"]
-            burst_bits = t_lc[0:98] + slot_term[0:10] + sync_voice + slot_term[10:20] + t_lc[98:196]
+            sync_data = const.SYNC["BS_DATA"]
+            burst_bits = t_lc[0:98] + slot_term[0:10] + sync_data + slot_term[10:20] + t_lc[98:196]
             return burst_bits.tobytes()
         except Exception as e:
             logger.debug(f"build_dmr_terminator_burst bptc error: {e}")
-    term_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
+    term_dibits = [0] * 54 + DATA_SYNC_BS_DIBITS + [0] * 54
     return dibits_to_bytes(term_dibits)
 
 
@@ -623,7 +629,7 @@ class DirectDmrEngine:
                     dst_tg=self.current_tg,
                     slot=self.current_slot,
                     data_type=0,
-                    seq=p_seq,
+                    seq=0,
                     payload=self.current_hdr_burst,
                     rpt_id=self.rpt_id,
                     stream_id=self.current_stream_id

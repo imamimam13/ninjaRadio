@@ -1907,6 +1907,12 @@ usrpAGC = -20,10,100
                     self.current_rx_time = now
                     self.current_rx_active = True
 
+                    # Self-echo suppression: If this incoming frame on port 32001 is from our own active Web PTT transmission,
+                    # drop it so it does not loop back into DVSwitch Mobile or the Web Audio Player!
+                    is_local = self.is_transmitting or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(active_src))
+                    if is_local and (active_src == self.current_tx_dmr_id or active_src == self.current_operator_dmr_id):
+                        continue
+
                     # Determine all target TGs (including any cross-TG translations from TG Matrix)
                     routed_tgs = [(active_tg, active_slot)]
                     for mt in get_matrix_translated_targets(active_tg, active_slot):
@@ -2458,6 +2464,8 @@ usrpAGC = -20,10,100
                         self.current_tx_dmr_id = dmr_id
                         self.current_operator_callsign = callsign
                         self.current_operator_dmr_id = dmr_id
+                        if self.dmr_master_server:
+                            self.dmr_master_server.mark_local_transmission(dmr_id, tg, slot)
                         if session_key not in active_tx_sessions:
                             active_tx_sessions.add(session_key)
                             self.current_tx_start_time = now
@@ -2564,19 +2572,17 @@ usrpAGC = -20,10,100
         if not pkt or len(pkt) < 20:
             return
 
-        # 1. Forward directly to local repeaters and hotspots via DMR Master Server
-        if self.dmr_master_server:
-            self.dmr_master_server.broadcast_dmrd(pkt)
-
-        # 2. Extract packet fields
+        # 1. Extract packet fields and mark local transmission before broadcasting
         p_src = int.from_bytes(pkt[5:8], "big")
         p_dst = int.from_bytes(pkt[8:11], "big")
         p_bits = pkt[15]
         p_slot = 2 if (p_bits & 0x80) else 1
-
-        # Mark local transmission in master server so it doesn't loop back
         if self.dmr_master_server:
             self.dmr_master_server.mark_local_transmission(p_src, p_dst, p_slot)
+
+        # 2. Forward directly to local repeaters and hotspots via DMR Master Server
+        if self.dmr_master_server:
+            self.dmr_master_server.broadcast_dmrd(pkt)
 
         # 3. Forward to upstream DMR peers (BrandMeister, FreeDMR, etc.)
         if self.peer_clients:
