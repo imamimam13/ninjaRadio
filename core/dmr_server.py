@@ -505,8 +505,9 @@ class HomeBrewMasterServer:
 
             now = time.time()
             self.total_rx_packets += 1
-            # Preserve intended_tg and intended_slot across all frames of the transmission!
-            self.mark_local_transmission(src_id, dst_tg, slot)
+            # Preserve intended_tg and intended_slot across all frames of local transmission from 127.0.0.1
+            if addr[0] == "127.0.0.1":
+                self.mark_local_transmission(src_id, dst_tg, slot)
 
             # Update client activity & dynamic TG subscription when a hotspot user transmits
             if addr not in self.clients:

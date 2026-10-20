@@ -404,6 +404,31 @@ class DirectOpenDmrVocoder:
         lib.opendmr_encode.restype = ctypes.c_bool
         lib.opendmr_version.restype = ctypes.c_char_p
 
+        self._has_native_burst_dec = hasattr(lib, "opendmr_decode_burst")
+        if self._has_native_burst_dec:
+            lib.opendmr_decode_burst.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint8),
+                ctypes.POINTER(ctypes.c_int16),
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            lib.opendmr_decode_burst.restype = ctypes.c_bool
+
+        self._has_native_burst_enc = hasattr(lib, "opendmr_encode_burst")
+        if self._has_native_burst_enc:
+            lib.opendmr_encode_burst.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_int16),
+                ctypes.POINTER(ctypes.c_uint8),
+                ctypes.POINTER(ctypes.c_uint8),
+            ]
+            lib.opendmr_encode_burst.restype = ctypes.c_bool
+
+        self._pcm_480_in = (ctypes.c_int16 * BURST_SAMPLES)()
+        self._pcm_480_out = (ctypes.c_int16 * BURST_SAMPLES)()
+        self._burst_out = (ctypes.c_uint8 * BURST_BYTES)()
+        self._center_buf = (ctypes.c_uint8 * 24)()
+
     def version(self) -> str:
         if not self.lib:
             return "unavailable"
@@ -438,15 +463,35 @@ class DirectOpenDmrVocoder:
     def encode_burst(self, pcm_960: bytes, sequence: int = 0, emblc_dict: Optional[dict] = None) -> bytes:
         if len(pcm_960) != BURST_PCM_BYTES:
             return bytes(BURST_BYTES)
+        sync = get_burst_center_dibits(sequence, emblc_dict)
+
+        if self._has_native_burst_enc and self._enc:
+            samples = struct.unpack("<480h", pcm_960)
+            for i, s in enumerate(samples):
+                self._pcm_480_in[i] = s
+            for i in range(24):
+                self._center_buf[i] = sync[i] if i < len(sync) else 0
+            ok = self.lib.opendmr_encode_burst(self._enc, self._pcm_480_in, self._burst_out, self._center_buf)
+            if ok:
+                return bytes(self._burst_out)
+
+        # Fallback to Python burst interleaver if native not available
         f1 = self.encode_frame(pcm_960[:320])
         f2 = self.encode_frame(pcm_960[320:640])
         f3 = self.encode_frame(pcm_960[640:960])
-        sync = get_burst_center_dibits(sequence, emblc_dict)
         return interleave_burst((f1, f2, f3), sync)
 
     def decode_burst(self, burst_33: bytes) -> bytes:
         if len(burst_33) < BURST_BYTES:
             return b""
+
+        if self._has_native_burst_dec and self._dec:
+            buf = (ctypes.c_uint8 * BURST_BYTES).from_buffer_copy(burst_33[:BURST_BYTES])
+            ok = self.lib.opendmr_decode_burst(self._dec, buf, self._pcm_480_out, ctypes.byref(self._errs))
+            if ok:
+                return struct.pack("<480h", *self._pcm_480_out)
+
+        # Fallback to Python burst de-interleaver
         f1, f2, f3 = deinterleave_burst(burst_33[:BURST_BYTES])
         p1 = self.decode_frame(f1)
         p2 = self.decode_frame(f2)

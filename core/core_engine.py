@@ -2505,6 +2505,10 @@ usrpAGC = -20,10,100
                                         self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
                                     except Exception:
                                         pass
+
+                        # Encode directly to DMRD frames via Direct Z3DMR Vocoder (Zero Analog_Bridge collision)
+                        if self.direct_dmr:
+                            self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx=True)
                     else:
                         if session_key in active_tx_sessions:
                             active_tx_sessions.discard(session_key)
@@ -2528,11 +2532,9 @@ usrpAGC = -20,10,100
                                 "is_transmitting": False,
                                 "data_type": 2
                             }))
-                    if self.direct_dmr and self.direct_dmr.vocoder.is_available():
-                        self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx)
-                    else:
-                        # Seamless fallback to Analog_Bridge (port 32000) if OpenDMR vocoder is compiling or unavailable
-                        self.forward_web_ptt_to_analog_bridge(callsign, dmr_id, tg, slot, pcm_chunk, is_tx)
+                            # Cleanly unkey Direct Z3DMR session and send Terminator frame
+                            if self.direct_dmr:
+                                self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, b"", is_tx=False)
             except Exception as e:
                 if self.running:
                     logger.debug(f"run_web_ptt_ingress_loop note: {e}")
@@ -2540,25 +2542,39 @@ usrpAGC = -20,10,100
 
     def forward_web_ptt_to_analog_bridge(self, callsign: str, dmr_id: int, tg: int, slot: int, pcm_chunk: bytes, is_tx: bool):
         """
-        Seamless fallback: Forwards Web PTT PCM to Analog_Bridge (port 32000) using standard USRP packets
-        if OpenDMR vocoder is temporarily compiling or unavailable.
+        Forwards Web PTT PCM to Analog_Bridge (port 32000 or worker port) using standard USRP packets.
+        Analog_Bridge uses md380-emu (authentic hardware AMBE+2 vocoder) to encode PCM to DMRD frames
+        and forward via MMDVM_Bridge to dmr_server and all connected DMR repeaters/hotspots/Z3DMR.
         """
         try:
+            target_worker_port = AB_USRP_RX_PORT
+            for w in self.bridge_workers.values():
+                ab_p = w.get("ab_proc")
+                if w.get("tg") == tg and ab_p and ab_p.poll() is None:
+                    target_worker_port = w.get("usrp_rx_port", AB_USRP_RX_PORT)
+                    break
+
             if is_tx:
-                if not getattr(self, "_web_ptt_ab_active", False) or getattr(self, "_web_ptt_ab_tg", 0) != tg:
+                if (not getattr(self, "_web_ptt_ab_active", False)
+                        or getattr(self, "_web_ptt_ab_tg", 0) != tg
+                        or getattr(self, "_web_ptt_ab_src", 0) != dmr_id):
                     self._web_ptt_ab_active = True
                     self._web_ptt_ab_tg = tg
-                    self.send_set_info_to_ab(dmr_id, callsign, tg, slot, port=AB_USRP_RX_PORT)
+                    self._web_ptt_ab_src = dmr_id
+                    self.send_set_info_to_ab(dmr_id, callsign, tg, slot, port=target_worker_port)
                 if pcm_chunk and len(pcm_chunk) >= 320:
-                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
-                    usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, pcm_chunk[:320])
-                    self.bridge_sock.sendto(usrp_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                    for offset in range(0, len(pcm_chunk), 320):
+                        chunk = pcm_chunk[offset:offset + 320]
+                        if len(chunk) == 320:
+                            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                            usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk)
+                            self.bridge_sock.sendto(usrp_pkt, ("127.0.0.1", target_worker_port))
             else:
                 if getattr(self, "_web_ptt_ab_active", False):
                     self._web_ptt_ab_active = False
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                     unkey_pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
-                    self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", AB_USRP_RX_PORT))
+                    self.bridge_sock.sendto(unkey_pkt, ("127.0.0.1", target_worker_port))
         except Exception as e:
             logger.debug(f"forward_web_ptt_to_analog_bridge error: {e}")
 
@@ -2846,7 +2862,7 @@ usrpAGC = -20,10,100
                                         logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
                                     break
 
-            # Direct vocoder decoding for Web Audio player (Zero Analog_Bridge overhead)
+            # Decode incoming DMR burst to 8kHz PCM for Web Audio player (Zero Analog_Bridge overhead)
             decoded_pcm = b""
             if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
