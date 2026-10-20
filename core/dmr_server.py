@@ -667,6 +667,59 @@ class HomeBrewMasterServer:
 
         self.total_tx_packets += 1
 
+        sender_call = None
+        for c in self.clients.values():
+            if c.get("dmr_id") == src_id and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
+                sender_call = c.get("callsign")
+                break
+        if not sender_call:
+            cb_call = lookup_callbook_callsign(src_id)
+            if cb_call:
+                sender_call = cb_call
+        callsign_str = sender_call or f"ID-{src_id}"
+
+        # Track Active QSO stream & Last Heard list for locally generated DMRD
+        if data_type == 0:  # Voice Header
+            self.active_stream = {
+                "stream_id": stream_id,
+                "src_id": src_id,
+                "callsign": callsign_str,
+                "dst_tg": dst_tg,
+                "slot": orig_slot,
+                "call_type": call_type,
+                "start_time": now,
+                "last_packet_time": now,
+                "packets": 1
+            }
+            logger.info(f"📻 [DMR-Master] 🎙️ Direct DMR TX: {callsign_str} ({src_id}) -> TG {dst_tg} (TS{orig_slot}, Stream {stream_id})")
+        elif data_type == 1:
+            if self.active_stream and self.active_stream.get("stream_id") == stream_id:
+                self.active_stream["packets"] = self.active_stream.get("packets", 0) + 1
+                self.active_stream["last_packet_time"] = now
+        elif data_type == 2:
+            if self.active_stream and self.active_stream.get("stream_id") == stream_id:
+                duration = round(now - self.active_stream.get("start_time", now), 1)
+                packets = self.active_stream.get("packets", 1) + 1
+                qso_entry = {
+                    "timestamp": self.active_stream.get("start_time", now),
+                    "end_time": now,
+                    "callsign": self.active_stream.get("callsign", callsign_str),
+                    "src_id": src_id,
+                    "dst_tg": dst_tg,
+                    "slot": orig_slot,
+                    "call_type": call_type,
+                    "duration": max(duration, 0.4),
+                    "packets": packets,
+                    "loss": "0.0%"
+                }
+                self.recent_qsos.insert(0, qso_entry)
+                if len(self.recent_qsos) > self.max_recent_qsos:
+                    self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
+                self.active_stream = None
+            logger.info(f"📻 [DMR-Master] ⏹️ Direct DMR TX End: {callsign_str} ({src_id}) -> TG {dst_tg}")
+
+        delivered_count = 0
+
         for addr, client in list(self.clients.items()):
             if addr == exclude_addr or client.get("state") not in ["CONNECTED", "AUTHENTICATED"]:
                 continue
@@ -733,7 +786,8 @@ class HomeBrewMasterServer:
                     }
 
             # Stamp target client's own 4-byte Repeater ID into bytes 11..15 and set target_slot bit
-            rpt_bytes = struct.pack(">I", client_dmr_id if client_dmr_id else self.server_dmr_id)
+            safe_cid = int(client_dmr_id) if client_dmr_id else self.server_dmr_id
+            rpt_bytes = struct.pack(">I", safe_cid)
             slot_bit = 0x80 if target_slot == 2 else 0x00
             new_bits = (orig_bits & 0x7F) | slot_bit
             out_pkt = data[:11] + rpt_bytes + bytes([new_bits]) + data[16:]
@@ -741,8 +795,15 @@ class HomeBrewMasterServer:
             try:
                 self.sock.sendto(out_pkt, addr)
                 client["tx_packets"] = client.get("tx_packets", 0) + 1
-            except Exception:
-                pass
+                delivered_count += 1
+            except Exception as e:
+                logger.debug(f"[DMR-Master] Failed to send DMRD to {addr}: {e}")
+
+        if data_type == 0:
+            if delivered_count > 0:
+                logger.info(f"📻 [DMR-Master] Forwarded Header to {delivered_count} hotspot client(s)")
+            else:
+                logger.info(f"📻 [DMR-Master] No matching hotspot client subscribed to TG {dst_tg} (connected: {len(self.clients)})")
 
     async def _play_parrot_echo(self, target_addr: Tuple[str, int], caller_id: int, orig_tg: int, slot: int, call_type: str, recorded_packets: list):
         """Plays back recorded DMR voice burst to the hotspot on TG 9990 after turnaround delay."""

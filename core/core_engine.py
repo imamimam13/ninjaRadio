@@ -2437,6 +2437,8 @@ usrpAGC = -20,10,100
         """
         loop = asyncio.get_running_loop()
         logger.info(f"🎙️ Started Direct Z3DMR Web PTT Ingress loop on UDP {WEB_PTT_PORT}.")
+        active_tx_sessions = set()
+        pkt_count = 0
         while self.running:
             try:
                 data, addr = await loop.sock_recvfrom(self.web_ptt_sock, 4096)
@@ -2444,6 +2446,19 @@ usrpAGC = -20,10,100
                     dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
+                    session_key = (dmr_id, tg)
+                    if is_tx:
+                        if session_key not in active_tx_sessions:
+                            active_tx_sessions.add(session_key)
+                            pkt_count = 0
+                            logger.info(f"🎙️ [WebPTT-Ingress] 🔴 Keyed up from {addr}: ID {dmr_id} ({callsign}) -> TG {tg} (TS{slot}, pcm={len(pcm_chunk)}B)")
+                        pkt_count += 1
+                        if pkt_count % 100 == 0:
+                            logger.info(f"🎙️ [WebPTT-Ingress] Streaming audio from {callsign}: {pkt_count} frames processed")
+                    else:
+                        if session_key in active_tx_sessions:
+                            active_tx_sessions.discard(session_key)
+                            logger.info(f"🎙️ [WebPTT-Ingress] ⏹️ Unkeyed from {addr}: ID {dmr_id} ({callsign}) -> TG {tg} (total frames: {pkt_count})")
                     if self.direct_dmr:
                         self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx)
             except Exception as e:
@@ -2484,8 +2499,28 @@ usrpAGC = -20,10,100
                     if is_tg_bridged_to_peer(p_dst, client.name, sub_tgs):
                         client.send_raw_dmrd(pkt)
 
-        # 4. If voice burst (type 1), decode and forward to DVSwitch Mobile clients tuned to p_dst and Mumble
-        if p_type == 1 and len(pkt) >= 53 and self.direct_dmr:
+        # 4. Handle packet types for DVSwitch Mobile, Mumble, and Backend dashboard
+        if p_type == 0:
+            # Voice Header: broadcast caller info to DVSwitch Mobile clients tuned to p_dst
+            callsign_str = lookup_callbook_callsign(p_src) or f"ID-{p_src}"
+            try:
+                fwd_tlv = build_set_info_tlv(p_src, int(self.config.get("server_dmr_id", 5109999)), p_dst, p_slot, 1, callsign_str)
+                self.broadcast_to_usrp_clients(build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=p_dst)
+            except Exception:
+                pass
+            asyncio.create_task(self.dispatch_event_to_backend({
+                "network": "Direct DMR (WebRTC)",
+                "host": "webrtc:32100",
+                "src_id": p_src,
+                "dst_tg": p_dst,
+                "slot": p_slot,
+                "callsign": callsign_str,
+                "is_tx": True,
+                "is_transmitting": True,
+                "data_type": 0
+            }))
+        elif p_type == 1 and len(pkt) >= 53 and self.direct_dmr:
+            # Voice burst: decode and forward to DVSwitch Mobile clients tuned to p_dst and Mumble
             try:
                 decoded_pcm = self.direct_dmr.decode_dmr_burst(pkt[20:53])
                 if decoded_pcm and len(decoded_pcm) >= 320:
@@ -2509,6 +2544,17 @@ usrpAGC = -20,10,100
                 self.bridge_sock.sendto(mumble_unkey, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
             except Exception:
                 pass
+            asyncio.create_task(self.dispatch_event_to_backend({
+                "network": "Direct DMR (WebRTC)",
+                "host": "webrtc:32100",
+                "src_id": p_src,
+                "dst_tg": p_dst,
+                "slot": p_slot,
+                "callsign": lookup_callbook_callsign(p_src) or f"ID-{p_src}",
+                "is_tx": False,
+                "is_transmitting": False,
+                "data_type": 2
+            }))
 
     async def dispatch_event_to_backend(self, traffic: dict):
         if not self.http_session:

@@ -403,6 +403,7 @@ class DirectDmrEngine:
         self.current_callsign = ""
         self.tx_pcm_buffer = bytearray()
         self.last_tx_ts = 0.0
+        logger.info(f"✓ Direct Z3DMR Engine ready (Vocoder available: {self.vocoder.is_available()}, version: {self.vocoder.version()})")
 
     def push_web_ptt_pcm(
         self,

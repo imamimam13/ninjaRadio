@@ -151,6 +151,29 @@ class CallbookService:
             cb = await CallbookService.get_by_callsign(session, call_upper)
 
         if not cb:
+            # Allow Sysop and server identities
+            if call_upper in ["BD62BOT", "N1NJA"] or dmr_id in [1022057, 5109999]:
+                return True, "Sysop Operator"
+            # Fallback to subscriber_ids.csv if available
+            found_csv = False
+            for csv_path in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv", "./data/subscriber_ids.csv"]:
+                if os.path.exists(csv_path):
+                    try:
+                        with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
+                            for line in f:
+                                if line.startswith(f"{dmr_id},") or f",{call_upper}," in line.upper():
+                                    found_csv = True
+                                    break
+                    except Exception:
+                        pass
+                if found_csv:
+                    break
+            if found_csv:
+                return True, "DMR-ID Database Verified"
+            # Allow legitimate amateur stations (e.g. BD, YB, YC, YD, YE, JZ) or valid DMR IDs (>= 100000)
+            if dmr_id >= 100000 or any(call_upper.startswith(p) for p in ["YB", "YC", "YD", "YE", "BD", "JZ"]):
+                return True, "Amateur Station"
+
             return False, f"Stasiun {call_upper} (ID: {dmr_id}) tidak terdaftar di Callbook resmi. Daftarkan profil di menu Callbook untuk izin transmit."
 
         # 2. Validasi konsistensi Callsign & DMR ID (mencegah pemalsuan identitas / asal buat profil)
