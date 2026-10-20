@@ -2432,13 +2432,11 @@ usrpAGC = -20,10,100
     async def run_web_ptt_ingress_loop(self):
         """
         Receives raw 8kHz PCM audio directly from Web PTT (backend) on UDP WEB_PTT_PORT (32100).
-        Forward audio to Analog_Bridge (127.0.0.1:32000) so MMDVM_Bridge transmits 100% compliant
-        ETSI DMR voice frames (Voice Header with Full Link Control, BPTC 196,96, Colour Code, Voice Sync)
-        over-the-air to HT radios, hotspots, and peers, with ZERO contention on DVSwitch Mobile (32345).
+        Drives the Direct Z3DMR engine to encode PCM into native DMRD frames in real time.
+        100% DIRECT DMR: Zero Analog_Bridge overhead, Zero daemon restarts, Zero interference with DVSwitch Mobile.
         """
         loop = asyncio.get_running_loop()
-        logger.info(f"🎙️ Started Web PTT Ingress loop on UDP {WEB_PTT_PORT}.")
-        web_tx_pcm_buf = bytearray()
+        logger.info(f"🎙️ Started Direct Z3DMR Web PTT Ingress loop on UDP {WEB_PTT_PORT}.")
         while self.running:
             try:
                 data, addr = await loop.sock_recvfrom(self.web_ptt_sock, 4096)
@@ -2446,91 +2444,8 @@ usrpAGC = -20,10,100
                     dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
-                    now = time.time()
-
-                    target_tg = tg if (0 < tg < 16777215) else (self.primary_tg or 1025)
-                    target_slot = slot if slot in (1, 2) else 2
-                    target_dmr_id = dmr_id if (1000 < dmr_id < 16777215) else 1022057
-                    target_call = callsign or "WEB-OP"
-
-                    target_worker_port = AB_USRP_RX_PORT
-                    for w in self.bridge_workers.values():
-                        ab_p = w.get("ab_proc")
-                        if w.get("tg") == target_tg and ab_p and ab_p.poll() is None:
-                            target_worker_port = w.get("usrp_rx_port", AB_USRP_RX_PORT)
-                            w["tx_packets"] = w.get("tx_packets", 0) + 1
-                            break
-
-                    if is_tx:
-                        if self.dmr_master_server:
-                            self.dmr_master_server.mark_local_transmission(target_dmr_id, target_tg, target_slot)
-
-                        if not self.tx_identity_sent or not self.is_transmitting or self.current_tx_tg != target_tg or self.current_tx_dmr_id != target_dmr_id:
-                            self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot, port=target_worker_port)
-                            self.tx_identity_sent = True
-                            self.is_transmitting = True
-                            self.current_tx_tg = target_tg
-                            self.current_tx_slot = target_slot
-                            self.current_tx_dmr_id = target_dmr_id
-                            self.current_tx_start_time = now
-                            logger.info(f"🎙️ [Web-PTT] 🔴 Keyed up: {target_call} ({target_dmr_id}) -> TG {target_tg} (Slot {target_slot}, Port {target_worker_port})")
-
-                            # Forward TLV SET_INFO to external DVSwitch clients tuned to this TG so they display caller identity
-                            try:
-                                fwd_tlv = build_set_info_tlv(target_dmr_id, int(self.config.get("server_dmr_id", 5109999)), target_tg, target_slot, 1, target_call)
-                                self.broadcast_to_usrp_clients(build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=target_tg)
-                            except Exception:
-                                pass
-
-                        if pcm_chunk:
-                            web_tx_pcm_buf.extend(pcm_chunk)
-                            while len(web_tx_pcm_buf) >= 320:
-                                chunk_pcm = bytes(web_tx_pcm_buf[:320])
-                                del web_tx_pcm_buf[:320]
-
-                                self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
-                                std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk_pcm)
-                                try:
-                                    self.bridge_sock.sendto(std_pkt, ("127.0.0.1", target_worker_port))
-                                except Exception as e:
-                                    logger.debug(f"Error forwarding USRP from Web PTT to Analog_Bridge port {target_worker_port}: {e}")
-
-                                # Forward audio burst to external DVSwitch Mobile clients tuned to target_tg
-                                try:
-                                    self.broadcast_to_usrp_clients(std_pkt, tg=target_tg)
-                                except Exception:
-                                    pass
-
-                                # Forward audio burst to Mumble Bridge
-                                mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq & 0x7FFFFFFF, 0, 1, target_tg, target_dmr_id, target_slot, 0) + chunk_pcm
-                                try:
-                                    self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                                except Exception:
-                                    try:
-                                        self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                                    except Exception:
-                                        pass
-                    else:
-                        # Unkey event
-                        web_tx_pcm_buf.clear()
-                        if self.is_transmitting or self.tx_identity_sent:
-                            self.stop_carrier_tx(target_tg, target_slot, target_dmr_id)
-                            # Forward unkey frame to Mumble Bridge
-                            unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq & 0x7FFFFFFF, 0, 0, target_tg, target_dmr_id, target_slot, 0) + (b"\x00" * 320)
-                            try:
-                                self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                try:
-                                    self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                                except Exception:
-                                    pass
-                            # Forward unkey frame to DVSwitch Mobile clients
-                            try:
-                                unkey_mobile = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
-                                self.broadcast_to_usrp_clients(unkey_mobile, tg=target_tg)
-                            except Exception:
-                                pass
-                            logger.info(f"🎙️ [Web-PTT] ⏹️ Unkeyed TX session for {target_call} (TG {target_tg})")
+                    if self.direct_dmr:
+                        self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx)
             except Exception as e:
                 if self.running:
                     logger.debug(f"run_web_ptt_ingress_loop note: {e}")

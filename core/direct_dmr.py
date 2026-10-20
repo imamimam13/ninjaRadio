@@ -55,10 +55,14 @@ BURST_SAMPLES = 480
 BURST_PCM_BYTES = BURST_SAMPLES * 2  # 960 bytes (60ms)
 DMRD = b"DMRD"
 
-# Voice Sync Pattern for Voice Burst B (ETSI TS 102 361-1 BS Voice Sync)
+# ETSI TS 102 361-1 Table 9.1: Base Station (BS) Voice Sync (48 bits = 24 dibits: 0x757FD7DF75F7)
 VOICE_SYNC_BS_DIBITS = [
-    3, 1, 3, 3, 3, 3, 1, 1, 1, 3, 3, 1,
-    1, 3, 1, 1, 1, 1, 3, 3, 3, 1, 1, 3
+    1, 3, 1, 1, 1, 3, 3, 3, 3, 1, 1, 3, 3, 1, 3, 3, 1, 3, 1, 1, 3, 3, 1, 3
+]
+
+# ETSI TS 102 361-1 Section 9.1.4: Embedded Signalling (EMB) with Colour Code 1 (CC1) for Bursts A, C, D, E, F
+EMB_CC1_DIBITS = [
+    0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 3
 ]
 
 
@@ -302,7 +306,8 @@ class DirectOpenDmrVocoder:
         f1 = self.encode_frame(pcm_960[:320])
         f2 = self.encode_frame(pcm_960[320:640])
         f3 = self.encode_frame(pcm_960[640:960])
-        sync = VOICE_SYNC_BS_DIBITS if sequence == 1 else None
+        # Burst B (sequence 1) carries ETSI BS Voice Sync; other bursts carry EMB with Colour Code 1
+        sync = VOICE_SYNC_BS_DIBITS if sequence == 1 else EMB_CC1_DIBITS
         return interleave_burst((f1, f2, f3), sync)
 
     def decode_burst(self, burst_33: bytes) -> bytes:
@@ -323,6 +328,8 @@ class DirectOpenDmrVocoder:
             self._enc = None
 
 
+_stream_seq_counter = 0
+
 def build_dmrd_packet(
     src_id: int,
     dst_tg: int,
@@ -335,6 +342,9 @@ def build_dmrd_packet(
     call_type: str = "group"
 ) -> bytes:
     """Constructs a valid standard 53-byte HomeBrew DMRD packet."""
+    global _stream_seq_counter
+    _stream_seq_counter = (_stream_seq_counter + 1) & 0xFF
+
     bits = 0
     if slot == 2:
         bits |= 0x80
@@ -343,13 +353,24 @@ def build_dmrd_packet(
     bits |= (data_type & 0x03) << 4
     bits |= (seq & 0x0F)
 
-    safe_payload = (payload[:BURST_BYTES] if payload else b"").ljust(BURST_BYTES, b"\x00")
+    # For Voice Header (data_type = 0), if payload is empty, construct a valid header with BS Voice Sync
+    if data_type == 0 and (not payload or len(payload) == 0):
+        # 132 dibits: 54 header dibits + 24 BS Voice Sync dibits + 54 header dibits
+        hdr_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
+        safe_payload = dibits_to_bytes(hdr_dibits)
+    elif data_type == 2 and (not payload or len(payload) == 0):
+        # Voice Terminator with BS Voice Sync in the center
+        term_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
+        safe_payload = dibits_to_bytes(term_dibits)
+    else:
+        safe_payload = (payload[:BURST_BYTES] if payload else b"").ljust(BURST_BYTES, b"\x00")
+
     if stream_id is None:
         stream_id = int(time.time()) & 0xFFFFFFFF
 
     return (
         DMRD
-        + struct.pack("B", (seq & 0xFF))
+        + struct.pack("B", _stream_seq_counter)
         + struct.pack(">I", src_id)[1:]
         + struct.pack(">I", dst_tg)[1:]
         + struct.pack(">I", rpt_id)
