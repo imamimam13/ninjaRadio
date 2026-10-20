@@ -55,15 +55,105 @@ BURST_SAMPLES = 480
 BURST_PCM_BYTES = BURST_SAMPLES * 2  # 960 bytes (60ms)
 DMRD = b"DMRD"
 
-# ETSI TS 102 361-1 Table 9.1: Base Station (BS) Voice Sync (48 bits = 24 dibits: 0x757FD7DF75F7)
+try:
+    from dmr_utils3 import bptc, const
+    from bitarray import bitarray
+except ImportError:
+    try:
+        from core.dmr_bptc import bptc, const
+        from bitarray import bitarray
+    except ImportError:
+        bptc = None
+        const = None
+        bitarray = None
+
+# ETSI TS 102 361-1 Table 9.1: Base Station (BS) Voice Sync (48 bits = 24 dibits: 0x755FD7DF75F7)
 VOICE_SYNC_BS_DIBITS = [
-    1, 3, 1, 1, 1, 3, 3, 3, 3, 1, 1, 3, 3, 1, 3, 3, 1, 3, 1, 1, 3, 3, 1, 3
+    1, 3, 1, 1, 1, 1, 3, 3, 3, 1, 1, 3, 3, 1, 3, 3, 1, 3, 1, 1, 3, 3, 1, 3
 ]
 
-# ETSI TS 102 361-1 Section 9.1.4: Embedded Signalling (EMB) with Colour Code 1 (CC1) for Bursts A, C, D, E, F
+# ETSI TS 102 361-1 Section 9.1.4: Embedded Signalling (EMB) with Colour Code 1 (CC1) fallback
 EMB_CC1_DIBITS = [
     0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 3
 ]
+
+
+def build_dmr_header_burst(src_id: int, dst_tg: int, slot: int, call_type: str = "group") -> bytes:
+    """
+    Constructs a standard ETSI TS 102 361-1 compliant 33-byte Voice Header burst (data_type = 0).
+    Applies BPTC(196,96) error correction, RS(12,9,3) parity, and interleaves with BS Voice Sync.
+    """
+    if bptc and const:
+        try:
+            flco = b"\x03" if call_type == "unit" else b"\x00"
+            lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
+            h_lc = bptc.encode_header_lc(lc_bytes)
+            slot_head = const.SLOT_TYPE["VOICE_LC_HEAD"]
+            sync_voice = const.SYNC["BS_VOICE"]
+            burst_bits = h_lc[0:98] + slot_head[0:10] + sync_voice + slot_head[10:20] + h_lc[98:196]
+            return burst_bits.tobytes()
+        except Exception as e:
+            logger.debug(f"build_dmr_header_burst bptc error: {e}")
+    hdr_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
+    return dibits_to_bytes(hdr_dibits)
+
+
+def build_dmr_terminator_burst(src_id: int, dst_tg: int, slot: int, call_type: str = "group") -> bytes:
+    """
+    Constructs a standard ETSI TS 102 361-1 compliant 33-byte Voice Terminator burst (data_type = 2).
+    """
+    if bptc and const:
+        try:
+            flco = b"\x03" if call_type == "unit" else b"\x00"
+            lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
+            t_lc = bptc.encode_terminator_lc(lc_bytes)
+            slot_term = const.SLOT_TYPE["VOICE_LC_TERM"]
+            sync_voice = const.SYNC["BS_VOICE"]
+            burst_bits = t_lc[0:98] + slot_term[0:10] + sync_voice + slot_term[10:20] + t_lc[98:196]
+            return burst_bits.tobytes()
+        except Exception as e:
+            logger.debug(f"build_dmr_terminator_burst bptc error: {e}")
+    term_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
+    return dibits_to_bytes(term_dibits)
+
+
+def build_dmr_emblc_fragments(src_id: int, dst_tg: int, call_type: str = "group") -> Optional[dict]:
+    """
+    Precomputes the 4 Embedded Link Control (EMB_LC) fragments for bursts B, C, D, E
+    using standard 5-bit CRC and Hamming error correction per ETSI TS 102 361-1.
+    """
+    if bptc:
+        try:
+            flco = b"\x03" if call_type == "unit" else b"\x00"
+            lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
+            return bptc.encode_emblc(lc_bytes)
+        except Exception as e:
+            logger.debug(f"build_dmr_emblc_fragments error: {e}")
+    return None
+
+
+def get_burst_center_dibits(seq: int, emblc_dict: Optional[dict] = None) -> List[int]:
+    """
+    Returns the standard 24 center dibits (48 bits) for a DMR burst in a superframe:
+    - Seq 0 (Burst A): Base Station Voice Sync (0x755FD7DF75F7)
+    - Seq 1..4 (Bursts B..E): EMB with CC1 + 32-bit Embedded Link Control fragment
+    - Seq 5 (Burst F): EMB with CC1 + null payload
+    """
+    if seq == 0:
+        return VOICE_SYNC_BS_DIBITS
+    if const and emblc_dict:
+        burst_names = {1: "BURST_B", 2: "BURST_C", 3: "BURST_D", 4: "BURST_E", 5: "BURST_F"}
+        name = burst_names.get(seq, "BURST_F")
+        emb_bits = const.EMB.get(name)
+        if emb_bits:
+            if seq in emblc_dict:
+                frag_bits = emblc_dict[seq]
+            else:
+                frag_bits = bitarray("0" * 32)
+            center_bits = emb_bits[0:8] + frag_bits + emb_bits[8:16]
+            return bytes_to_dibits(center_bits.tobytes())[:24]
+    return EMB_CC1_DIBITS
+
 
 
 def bytes_to_dibits(payload: bytes) -> List[int]:
@@ -339,14 +429,13 @@ class DirectOpenDmrVocoder:
             return bytes(PCM_BYTES)
         return struct.pack("<160h", *self._pcm_out)
 
-    def encode_burst(self, pcm_960: bytes, sequence: int = 0) -> bytes:
+    def encode_burst(self, pcm_960: bytes, sequence: int = 0, emblc_dict: Optional[dict] = None) -> bytes:
         if len(pcm_960) != BURST_PCM_BYTES:
             return bytes(BURST_BYTES)
         f1 = self.encode_frame(pcm_960[:320])
         f2 = self.encode_frame(pcm_960[320:640])
         f3 = self.encode_frame(pcm_960[640:960])
-        # ETSI TS 102 361-1: Burst A (sequence 0) carries ETSI BS Voice Sync; other bursts carry EMB with Colour Code 1
-        sync = VOICE_SYNC_BS_DIBITS if sequence == 0 else EMB_CC1_DIBITS
+        sync = get_burst_center_dibits(sequence, emblc_dict)
         return interleave_burst((f1, f2, f3), sync)
 
     def decode_burst(self, burst_33: bytes) -> bytes:
@@ -392,15 +481,12 @@ def build_dmrd_packet(
     bits |= (data_type & 0x03) << 4
     bits |= (seq & 0x0F)
 
-    # For Voice Header (data_type = 0), if payload is empty, construct a valid header with BS Voice Sync
+    # For Voice Header (data_type = 0), if payload is empty, construct a valid header with BPTC(196,96) LC
     if data_type == 0 and (not payload or len(payload) == 0):
-        # 132 dibits: 54 header dibits + 24 BS Voice Sync dibits + 54 header dibits
-        hdr_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
-        safe_payload = dibits_to_bytes(hdr_dibits)
+        safe_payload = build_dmr_header_burst(src_id, dst_tg, slot, call_type)
     elif data_type == 2 and (not payload or len(payload) == 0):
-        # Voice Terminator with BS Voice Sync in the center
-        term_dibits = [0] * 54 + VOICE_SYNC_BS_DIBITS + [0] * 54
-        safe_payload = dibits_to_bytes(term_dibits)
+        # Voice Terminator with BPTC(196,96) LC
+        safe_payload = build_dmr_terminator_burst(src_id, dst_tg, slot, call_type)
     else:
         safe_payload = (payload[:BURST_BYTES] if payload else b"").ljust(BURST_BYTES, b"\x00")
 
@@ -440,6 +526,9 @@ class DirectDmrEngine:
         self.current_slot = 2
         self.current_src_id = 0
         self.current_callsign = ""
+        self.current_emblc = None
+        self.current_hdr_burst = b""
+        self.current_term_burst = b""
         self.tx_pcm_buffer = bytearray()
         self.last_tx_ts = 0.0
         logger.info(f"✓ Direct Z3DMR Engine ready (Vocoder available: {self.vocoder.is_available()}, version: {self.vocoder.version()})")
@@ -467,7 +556,7 @@ class DirectDmrEngine:
                 if len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
                     burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
                     del self.tx_pcm_buffer[:BURST_PCM_BYTES]
-                    burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq)
+                    burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                     pkt = build_dmrd_packet(
                         src_id=self.current_src_id,
                         dst_tg=self.current_tg,
@@ -482,14 +571,15 @@ class DirectDmrEngine:
                     if self.broadcast_fn:
                         self.broadcast_fn(pkt)
 
-                # Send DMRD Voice Terminator (data_type = 2)
+                # Send DMRD Voice Terminator (data_type = 2) with valid BPTC(196,96) Terminator LC
+                term_burst = self.current_term_burst or build_dmr_terminator_burst(self.current_src_id, self.current_tg, self.current_slot)
                 term_pkt = build_dmrd_packet(
                     src_id=self.current_src_id,
                     dst_tg=self.current_tg,
                     slot=self.current_slot,
                     data_type=2,
                     seq=0,
-                    payload=b"",
+                    payload=term_burst,
                     rpt_id=self.rpt_id,
                     stream_id=self.current_stream_id
                 )
@@ -502,6 +592,7 @@ class DirectDmrEngine:
             self.in_tx = False
             self.tx_pcm_buffer.clear()
             self.current_burst_seq = 0
+            self.current_emblc = None
             return out_packets
 
         # PTT Active (Keyed)
@@ -515,6 +606,9 @@ class DirectDmrEngine:
             self.current_src_id = dmr_id
             self.current_callsign = callsign
             self.tx_pcm_buffer.clear()
+            self.current_emblc = build_dmr_emblc_fragments(self.current_src_id, self.current_tg)
+            self.current_hdr_burst = build_dmr_header_burst(self.current_src_id, self.current_tg, self.current_slot)
+            self.current_term_burst = build_dmr_terminator_burst(self.current_src_id, self.current_tg, self.current_slot)
 
             if self.vocoder.is_available():
                 # Pre-warm vocoder LPC predictor history with 2 primed frames so initial burst has full volume
@@ -522,20 +616,22 @@ class DirectDmrEngine:
                 self.vocoder.encode_frame(warmup_pcm)
                 self.vocoder.encode_frame(warmup_pcm)
 
-            hdr_pkt = build_dmrd_packet(
-                src_id=self.current_src_id,
-                dst_tg=self.current_tg,
-                slot=self.current_slot,
-                data_type=0,
-                seq=0,
-                payload=b"",
-                rpt_id=self.rpt_id,
-                stream_id=self.current_stream_id
-            )
-            out_packets.append(hdr_pkt)
-            if self.broadcast_fn:
-                self.broadcast_fn(hdr_pkt)
-            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id})")
+            # Send 3 Voice Header preamble packets (seq 0, 1, 2) per ETSI DMR / HomeBrew standard
+            for p_seq in range(3):
+                hdr_pkt = build_dmrd_packet(
+                    src_id=self.current_src_id,
+                    dst_tg=self.current_tg,
+                    slot=self.current_slot,
+                    data_type=0,
+                    seq=p_seq,
+                    payload=self.current_hdr_burst,
+                    rpt_id=self.rpt_id,
+                    stream_id=self.current_stream_id
+                )
+                out_packets.append(hdr_pkt)
+                if self.broadcast_fn:
+                    self.broadcast_fn(hdr_pkt)
+            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id}, 3x Preamble sent)")
 
         # Accumulate PCM and encode 960-byte (60ms) superframes
         if pcm_chunk:
@@ -554,7 +650,7 @@ class DirectDmrEngine:
                     boosted = [max(-32767, min(32767, int(s * scale))) for s in samples]
                     burst_pcm = struct.pack("<480h", *boosted)
 
-                burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq)
+                burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                 if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
                     logger.info(f"🎙️ [DirectDMR] Ingress PCM peak: {peak}/32767 | AMBE payload: {burst[:6].hex()}... (Seq: {self.current_burst_seq})")
                 pkt = build_dmrd_packet(
