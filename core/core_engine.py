@@ -1553,16 +1553,17 @@ usrpAGC = -20,10,100
                     logger.error(f"Failed to restore worker for TG {tg}: {e}")
 
     async def run_ptt_carrier_watchdog(self):
-        """Monitors active PTT carrier and auto-unkeys if no audio frame arrives after startup grace period."""
+        """Monitors active PTT carrier and auto-unkeys if client audio stream drops completely."""
         while self.running:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
             if self.is_transmitting:
                 now = time.time()
-                # Allow 2.5s startup grace period for browser getUserMedia() / WebAudio initialization
-                if now - getattr(self, "current_tx_start_time", 0.0) < 2.5:
+                # Allow 5.0s startup grace period for browser getUserMedia() / WebAudio initialization
+                if now - getattr(self, "current_tx_start_time", 0.0) < 5.0:
                     continue
-                if now - self.last_audio_tx_time > 1.2:
-                    logger.info(f"[PTT-Watchdog] ⏹️ Audio silence detected (>1.2s). Auto-releasing carrier PTT.")
+                # Auto-unkey if audio packet stream has completely stopped for > 4.0s (e.g. browser crash/disconnect)
+                if now - self.last_audio_tx_time > 4.0:
+                    logger.info(f"[PTT-Watchdog] ⏹️ Audio stream stopped (>4.0s without packets). Auto-releasing carrier PTT.")
                     self.stop_carrier_tx()
                     asyncio.create_task(self.dispatch_event_to_backend({
                         "network": "DVSwitch Mobile / USRP (32345)",
@@ -2447,9 +2448,19 @@ usrpAGC = -20,10,100
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
                     session_key = (dmr_id, tg)
+                    now = time.time()
                     if is_tx:
+                        self.last_audio_tx_time = now
+                        self.last_ptt_heartbeat_time = now
+                        self.is_transmitting = True
+                        self.current_tx_tg = tg
+                        self.current_tx_slot = slot
+                        self.current_tx_dmr_id = dmr_id
+                        self.current_operator_callsign = callsign
+                        self.current_operator_dmr_id = dmr_id
                         if session_key not in active_tx_sessions:
                             active_tx_sessions.add(session_key)
+                            self.current_tx_start_time = now
                             pkt_count = 0
                             logger.info(f"🎙️ [WebPTT-Ingress] 🔴 Keyed up from {addr}: ID {dmr_id} ({callsign}) -> TG {tg} (TS{slot}, pcm={len(pcm_chunk)}B)")
                         pkt_count += 1
@@ -2672,9 +2683,9 @@ usrpAGC = -20,10,100
                     logger.warning("⚠️ TX Time-Out-Timer (TOT 90s) reached! Auto-unkeying.")
                     break
 
-                # 2. PTT Heartbeat Watchdog: Only release if frontend heartbeat has stopped for > 2.5s
-                if now - self.last_ptt_heartbeat_time > 2.5:
-                    logger.info("⏹️ PTT Heartbeat timed out (>2.5s). Auto-releasing carrier.")
+                # 2. PTT Heartbeat Watchdog: Only release if frontend heartbeat has stopped for > 5.0s
+                if now - self.last_ptt_heartbeat_time > 5.0:
+                    logger.info("⏹️ PTT Heartbeat timed out (>5.0s). Auto-releasing carrier.")
                     break
 
                 # 3. Inter-burst fill: Send comfort silence only during genuine speech pauses (> 180ms after first audio arrives)

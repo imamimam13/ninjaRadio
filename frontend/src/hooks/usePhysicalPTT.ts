@@ -148,10 +148,22 @@ export function usePhysicalPTT({
     };
 
     // Auto-release PTT if tab loses focus, window blurs, or page is navigated away
+    let blurTimer: any = null;
     const handleSafetyRelease = () => {
       if (keepBgRef.current) return;
-      if (isTxRef.current) {
-        stopTx();
+      if (blurTimer) clearTimeout(blurTimer);
+      // Debounce blur by 800ms: Android volume HUD or momentary focus shifts shouldn't cut off PTT
+      blurTimer = setTimeout(() => {
+        if (typeof document !== "undefined" && !document.hasFocus() && isTxRef.current) {
+          stopTx();
+        }
+      }, 800);
+    };
+
+    const handleFocus = () => {
+      if (blurTimer) {
+        clearTimeout(blurTimer);
+        blurTimer = null;
       }
     };
 
@@ -165,13 +177,16 @@ export function usePhysicalPTT({
     window.addEventListener("keydown", handleKeyDown, { passive: false });
     window.addEventListener("keyup", handleKeyUp, { passive: false });
     window.addEventListener("blur", handleSafetyRelease);
+    window.addEventListener("focus", handleFocus);
     window.addEventListener("beforeunload", handleSafetyRelease);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
+      if (blurTimer) clearTimeout(blurTimer);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleSafetyRelease);
+      window.removeEventListener("focus", handleFocus);
       window.removeEventListener("beforeunload", handleSafetyRelease);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };

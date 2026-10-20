@@ -747,9 +747,9 @@ export default function RadioPocketMode() {
       }
       txMicStreamRef.current = stream;
 
-      // If the browser mutes the mic (e.g. screen locked), release TX instead of sending silence.
+      // If the audio track ends (device unplugged or permission revoked), release TX
       stream.getAudioTracks().forEach((t) => {
-        t.onmute = () => {
+        t.onended = () => {
           if (isTxRef.current) stopTxRef.current?.();
         };
       });
@@ -866,7 +866,7 @@ export default function RadioPocketMode() {
     }
     if (txMicStreamRef.current) {
       const s = txMicStreamRef.current;
-      try { s.getTracks().forEach((t) => { t.onmute = null; }); } catch {}
+      try { s.getTracks().forEach((t) => { t.onended = null; }); } catch {}
       if (s === armedMicStreamRef.current && lockscreenPttRef.current) {
         // Keep the mic armed for lockscreen PTT, just stop capturing audio.
         try { s.getAudioTracks().forEach((t) => { t.enabled = false; }); } catch {}
@@ -1679,9 +1679,12 @@ export default function RadioPocketMode() {
               onClick={pttMode === "toggle" ? toggleTx : undefined}
               onMouseDown={pttMode === "hold" ? startTx : undefined}
               onMouseUp={pttMode === "hold" ? stopTx : undefined}
+              onMouseLeave={pttMode === "hold" ? stopTx : undefined}
               onTouchStart={pttMode === "hold" ? (e) => { e.preventDefault(); startTx(); } : undefined}
               onTouchEnd={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
-              className={`w-full py-4 rounded-2xl font-heading font-black text-sm tracking-wider flex items-center justify-center gap-2 shadow-2xl transition-all ${
+              onTouchCancel={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
+              onContextMenu={(e) => e.preventDefault()}
+              className={`w-full py-4 rounded-2xl font-heading font-black text-sm tracking-wider flex items-center justify-center gap-2 shadow-2xl transition-all select-none touch-none ${
                 isTransmitting
                   ? "bg-rose-600 text-white shadow-rose-600/50 border-2 border-rose-300 ring-4 ring-rose-900/50"
                   : activeProfile.isMonitorOnly
@@ -2007,9 +2010,12 @@ export default function RadioPocketMode() {
               onClick={pttMode === "toggle" ? toggleTx : undefined}
               onMouseDown={pttMode === "hold" ? startTx : undefined}
               onMouseUp={pttMode === "hold" ? stopTx : undefined}
+              onMouseLeave={pttMode === "hold" ? stopTx : undefined}
               onTouchStart={pttMode === "hold" ? (e) => { e.preventDefault(); startTx(); } : undefined}
               onTouchEnd={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
-              className={`w-full max-w-[320px] h-36 rounded-3xl font-heading font-black text-xl flex flex-col items-center justify-center gap-2 shadow-2xl transition-all cursor-pointer active:scale-95 ${
+              onTouchCancel={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
+              onContextMenu={(e) => e.preventDefault()}
+              className={`w-full max-w-[320px] h-36 rounded-3xl font-heading font-black text-xl flex flex-col items-center justify-center gap-2 shadow-2xl transition-all cursor-pointer select-none touch-none active:scale-95 ${
                 isTransmitting
                   ? "bg-gradient-to-b from-rose-500 to-red-700 text-white shadow-[0_0_30px_rgba(244,63,94,0.6)] border-4 border-rose-300 ring-8 ring-rose-900/40"
                   : isCableRxActive

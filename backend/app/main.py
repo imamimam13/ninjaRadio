@@ -110,8 +110,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         slot = int(msg.get("slot", 2))
                         callsign = str(msg.get("callsign", "WEB-OP"))
                         last_tx_info = {"tg": tg, "dmr_id": dmr_id, "slot": slot, "callsign": callsign}
-                        is_tx = bool(msg.get("is_tx", True)) if pcm_b64 else False
-                        if pcm_b64 and is_tx:
+                        raw_is_tx = bool(msg.get("is_tx", False))
+                        if raw_is_tx:
                             # Verify TX authorization with Callbook & Organization Firewall (cached for 60s to prevent 50Hz DB stall)
                             cache_key = (dmr_id, callsign, tg)
                             now_ts = time.time()
@@ -134,13 +134,19 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             if not client_tx_active:
                                 logger.info(f"🎙️ [AUDIO_TX] 🔴 PTT Keyed: {callsign} (ID: {dmr_id}) -> TG {tg} (TS{slot})")
                             client_tx_active = True
-                            pcm_data = base64.b64decode(pcm_b64)
+                            pcm_data = base64.b64decode(pcm_b64) if pcm_b64 else b""
                             send_direct_dmr_pcm_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
-                        elif not is_tx:
+                        else:
                             if client_tx_active:
                                 logger.info(f"🎙️ [AUDIO_TX] ⏹️ PTT Unkeyed: {callsign} (ID: {dmr_id}) -> TG {tg}")
                             await notify_core_stop_tx()
                     elif msg_type == "PTT_HEARTBEAT":
+                        tg = int(msg.get("tg", last_tx_info.get("tg", 1025)))
+                        dmr_id = int(msg.get("dmr_id", last_tx_info.get("dmr_id", 102205798)))
+                        slot = int(msg.get("slot", last_tx_info.get("slot", 2)))
+                        callsign = str(msg.get("callsign", last_tx_info.get("callsign", "WEB-OP")))
+                        # Refresh direct DMR UDP watchdog immediately with zero overhead
+                        send_direct_dmr_pcm_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=b"")
                         try:
                             import httpx
                             async with httpx.AsyncClient(timeout=0.5) as client:
