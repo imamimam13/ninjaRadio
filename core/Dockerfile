@@ -54,7 +54,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# DMR Master UDP (62031), OpenBridge UDP (62030), USRP UDP (32345), Core Control API (5000), Vocoder (2470)
-EXPOSE 62031/udp 62030/udp 32345/udp 5000/tcp 2470/udp
+# 4. Build OpenDMR vocoder library (AMBE+2 encoder & decoder)
+RUN if [ -d "/app/opendmr" ]; then \
+        cd /app/opendmr && make clean && make && \
+        cp libopendmr.so /usr/local/lib/ && ldconfig; \
+    fi
+
+# DMR Master UDP (62031), OpenBridge UDP (62030), USRP UDP (32345), Direct Web PTT (32100), Core Control API (5000), Vocoder (2470)
+EXPOSE 62031/udp 62030/udp 32345/udp 32100/udp 5000/tcp 2470/udp
 
 CMD ["python", "core_engine.py"]
+
