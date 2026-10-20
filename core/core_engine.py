@@ -2134,18 +2134,6 @@ usrpAGC = -20,10,100
                                 self.last_dvswitch_identity["tg"] = dialed_tg
                                 self.client_metadata[addr[0]] = self.client_metadata[addr]
                                 logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {dialed_tg} via DTMF/Send ('{text_clean}')")
-                                # Send immediate standard INFO update to DVSwitch Mobile screen
-                                try:
-                                    cur_call = self.client_metadata[addr].get("callsign") or self.last_dvswitch_identity.get("callsign") or "BD62BOT"
-                                    cur_src = self.client_metadata[addr].get("src") or self.last_dvswitch_identity.get("src") or 1022057
-                                    dtmf_reply = json.dumps({
-                                        "tlv": {"ambe_mode": "DMR"},
-                                        "digital": {"call": cur_call, "src": cur_src, "tg": dialed_tg, "slot": 2},
-                                        "last_tune": str(dialed_tg)
-                                    })
-                                    self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, f"INFO:{dtmf_reply}\x00".encode("ascii")), addr)
-                                except Exception:
-                                    pass
                                 continue
                             elif text_clean.startswith("*"):
                                 digits = "".join([c for c in text_clean if c.isdigit()])
@@ -2157,17 +2145,6 @@ usrpAGC = -20,10,100
                                     self.last_dvswitch_identity["tg"] = dialed_tg
                                     self.client_metadata[addr[0]] = self.client_metadata[addr]
                                     logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {dialed_tg} via DTMF *{digits}")
-                                    try:
-                                        cur_call = self.client_metadata[addr].get("callsign") or self.last_dvswitch_identity.get("callsign") or "BD62BOT"
-                                        cur_src = self.client_metadata[addr].get("src") or self.last_dvswitch_identity.get("src") or 1022057
-                                        dtmf_reply = json.dumps({
-                                            "tlv": {"ambe_mode": "DMR"},
-                                            "digital": {"call": cur_call, "src": cur_src, "tg": dialed_tg, "slot": 2},
-                                            "last_tune": str(dialed_tg)
-                                        })
-                                        self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, f"INFO:{dtmf_reply}\x00".encode("ascii")), addr)
-                                    except Exception:
-                                        pass
                                     continue
                                 elif text_clean.upper() in ["*DMR", "*YSF", "*DSTAR", "*P25"]:
                                     logger.info(f"📱 DVSwitch Mobile ({addr}) mode selection: {text_clean}")
