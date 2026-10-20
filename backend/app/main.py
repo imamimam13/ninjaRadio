@@ -1,5 +1,8 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
+
+logger = logging.getLogger("NinjaRadio-Backend")
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -120,6 +123,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     is_allowed, reason = await CallbookService.check_tx_permission(session, dmr_id, callsign, tg)
                                 tx_perm_cache[cache_key] = (is_allowed, reason, now_ts + 60.0)
                             if not is_allowed:
+                                logger.warning(f"🛑 [AUDIO_TX] Blocked {callsign} ({dmr_id}) -> TG {tg}: {reason}")
                                 await websocket.send_text(json.dumps({
                                     "type": "TX_REJECTED",
                                     "tg": tg,
@@ -127,10 +131,14 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     "reason": reason
                                 }))
                                 continue
+                            if not client_tx_active:
+                                logger.info(f"🎙️ [AUDIO_TX] 🔴 PTT Keyed: {callsign} (ID: {dmr_id}) -> TG {tg} (TS{slot})")
                             client_tx_active = True
                             pcm_data = base64.b64decode(pcm_b64)
                             send_direct_dmr_pcm_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
                         elif not is_tx:
+                            if client_tx_active:
+                                logger.info(f"🎙️ [AUDIO_TX] ⏹️ PTT Unkeyed: {callsign} (ID: {dmr_id}) -> TG {tg}")
                             await notify_core_stop_tx()
                     elif msg_type == "PTT_HEARTBEAT":
                         try:
@@ -139,8 +147,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 await client.post("http://core:5000/api/tx/heartbeat")
                         except Exception:
                             pass
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"ws live message error: {e}")
     except WebSocketDisconnect:
         await notify_core_stop_tx()
         manager.disconnect(websocket)

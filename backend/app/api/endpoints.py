@@ -6,6 +6,9 @@ import asyncio
 import psutil
 import time
 import os
+import logging
+
+logger = logging.getLogger("NinjaRadio-Endpoints")
 
 from backend.app.core.database import get_db
 from backend.app.core.config import settings
@@ -715,8 +718,8 @@ async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
     except Exception as e:
         pass
 
-CORE_USRP_HOST = "core"
-CORE_USRP_PORT = 32345
+CORE_USRP_HOST = os.getenv("CORE_HOST", "core")
+CORE_USRP_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 CORE_DIRECT_DMR_PORT = int(os.getenv("CORE_DIRECT_DMR_PORT", 32100))
 _usrp_packet_seq = 0
 _tx_pcm_buffer = bytearray()
@@ -758,8 +761,8 @@ def send_direct_dmr_pcm_to_core(callsign: str, dmr_id: int, tg: int, slot: int, 
         # Header: b"NPTT" (4B) + dmr_id(4B) + tg(4B) + slot(4B) + pcm_len(4B) + is_tx(1B) + callsign(16B) = 37 bytes
         hdr = b"NPTT" + struct.pack(">IIII?16s", safe_dmr_id, safe_tg, safe_slot, len(payload), bool(is_tx), call_b)
         _direct_dmr_sock.sendto(hdr + payload, (CORE_USRP_HOST, CORE_DIRECT_DMR_PORT))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to send direct DMR PCM to core ({CORE_USRP_HOST}:{CORE_DIRECT_DMR_PORT}): {e}")
 
 def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool, pcm_payload: bytes = None):
     """
