@@ -5,6 +5,7 @@ from datetime import datetime
 import asyncio
 import psutil
 import time
+import os
 
 from backend.app.core.database import get_db
 from backend.app.core.config import settings
