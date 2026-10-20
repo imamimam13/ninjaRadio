@@ -2524,14 +2524,16 @@ usrpAGC = -20,10,100
             try:
                 decoded_pcm = self.direct_dmr.decode_dmr_burst(pkt[20:53])
                 if decoded_pcm and len(decoded_pcm) >= 320:
-                    chunk = decoded_pcm[:320]
-                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
-                    # Forward to DVSwitch Mobile clients
-                    usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk)
-                    self.broadcast_to_usrp_clients(usrp_pkt, tg=p_dst)
-                    # Forward to Mumble bridge
-                    mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, p_dst, p_src, p_slot, 0) + chunk
-                    self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                    for offset in range(0, len(decoded_pcm), 320):
+                        chunk = decoded_pcm[offset:offset + 320]
+                        if len(chunk) == 320:
+                            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                            # Forward to DVSwitch Mobile clients
+                            usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk)
+                            self.broadcast_to_usrp_clients(usrp_pkt, tg=p_dst)
+                            # Forward to Mumble bridge
+                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, p_dst, p_src, p_slot, 0) + chunk
+                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
             except Exception:
                 pass
         elif p_type == 2:

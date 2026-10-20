@@ -369,7 +369,7 @@ export default function RadioPocketMode() {
       // Arm the mic now (foreground + user gesture) so it can be re-enabled from the lockscreen.
       try {
         const s = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         s.getAudioTracks().forEach((t) => { t.enabled = false; });
         armedMicStreamRef.current = s;
@@ -738,9 +738,9 @@ export default function RadioPocketMode() {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             channelCount: 1,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
+            echoCancellation: isCableGatewayActive ? false : true,
+            noiseSuppression: isCableGatewayActive ? false : true,
+            autoGainControl: isCableGatewayActive ? false : true,
           }
         });
         if (lockscreenPttRef.current) armedMicStreamRef.current = stream;
@@ -804,12 +804,14 @@ export default function RadioPocketMode() {
         // Accumulate samples and dispatch ONLY exact 160-sample (20ms / 320-byte) frames
         txAccumulatorRef.current.push(...newSamples);
 
+        const MIC_BOOST = 2.5; // Optimal speech deviation pre-amp for DMR vocoder
         while (txAccumulatorRef.current.length >= 160) {
           const frame = txAccumulatorRef.current.splice(0, 160);
           const pcm16 = new Int16Array(160);
           for (let i = 0; i < 160; i++) {
-            const s = frame[i];
-            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            const boosted = frame[i] * MIC_BOOST;
+            const clamped = boosted > 1 ? 1 : (boosted < -1 ? -1 : boosted);
+            pcm16[i] = clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7FFF);
           }
 
           const uint8 = new Uint8Array(pcm16.buffer);

@@ -219,7 +219,12 @@ class DirectOpenDmrVocoder:
             try:
                 self._dec = self.lib.opendmr_decoder_create()
                 self._enc = self.lib.opendmr_encoder_create()
-                logger.info(f"✓ OpenDMR vocoder initialized (version: {self.version()})")
+                if self._enc and hasattr(self.lib, "opendmr_encoder_set_gain"):
+                    try:
+                        self.lib.opendmr_encoder_set_gain(self._enc, 6)
+                    except Exception:
+                        pass
+                logger.info(f"✓ OpenDMR vocoder initialized (+6dB gain, version: {self.version()})")
             except Exception as e:
                 logger.warning(f"Could not create OpenDMR codec instances: {e}")
 
@@ -261,6 +266,8 @@ class DirectOpenDmrVocoder:
         lib.opendmr_encoder_create.restype = ctypes.c_void_p
         lib.opendmr_encoder_destroy.argtypes = [ctypes.c_void_p]
         lib.opendmr_encoder_reset.argtypes = [ctypes.c_void_p]
+        if hasattr(lib, "opendmr_encoder_set_gain"):
+            lib.opendmr_encoder_set_gain.argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib.opendmr_encode.argtypes = [
             ctypes.c_void_p,
             ctypes.POINTER(ctypes.c_int16),
@@ -306,8 +313,8 @@ class DirectOpenDmrVocoder:
         f1 = self.encode_frame(pcm_960[:320])
         f2 = self.encode_frame(pcm_960[320:640])
         f3 = self.encode_frame(pcm_960[640:960])
-        # Burst B (sequence 1) carries ETSI BS Voice Sync; other bursts carry EMB with Colour Code 1
-        sync = VOICE_SYNC_BS_DIBITS if sequence == 1 else EMB_CC1_DIBITS
+        # ETSI TS 102 361-1: Burst A (sequence 0) carries ETSI BS Voice Sync; other bursts carry EMB with Colour Code 1
+        sync = VOICE_SYNC_BS_DIBITS if sequence == 0 else EMB_CC1_DIBITS
         return interleave_burst((f1, f2, f3), sync)
 
     def decode_burst(self, burst_33: bytes) -> bytes:
@@ -500,6 +507,16 @@ class DirectDmrEngine:
             while len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
                 burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
                 del self.tx_pcm_buffer[:BURST_PCM_BYTES]
+
+                # Check amplitude & apply adaptive speech normalizer if mic level is quiet
+                samples = list(struct.unpack("<480h", burst_pcm))
+                peak = max(abs(s) for s in samples)
+                if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
+                    logger.info(f"🎙️ [DirectDMR] Ingress PCM peak amp: {peak}/32767 (Seq: {self.current_burst_seq})")
+                if 20 < peak < 10000:
+                    scale = min(3.5, 16000.0 / max(peak, 500))
+                    boosted = [max(-32767, min(32767, int(s * scale))) for s in samples]
+                    burst_pcm = struct.pack("<480h", *boosted)
 
                 burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq)
                 pkt = build_dmrd_packet(
