@@ -60,6 +60,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
   const [newTargetTg, setNewTargetTg] = useState<number>(510);
   const [isCustomTg, setIsCustomTg] = useState(false);
   const [customTgInput, setCustomTgInput] = useState("");
+  const [categoryManuallySet, setCategoryManuallySet] = useState(false);
   const [cbStatus, setCbStatus] = useState<{
     checked: boolean;
     found: boolean;
@@ -98,12 +99,13 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
           if (data.name) setNewName(data.name);
           if (data.dmr_id) setNewDmrId(data.dmr_id);
           if (data.default_tg) setNewTargetTg(data.default_tg);
-          if (data.organization) {
+          // Only auto-suggest category if user hasn't explicitly selected one themselves
+          if (!categoryManuallySet && data.organization) {
             const orgUp = data.organization.toUpperCase();
             if (orgUp.includes("RAPI")) setNewCategory("RAPI");
             else if (orgUp.includes("CB") || orgUp.includes("11M")) setNewCategory("CB");
             else if (orgUp.includes("KOMUNITAS") || orgUp.includes("SAR")) setNewCategory("Komunitas");
-            else setNewCategory("Amatir");
+            else if (orgUp.includes("ORARI") || orgUp.includes("IARU") || orgUp.includes("AMATIR")) setNewCategory("Amatir");
           }
         } else {
           setCbStatus({ checked: true, found: false });
@@ -219,6 +221,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
     setCbStatus(null);
     setIsCustomTg(false);
     setCustomTgInput("");
+    setCategoryManuallySet(false);
   };
 
   const handleDeleteProfile = (e: React.MouseEvent, id: string) => {
@@ -307,7 +310,10 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                 <span className="font-bold text-xs text-white">Profil Pengguna Anda</span>
               </div>
               <button
-                onClick={() => setShowAddModal(true)}
+                onClick={() => {
+                  setCategoryManuallySet(false);
+                  setShowAddModal(true);
+                }}
                 className="flex items-center gap-1 px-2 py-1 rounded-lg bg-ninja-cyan text-ninja-dark font-black text-[10px] hover:bg-cyan-300 transition-colors shadow-sm"
               >
                 <Plus className="w-3 h-3" />
@@ -496,6 +502,7 @@ export const ProfileSwitcher: React.FC<ProfileSwitcherProps> = ({
                   onChange={(e) => {
                     const cat = e.target.value as any;
                     setNewCategory(cat);
+                    setCategoryManuallySet(true);
                     setIsCustomTg(false);
                     if (cat === "Amatir") {
                       setNewCallsign("YB");

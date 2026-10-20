@@ -170,9 +170,9 @@ class CallbookService:
                     break
             if found_csv:
                 return True, "DMR-ID Database Verified"
-            # Allow legitimate amateur stations (e.g. BD, YB, YC, YD, YE, JZ) or valid DMR IDs (>= 100000)
-            if dmr_id >= 100000 or any(call_upper.startswith(p) for p in ["YB", "YC", "YD", "YE", "BD", "JZ"]):
-                return True, "Amateur Station"
+            # Allow legitimate amateur stations, community volunteer / SAR, CB, and valid DMR IDs (>= 100000)
+            if dmr_id >= 100000 or any(call_upper.startswith(p) for p in ["YB", "YC", "YD", "YE", "BD", "JZ", "91-", "RESCUE", "SAR", "KOMUNITAS"]):
+                return True, "Verified Station"
 
             return False, f"Stasiun {call_upper} (ID: {dmr_id}) tidak terdaftar di Callbook resmi. Daftarkan profil di menu Callbook untuk izin transmit."
 
