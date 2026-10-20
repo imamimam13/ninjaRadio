@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 import uvicorn
 from dmr_server import HomeBrewMasterServer
 from dmr_client import HomeBrewClient
+from direct_dmr import DirectDmrEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NinjaRadio-Core] %(message)s")
 logger = logging.getLogger("NinjaRadio-Core")
@@ -24,6 +25,7 @@ CONFIG_PATH = os.getenv("CONFIG_PATH", "/app/data/config.json")
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "http://backend:8000/api/internal/dmr_event")
 MUMBLE_BRIDGE_PORT = 12346
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
+WEB_PTT_PORT = int(os.getenv("WEB_PTT_PORT", 32100))
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
 
 # Internal DVSwitch ports
@@ -472,7 +474,9 @@ class DVSwitchCoreManager:
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.usrp_ingress_sock: Optional[socket.socket] = None
+        self.web_ptt_sock: Optional[socket.socket] = None
         self.ab_pcm_sock: Optional[socket.socket] = None
+        self.direct_dmr: Optional[DirectDmrEngine] = None
         self.registered_usrp_clients: Dict[tuple, float] = {}
         self.client_metadata: Dict[tuple, dict] = {}
         self.running = True
@@ -1475,6 +1479,16 @@ usrpAGC = -20,10,100
         except Exception as e:
             logger.error(f"Failed to start DMR Master Server on UDP {DMR_MASTER_PORT}: {e}")
 
+        # Initialize Direct Z3DMR Engine
+        try:
+            self.direct_dmr = DirectDmrEngine(
+                dmr_master_broadcast_fn=self.broadcast_direct_dmrd,
+                rpt_id=int(self.config.get("server_dmr_id", 5109999))
+            )
+            logger.info("✓ Direct Z3DMR Engine initialized with OpenDMR vocoder")
+        except Exception as e:
+            logger.error(f"Failed to initialize DirectDmrEngine: {e}")
+
         # Start DVSwitch daemons (md380-emu, Analog_Bridge, MMDVM_Bridge)
         self.start_daemons()
 
@@ -1488,15 +1502,25 @@ usrpAGC = -20,10,100
         except Exception as e:
             logger.error(f"Failed to bind socket on port {AB_USRP_TX_PORT}: {e}")
 
-        # 2. Listen on UDP USRP_AUDIO_PORT (32345) for Web App / Mumble Ingress
+        # 2. Listen on UDP USRP_AUDIO_PORT (32345) for DVSwitch Mobile clients
         try:
             self.usrp_ingress_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.usrp_ingress_sock.bind(("0.0.0.0", USRP_AUDIO_PORT))
             self.usrp_ingress_sock.setblocking(False)
             asyncio.create_task(self.run_usrp_ingress_loop())
-            logger.info(f"✓ External USRP & Web PTT Ingress active on UDP port {USRP_AUDIO_PORT}")
+            logger.info(f"✓ External DVSwitch Mobile Ingress active on UDP port {USRP_AUDIO_PORT}")
         except Exception as e:
             logger.error(f"Failed to bind USRP ingress port {USRP_AUDIO_PORT}: {e}")
+
+        # 2.5 Listen on UDP WEB_PTT_PORT (32100) for Direct Z3DMR Web PTT Ingress
+        try:
+            self.web_ptt_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.web_ptt_sock.bind(("0.0.0.0", WEB_PTT_PORT))
+            self.web_ptt_sock.setblocking(False)
+            asyncio.create_task(self.run_web_ptt_ingress_loop())
+            logger.info(f"✓ Direct Z3DMR Web PTT Ingress active on UDP port {WEB_PTT_PORT}")
+        except Exception as e:
+            logger.error(f"Failed to bind Web PTT ingress port {WEB_PTT_PORT}: {e}")
 
         # 3. Process Watchdog
         asyncio.create_task(self.run_process_watchdog())
@@ -2405,6 +2429,87 @@ usrpAGC = -20,10,100
                 except Exception:
                     pass
 
+    async def run_web_ptt_ingress_loop(self):
+        """
+        Receives raw 8kHz PCM audio directly from Web PTT (backend) on UDP WEB_PTT_PORT (32100).
+        Drives the Direct Z3DMR engine to encode PCM into native DMRD frames in real time.
+        Zero USRP overhead, zero Analog_Bridge contention, zero interference with DVSwitch Mobile.
+        """
+        loop = asyncio.get_running_loop()
+        logger.info(f"🎙️ Started Direct Z3DMR Web PTT Ingress loop on UDP {WEB_PTT_PORT}.")
+        while self.running:
+            try:
+                data, addr = await loop.sock_recvfrom(self.web_ptt_sock, 4096)
+                if len(data) >= 37 and data.startswith(b"NPTT"):
+                    dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
+                    callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
+                    pcm_chunk = data[37:37 + pcm_len]
+                    if self.direct_dmr:
+                        self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx)
+            except Exception as e:
+                if self.running:
+                    logger.debug(f"run_web_ptt_ingress_loop note: {e}")
+                    await asyncio.sleep(0.01)
+
+    def broadcast_direct_dmrd(self, pkt: bytes):
+        """
+        Broadcasts a DMRD frame generated by Direct Z3DMR Engine:
+        - Forwards to local DMR Master Server (pi-star, hotspots, HTs)
+        - Forwards to upstream DMR peers (BrandMeister, FreeDMR)
+        - Translates audio to DVSwitch Mobile and Mumble clients tuned to that TG
+        """
+        if not pkt or len(pkt) < 20:
+            return
+
+        # 1. Forward directly to local repeaters and hotspots via DMR Master Server
+        if self.dmr_master_server:
+            self.dmr_master_server.broadcast_dmrd(pkt)
+
+        # 2. Extract packet fields
+        p_src = int.from_bytes(pkt[5:8], "big")
+        p_dst = int.from_bytes(pkt[8:11], "big")
+        p_bits = pkt[15]
+        p_slot = 2 if (p_bits & 0x80) else 1
+        p_type = (p_bits & 0x30) >> 4
+
+        # Mark local transmission in master server so it doesn't loop back
+        if self.dmr_master_server:
+            self.dmr_master_server.mark_local_transmission(p_src, p_dst, p_slot)
+
+        # 3. Forward to upstream DMR peers (BrandMeister, FreeDMR, etc.)
+        if self.peer_clients:
+            for peer_name, client in self.peer_clients.items():
+                if client.state == "CONNECTED":
+                    sub_tgs = getattr(client, "subscribed_tgs", [])
+                    if is_tg_bridged_to_peer(p_dst, client.name, sub_tgs):
+                        client.send_raw_dmrd(pkt)
+
+        # 4. If voice burst (type 1), decode and forward to DVSwitch Mobile clients tuned to p_dst and Mumble
+        if p_type == 1 and len(pkt) >= 53 and self.direct_dmr:
+            try:
+                decoded_pcm = self.direct_dmr.decode_dmr_burst(pkt[20:53])
+                if decoded_pcm and len(decoded_pcm) >= 320:
+                    chunk = decoded_pcm[:320]
+                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                    # Forward to DVSwitch Mobile clients
+                    usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk)
+                    self.broadcast_to_usrp_clients(usrp_pkt, tg=p_dst)
+                    # Forward to Mumble bridge
+                    mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, p_dst, p_src, p_slot, 0) + chunk
+                    self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+            except Exception:
+                pass
+        elif p_type == 2:
+            # Voice terminator
+            try:
+                self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                unkey_usrp = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
+                self.broadcast_to_usrp_clients(unkey_usrp, tg=p_dst)
+                mumble_unkey = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 0, p_dst, p_src, p_slot, 0) + (b"\x00" * 320)
+                self.bridge_sock.sendto(mumble_unkey, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+            except Exception:
+                pass
+
     async def dispatch_event_to_backend(self, traffic: dict):
         if not self.http_session:
             return
@@ -2659,6 +2764,14 @@ usrpAGC = -20,10,100
                                         logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
                                     break
 
+            # Direct vocoder decoding for Web Audio player (Zero Analog_Bridge overhead)
+            decoded_pcm = b""
+            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+                try:
+                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
+                except Exception:
+                    pass
+
             # Dispatch traffic notification to backend for live monitor & web clients
             traffic_event = {
                 "network": traffic.get("network", "Local DMR Master (62031)"),
@@ -2669,6 +2782,8 @@ usrpAGC = -20,10,100
                 "is_tx": False,
                 "data_type": traffic.get("data_type", 1)
             }
+            if decoded_pcm:
+                traffic_event["payload"] = decoded_pcm
             asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_dmr_master_traffic note: {e}")
@@ -2796,6 +2911,14 @@ usrpAGC = -20,10,100
                         }
                         self.dmr_master_server.broadcast_dmrd(translated_pkt)
 
+            # Direct vocoder decoding for Web Audio player (Zero Analog_Bridge overhead)
+            decoded_pcm = b""
+            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+                try:
+                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
+                except Exception:
+                    pass
+
             # 4. Last heard & live traffic event to backend
             traffic_event = {
                 "network": f"Peer: {network_name}",
@@ -2806,6 +2929,8 @@ usrpAGC = -20,10,100
                 "is_tx": False,
                 "data_type": traffic.get("data_type", 1)
             }
+            if decoded_pcm:
+                traffic_event["payload"] = decoded_pcm
             asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_peer_traffic note: {e}")

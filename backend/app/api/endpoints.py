@@ -716,6 +716,7 @@ async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
 
 CORE_USRP_HOST = "core"
 CORE_USRP_PORT = 32345
+CORE_DIRECT_DMR_PORT = int(os.getenv("CORE_DIRECT_DMR_PORT", 32100))
 _usrp_packet_seq = 0
 _tx_pcm_buffer = bytearray()
 _CALLBOOK_CACHE = {}
@@ -734,6 +735,26 @@ def _build_set_info_tlv(src_id: int, tg: int, slot: int, callsign: str) -> bytes
 
 _last_tx_tg = 0
 _last_tx_id = 0
+
+def send_direct_dmr_pcm_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool, pcm_payload: bytes = None):
+    """
+    Dispatches raw 8kHz PCM audio directly to NinjaRadio Direct Z3DMR engine (core:32100).
+    Zero USRP overhead, Zero Analog_Bridge contention, Zero interference with DVSwitch Mobile (32345).
+    """
+    try:
+        import socket
+        import struct
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        safe_dmr_id = dmr_id & 0xFFFFFF
+        safe_tg = tg & 0xFFFFFF
+        safe_slot = slot if slot in (1, 2) else 2
+        payload = pcm_payload or b""
+        call_b = (callsign or "WEB-OP").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
+        # Header: b"NPTT" (4B) + dmr_id(4B) + tg(4B) + slot(4B) + pcm_len(4B) + is_tx(1B) + callsign(16B) = 37 bytes
+        hdr = b"NPTT" + struct.pack(">IIII?16s", safe_dmr_id, safe_tg, safe_slot, len(payload), bool(is_tx), call_b)
+        sock.sendto(hdr + payload, (CORE_USRP_HOST, CORE_DIRECT_DMR_PORT))
+    except Exception:
+        pass
 
 def send_real_usrp_packet_to_core(callsign: str, dmr_id: int, tg: int, slot: int, is_tx: bool, pcm_payload: bytes = None):
     """
@@ -878,6 +899,7 @@ async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = 
     tg_name = TG_NAMES.get(tg, f"Talkgroup {tg}")
 
     # Dispatch actual network UDP packet to core and audio bridge
+    send_direct_dmr_pcm_to_core(callsign, dmr_id, tg, slot, is_transmitting)
     send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_transmitting)
 
     # Notify Core DMR engine via HTTP control API

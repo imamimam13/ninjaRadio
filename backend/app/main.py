@@ -64,7 +64,7 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 async def websocket_live_endpoint(websocket: WebSocket):
     import json
     import base64
-    from backend.app.api.endpoints import send_real_usrp_packet_to_core
+    from backend.app.api.endpoints import send_direct_dmr_pcm_to_core
 
     await manager.connect(websocket)
     client_tx_active = False
@@ -75,7 +75,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
         nonlocal client_tx_active
         if client_tx_active:
             client_tx_active = False
-            send_real_usrp_packet_to_core(
+            send_direct_dmr_pcm_to_core(
                 last_tx_info["callsign"], last_tx_info["dmr_id"], last_tx_info["tg"], last_tx_info["slot"], is_tx=False
             )
             try:
@@ -129,7 +129,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 continue
                             client_tx_active = True
                             pcm_data = base64.b64decode(pcm_b64)
-                            send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
+                            send_direct_dmr_pcm_to_core(callsign, dmr_id, tg, slot, is_tx=True, pcm_payload=pcm_data)
                         elif not is_tx:
                             await notify_core_stop_tx()
                     elif msg_type == "PTT_HEARTBEAT":

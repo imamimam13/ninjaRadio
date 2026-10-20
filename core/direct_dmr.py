@@ -1,0 +1,505 @@
+import os
+import sys
+import time
+import struct
+import ctypes
+import logging
+from typing import List, Tuple, Optional, Callable
+
+logger = logging.getLogger("NinjaRadio-DirectDMR")
+
+# ETSI TS 102 361-1 Annex B interleave schedule (36 dibits per AMBE frame)
+R_W = [
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 2,
+    0, 2, 0, 2, 0, 2,
+    0, 2, 0, 2, 0, 2,
+]
+R_X = [
+    23, 10, 22, 9, 21, 8,
+    20, 7, 19, 6, 18, 5,
+    28, 4, 16, 3, 15, 2,
+    14, 1, 13, 0, 12, 10,
+    11, 9, 10, 8, 9, 7,
+    8, 6, 7, 5, 6, 4,
+]
+# Fix index 28 to 17 per standard ETSI TS 102 361-1
+R_X[12] = 17
+
+R_Y = [
+    0, 2, 0, 2, 0, 2,
+    0, 2, 0, 3, 0, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+]
+R_Z = [
+    5, 3, 4, 2, 3, 1,
+    2, 0, 1, 13, 0, 12,
+    22, 11, 21, 10, 20, 9,
+    19, 8, 18, 7, 17, 6,
+    16, 5, 15, 4, 14, 3,
+    13, 2, 12, 1, 11, 0,
+]
+
+BURST_BYTES = 33
+DIBITS_PER_BURST = 132
+FRAME_BYTES = 9
+FRAME_BITS = 72
+PCM_SAMPLES = 160
+PCM_BYTES = PCM_SAMPLES * 2  # 320 bytes (20ms)
+BURST_SAMPLES = 480
+BURST_PCM_BYTES = BURST_SAMPLES * 2  # 960 bytes (60ms)
+DMRD = b"DMRD"
+
+# Voice Sync Pattern for Voice Burst B (ETSI TS 102 361-1 BS Voice Sync)
+VOICE_SYNC_BS_DIBITS = [
+    3, 1, 3, 3, 3, 3, 1, 1, 1, 3, 3, 1,
+    1, 3, 1, 1, 1, 1, 3, 3, 3, 1, 1, 3
+]
+
+
+def bytes_to_dibits(payload: bytes) -> List[int]:
+    dibits = [0] * DIBITS_PER_BURST
+    for i in range(min(BURST_BYTES, len(payload))):
+        b = payload[i]
+        dibits[i * 4 + 0] = (b >> 6) & 0x03
+        dibits[i * 4 + 1] = (b >> 4) & 0x03
+        dibits[i * 4 + 2] = (b >> 2) & 0x03
+        dibits[i * 4 + 3] = b & 0x03
+    return dibits
+
+
+def dibits_to_bytes(dibits: List[int]) -> bytes:
+    out = bytearray(BURST_BYTES)
+    for i in range(BURST_BYTES):
+        d0, d1, d2, d3 = dibits[i * 4:i * 4 + 4]
+        out[i] = ((d0 & 3) << 6) | ((d1 & 3) << 4) | ((d2 & 3) << 2) | (d3 & 3)
+    return bytes(out)
+
+
+def _fr_get_bit(fr: bytearray, row: int, col: int) -> int:
+    return fr[row * 24 + col] & 1
+
+
+def _fr_set_bit(fr: bytearray, row: int, col: int, value: int) -> None:
+    fr[row * 24 + col] = value & 1
+
+
+def canonical_to_fr(frame: bytes) -> bytearray:
+    fr = bytearray(96)
+
+    def bit(c: int) -> int:
+        return (frame[c // 8] >> (7 - (c % 8))) & 1
+
+    for c in range(0, 24):
+        _fr_set_bit(fr, 0, 23 - c, bit(c))
+    for c in range(24, 47):
+        _fr_set_bit(fr, 1, 46 - c, bit(c))
+    for c in range(47, 58):
+        _fr_set_bit(fr, 2, 57 - c, bit(c))
+    for c in range(58, 72):
+        _fr_set_bit(fr, 3, 71 - c, bit(c))
+    return fr
+
+
+def fr_to_canonical(fr: bytearray) -> bytes:
+    bits = [0] * FRAME_BITS
+    for c in range(0, 24):
+        bits[c] = _fr_get_bit(fr, 0, 23 - c)
+    for c in range(24, 47):
+        bits[c] = _fr_get_bit(fr, 1, 46 - c)
+    for c in range(47, 58):
+        bits[c] = _fr_get_bit(fr, 2, 57 - c)
+    for c in range(58, 72):
+        bits[c] = _fr_get_bit(fr, 3, 71 - c)
+
+    out = bytearray(FRAME_BYTES)
+    for i, b in enumerate(bits):
+        if b:
+            out[i // 8] |= 1 << (7 - (i % 8))
+    return bytes(out)
+
+
+def interleave_burst(frames: Tuple[bytes, bytes, bytes], sync_dibits: Optional[List[int]] = None) -> bytes:
+    fr1 = canonical_to_fr(frames[0])
+    fr2 = canonical_to_fr(frames[1])
+    fr3 = canonical_to_fr(frames[2])
+
+    dibits = [0] * DIBITS_PER_BURST
+    idx = 0
+
+    for i in range(36):
+        d = (_fr_get_bit(fr1, R_W[i], R_X[i]) << 1) | _fr_get_bit(fr1, R_Y[i], R_Z[i])
+        dibits[idx] = d
+        idx += 1
+
+    for i in range(18):
+        d = (_fr_get_bit(fr2, R_W[i], R_X[i]) << 1) | _fr_get_bit(fr2, R_Y[i], R_Z[i])
+        dibits[idx] = d
+        idx += 1
+
+    if sync_dibits is not None and len(sync_dibits) == 24:
+        dibits[54:78] = sync_dibits
+    else:
+        dibits[54:78] = [0] * 24
+    idx = 78
+
+    for i in range(18, 36):
+        d = (_fr_get_bit(fr2, R_W[i], R_X[i]) << 1) | _fr_get_bit(fr2, R_Y[i], R_Z[i])
+        dibits[idx] = d
+        idx += 1
+
+    for i in range(36):
+        d = (_fr_get_bit(fr3, R_W[i], R_X[i]) << 1) | _fr_get_bit(fr3, R_Y[i], R_Z[i])
+        dibits[idx] = d
+        idx += 1
+
+    return dibits_to_bytes(dibits)
+
+
+def deinterleave_burst(payload: bytes) -> Tuple[bytes, bytes, bytes]:
+    dibits = bytes_to_dibits(payload)
+    fr1 = bytearray(96)
+    fr2 = bytearray(96)
+    fr3 = bytearray(96)
+    idx = 0
+
+    for i in range(36):
+        d = dibits[idx]
+        idx += 1
+        _fr_set_bit(fr1, R_W[i], R_X[i], (d >> 1) & 1)
+        _fr_set_bit(fr1, R_Y[i], R_Z[i], d & 1)
+
+    for i in range(18):
+        d = dibits[idx]
+        idx += 1
+        _fr_set_bit(fr2, R_W[i], R_X[i], (d >> 1) & 1)
+        _fr_set_bit(fr2, R_Y[i], R_Z[i], d & 1)
+
+    idx += 24  # skip sync / EMB
+
+    for i in range(18, 36):
+        d = dibits[idx]
+        idx += 1
+        _fr_set_bit(fr2, R_W[i], R_X[i], (d >> 1) & 1)
+        _fr_set_bit(fr2, R_Y[i], R_Z[i], d & 1)
+
+    for i in range(36):
+        d = dibits[idx]
+        idx += 1
+        _fr_set_bit(fr3, R_W[i], R_X[i], (d >> 1) & 1)
+        _fr_set_bit(fr3, R_Y[i], R_Z[i], d & 1)
+
+    return (fr_to_canonical(fr1), fr_to_canonical(fr2), fr_to_canonical(fr3))
+
+
+class DirectOpenDmrVocoder:
+    """Stateful OpenDMR encoder/decoder pair wrapping libopendmr (C/C++)."""
+
+    def __init__(self):
+        self.lib = None
+        self._dec = None
+        self._enc = None
+        self._pcm_out = (ctypes.c_int16 * PCM_SAMPLES)()
+        self._pcm_in = (ctypes.c_int16 * PCM_SAMPLES)()
+        self._frame_out = (ctypes.c_uint8 * FRAME_BYTES)()
+        self._errs = ctypes.c_int(0)
+
+        self._load_library()
+        if self.lib:
+            self._bind()
+            try:
+                self._dec = self.lib.opendmr_decoder_create()
+                self._enc = self.lib.opendmr_encoder_create()
+                logger.info(f"✓ OpenDMR vocoder initialized (version: {self.version()})")
+            except Exception as e:
+                logger.warning(f"Could not create OpenDMR codec instances: {e}")
+
+    def _load_library(self):
+        candidates = [
+            os.environ.get("OPENDMR_LIB", ""),
+            "/usr/local/lib/libopendmr.so",
+            "/usr/lib/libopendmr.so",
+            "/usr/lib/x86_64-linux-gnu/libopendmr.so",
+            "/usr/lib/aarch64-linux-gnu/libopendmr.so",
+            os.path.join(os.path.dirname(__file__), "opendmr/libopendmr.so"),
+            os.path.join(os.path.dirname(__file__), "../app-android/third_party/OpenDMR/libopendmr.so"),
+            os.path.join(os.path.dirname(__file__), "../app-android/third_party/OpenDMR/libopendmr.dylib"),
+            "libopendmr.so",
+            "libopendmr.dylib",
+        ]
+        for p in candidates:
+            if p and (os.path.exists(p) or not p.startswith("/")):
+                try:
+                    self.lib = ctypes.CDLL(p)
+                    logger.info(f"✓ Loaded libopendmr from {p}")
+                    return
+                except Exception:
+                    continue
+
+    def _bind(self):
+        lib = self.lib
+        lib.opendmr_decoder_create.restype = ctypes.c_void_p
+        lib.opendmr_decoder_destroy.argtypes = [ctypes.c_void_p]
+        lib.opendmr_decoder_reset.argtypes = [ctypes.c_void_p]
+        lib.opendmr_decode.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.POINTER(ctypes.c_int),
+        ]
+        lib.opendmr_decode.restype = ctypes.c_bool
+
+        lib.opendmr_encoder_create.restype = ctypes.c_void_p
+        lib.opendmr_encoder_destroy.argtypes = [ctypes.c_void_p]
+        lib.opendmr_encoder_reset.argtypes = [ctypes.c_void_p]
+        lib.opendmr_encode.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.POINTER(ctypes.c_uint8),
+        ]
+        lib.opendmr_encode.restype = ctypes.c_bool
+        lib.opendmr_version.restype = ctypes.c_char_p
+
+    def version(self) -> str:
+        if not self.lib:
+            return "unavailable"
+        try:
+            return self.lib.opendmr_version().decode("utf-8")
+        except Exception:
+            return "unknown"
+
+    def is_available(self) -> bool:
+        return self._enc is not None and self._dec is not None
+
+    def encode_frame(self, pcm: bytes) -> bytes:
+        if not self._enc or len(pcm) != PCM_BYTES:
+            return bytes(FRAME_BYTES)
+        samples = struct.unpack("<160h", pcm)
+        for i, s in enumerate(samples):
+            self._pcm_in[i] = s
+        ok = self.lib.opendmr_encode(self._enc, self._pcm_in, self._frame_out)
+        if not ok:
+            return bytes(FRAME_BYTES)
+        return bytes(self._frame_out)
+
+    def decode_frame(self, frame: bytes) -> bytes:
+        if not self._dec or len(frame) != FRAME_BYTES:
+            return bytes(PCM_BYTES)
+        buf = (ctypes.c_uint8 * FRAME_BYTES).from_buffer_copy(frame)
+        ok = self.lib.opendmr_decode(self._dec, buf, self._pcm_out, ctypes.byref(self._errs))
+        if not ok:
+            return bytes(PCM_BYTES)
+        return struct.pack("<160h", *self._pcm_out)
+
+    def encode_burst(self, pcm_960: bytes, sequence: int = 0) -> bytes:
+        if len(pcm_960) != BURST_PCM_BYTES:
+            return bytes(BURST_BYTES)
+        f1 = self.encode_frame(pcm_960[:320])
+        f2 = self.encode_frame(pcm_960[320:640])
+        f3 = self.encode_frame(pcm_960[640:960])
+        sync = VOICE_SYNC_BS_DIBITS if sequence == 1 else None
+        return interleave_burst((f1, f2, f3), sync)
+
+    def decode_burst(self, burst_33: bytes) -> bytes:
+        if len(burst_33) < BURST_BYTES:
+            return b""
+        f1, f2, f3 = deinterleave_burst(burst_33[:BURST_BYTES])
+        p1 = self.decode_frame(f1)
+        p2 = self.decode_frame(f2)
+        p3 = self.decode_frame(f3)
+        return p1 + p2 + p3
+
+    def close(self):
+        if self._dec:
+            self.lib.opendmr_decoder_destroy(self._dec)
+            self._dec = None
+        if self._enc:
+            self.lib.opendmr_encoder_destroy(self._enc)
+            self._enc = None
+
+
+def build_dmrd_packet(
+    src_id: int,
+    dst_tg: int,
+    slot: int,
+    data_type: int,
+    seq: int,
+    payload: bytes,
+    rpt_id: int = 5109999,
+    stream_id: Optional[int] = None,
+    call_type: str = "group"
+) -> bytes:
+    """Constructs a valid standard 53-byte HomeBrew DMRD packet."""
+    bits = 0
+    if slot == 2:
+        bits |= 0x80
+    if call_type == "unit":
+        bits |= 0x40
+    bits |= (data_type & 0x03) << 4
+    bits |= (seq & 0x0F)
+
+    safe_payload = (payload[:BURST_BYTES] if payload else b"").ljust(BURST_BYTES, b"\x00")
+    if stream_id is None:
+        stream_id = int(time.time()) & 0xFFFFFFFF
+
+    return (
+        DMRD
+        + struct.pack("B", (seq & 0xFF))
+        + struct.pack(">I", src_id)[1:]
+        + struct.pack(">I", dst_tg)[1:]
+        + struct.pack(">I", rpt_id)
+        + struct.pack("B", bits)
+        + struct.pack(">I", stream_id)
+        + safe_payload
+    )
+
+
+class DirectDmrEngine:
+    """
+    Direct Z3DMR-Style Engine for WebRTC / Web PTT:
+    - Encodes 8kHz PCM to DMRD frames in real time (Zero Analog_Bridge overhead).
+    - Decodes incoming DMR bursts directly to 8kHz PCM for Web Audio Player.
+    - Completely eliminates resource competition with DVSwitch Mobile.
+    """
+
+    def __init__(self, dmr_master_broadcast_fn: Callable[[bytes], None], rpt_id: int = 5109999):
+        self.vocoder = DirectOpenDmrVocoder()
+        self.broadcast_fn = dmr_master_broadcast_fn
+        self.rpt_id = rpt_id
+
+        # TX State Tracking
+        self.in_tx = False
+        self.current_stream_id = 0
+        self.current_burst_seq = 0
+        self.current_tg = 0
+        self.current_slot = 2
+        self.current_src_id = 0
+        self.current_callsign = ""
+        self.tx_pcm_buffer = bytearray()
+        self.last_tx_ts = 0.0
+
+    def push_web_ptt_pcm(
+        self,
+        callsign: str,
+        dmr_id: int,
+        tg: int,
+        slot: int,
+        pcm_chunk: bytes,
+        is_tx: bool
+    ) -> List[bytes]:
+        """
+        Receives PCM audio chunks from Web PTT, encodes them to DMRD packets,
+        and broadcasts them directly to DMR Master and connected repeaters.
+        """
+        out_packets = []
+        now = time.time()
+
+        if not is_tx:
+            # PTT Released (Unkey)
+            if self.in_tx:
+                # Flush residual buffer if at least 1 burst can be formed
+                if len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
+                    burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
+                    del self.tx_pcm_buffer[:BURST_PCM_BYTES]
+                    burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq)
+                    pkt = build_dmrd_packet(
+                        src_id=self.current_src_id,
+                        dst_tg=self.current_tg,
+                        slot=self.current_slot,
+                        data_type=1,
+                        seq=self.current_burst_seq,
+                        payload=burst,
+                        rpt_id=self.rpt_id,
+                        stream_id=self.current_stream_id
+                    )
+                    out_packets.append(pkt)
+                    if self.broadcast_fn:
+                        self.broadcast_fn(pkt)
+
+                # Send DMRD Voice Terminator (data_type = 2)
+                term_pkt = build_dmrd_packet(
+                    src_id=self.current_src_id,
+                    dst_tg=self.current_tg,
+                    slot=self.current_slot,
+                    data_type=2,
+                    seq=0,
+                    payload=b"",
+                    rpt_id=self.rpt_id,
+                    stream_id=self.current_stream_id
+                )
+                out_packets.append(term_pkt)
+                if self.broadcast_fn:
+                    self.broadcast_fn(term_pkt)
+
+                logger.info(f"🎙️ [DirectDMR] Unkeyed TX session for {self.current_callsign} (TG {self.current_tg})")
+
+            self.in_tx = False
+            self.tx_pcm_buffer.clear()
+            self.current_burst_seq = 0
+            return out_packets
+
+        # PTT Active (Keyed)
+        if not self.in_tx or self.current_tg != tg or self.current_src_id != dmr_id:
+            # Start new transmission session: send DMRD Voice Header (data_type = 0)
+            self.in_tx = True
+            self.current_stream_id = int(now) & 0xFFFFFFFF
+            self.current_burst_seq = 0
+            self.current_tg = tg
+            self.current_slot = slot if slot in (1, 2) else 2
+            self.current_src_id = dmr_id
+            self.current_callsign = callsign
+            self.tx_pcm_buffer.clear()
+
+            hdr_pkt = build_dmrd_packet(
+                src_id=self.current_src_id,
+                dst_tg=self.current_tg,
+                slot=self.current_slot,
+                data_type=0,
+                seq=0,
+                payload=b"",
+                rpt_id=self.rpt_id,
+                stream_id=self.current_stream_id
+            )
+            out_packets.append(hdr_pkt)
+            if self.broadcast_fn:
+                self.broadcast_fn(hdr_pkt)
+            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id})")
+
+        # Accumulate PCM and encode 960-byte (60ms) superframes
+        if pcm_chunk:
+            self.tx_pcm_buffer.extend(pcm_chunk)
+            self.last_tx_ts = now
+
+            while len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
+                burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
+                del self.tx_pcm_buffer[:BURST_PCM_BYTES]
+
+                burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq)
+                pkt = build_dmrd_packet(
+                    src_id=self.current_src_id,
+                    dst_tg=self.current_tg,
+                    slot=self.current_slot,
+                    data_type=1,
+                    seq=self.current_burst_seq,
+                    payload=burst,
+                    rpt_id=self.rpt_id,
+                    stream_id=self.current_stream_id
+                )
+                out_packets.append(pkt)
+                if self.broadcast_fn:
+                    self.broadcast_fn(pkt)
+
+                self.current_burst_seq = (self.current_burst_seq + 1) % 6
+
+        return out_packets
+
+    def decode_dmr_burst(self, burst_33: bytes) -> bytes:
+        """Decodes 33-byte DMR AMBE burst into 960 bytes of 8kHz 16-bit PCM."""
+        if not burst_33 or len(burst_33) < BURST_BYTES:
+            return b""
+        return self.vocoder.decode_burst(burst_33)
