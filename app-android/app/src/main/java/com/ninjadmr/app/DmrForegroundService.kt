@@ -67,6 +67,9 @@ class DmrForegroundService : Service() {
     @Volatile var statusLine: String = "idle"
         private set
 
+    @Volatile var vocoder: String = "not started"
+        private set
+
     @Volatile private var connectionState: String = "idle"
     @Volatile private var lastRxTs = 0L
     @Volatile private var lastTxTs = 0L
@@ -167,6 +170,9 @@ class DmrForegroundService : Service() {
 
     fun counters(): Pair<Int, Int> = rxCount to txCount
 
+    /** Raw session state from Python (idle / RESOLVING / CONNECTED / error). */
+    fun sessionState(): String = connectionState
+
     /** Configure and (re)start the talkgroup scan loop. */
     fun setScan(enabled: Boolean, tgs: List<Int>, intervalMs: Long = 10_000L) {
         stopScan()
@@ -242,6 +248,7 @@ class DmrForegroundService : Service() {
             statusLine = connectionState
             AppLog.add("Session state: $connectionState")
             status["vocoder"]?.let { voc ->
+                vocoder = voc
                 if (voc != "ok" && voc != "not started") AppLog.add("vocoder: $voc")
             }
         } catch (exc: Exception) {
@@ -316,11 +323,13 @@ class DmrForegroundService : Service() {
                 }
                 if (++statusTick >= 50) {
                     statusTick = 0
-                    val state = PyBridge.status(this)["state"] ?: connectionState
+                    val snap = PyBridge.status(this)
+                    val state = snap["state"] ?: connectionState
                     if (state != connectionState) {
                         connectionState = state
                         AppLog.add("Session state: $state")
                     }
+                    snap["vocoder"]?.let { if (it != vocoder) vocoder = it }
                 }
                 if (++notifTick >= 100) {
                     notifTick = 0
