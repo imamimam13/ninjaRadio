@@ -113,6 +113,9 @@ class MainActivity : ComponentActivity() {
                 var transmitting by remember { mutableStateOf(false) }
                 var status by remember { mutableStateOf("") }
                 var linkState by remember { mutableStateOf("idle") }
+                var sessionState by remember { mutableStateOf("idle") }
+                var vocoder by remember { mutableStateOf("not started") }
+                var vocoderTest by remember { mutableStateOf("") }
                 var counters by remember { mutableStateOf(0 to 0) }
                 var log by remember { mutableStateOf<List<AppLog.Entry>>(emptyList()) }
                 var masters by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
@@ -153,6 +156,8 @@ class MainActivity : ComponentActivity() {
                             val svc = service
                             if (svc != null) {
                                 linkState = svc.linkStatus()
+                                sessionState = svc.sessionState()
+                                vocoder = svc.vocoder
                                 counters = svc.counters()
                                 transmitting = svc.ptt
                             }
@@ -174,11 +179,14 @@ class MainActivity : ComponentActivity() {
                     scanEnabled = scanEnabled,
                     log = log,
                     linkState = linkState,
+                    sessionState = sessionState,
                     rxCount = counters.first,
                     txCount = counters.second,
                     connected = connected,
                     transmitting = transmitting,
                     status = status,
+                    vocoder = vocoder,
+                    vocoderTest = vocoderTest,
                     onConfigChange = { config = it },
                     onPasswordChange = { password = it },
                     onPickMaster = { master ->
@@ -306,6 +314,12 @@ class MainActivity : ComponentActivity() {
                             status = withContext(Dispatchers.IO) { runSelfTest() }
                         }
                     },
+                    onVocoderTest = {
+                        vocoderTest = "testing..."
+                        lifecycleScope.launch {
+                            vocoderTest = withContext(Dispatchers.IO) { runVocoderTest() }
+                        }
+                    },
                     onRequestBatteryExemption = { requestBatteryExemption() },
                     onEnableVolumePtt = { openAccessibilitySettings() },
                 )
@@ -396,6 +410,19 @@ class MainActivity : ComponentActivity() {
             (info["error"]?.let { " / error=$it" } ?: "")
     } catch (exc: Exception) {
         "self-test failed: ${exc.message}"
+    }
+
+    private fun runVocoderTest(): String = try {
+        PyBridge.ensureStarted(this)
+        val info = PyBridge.selfTest()
+        val ok = info["ok"] == "true"
+        val detail = when {
+            ok -> "codec ${info["codec"]}"
+            else -> info["error"] ?: info["lib"] ?: "no backend"
+        }
+        (if (ok) "OK" else "FAIL") + " · " + detail
+    } catch (exc: Exception) {
+        "ERR · ${exc.message}"
     }
 
     private fun requestRuntimePermissions() {
