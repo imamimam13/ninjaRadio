@@ -26,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import com.ninjadmr.app.config.ProfileStore
 import com.ninjadmr.app.config.RadioProfile
 import com.ninjadmr.app.security.CredentialsStore
+import com.ninjadmr.app.ui.CarModeScreen
 import com.ninjadmr.app.ui.NinjaDmrTheme
 import com.ninjadmr.app.ui.RadioScreen
 import com.ninjadmr.app.util.AppLog
@@ -116,6 +117,7 @@ class MainActivity : ComponentActivity() {
                 var sessionState by remember { mutableStateOf("idle") }
                 var vocoder by remember { mutableStateOf("not started") }
                 var vocoderTest by remember { mutableStateOf("") }
+                var carMode by remember { mutableStateOf(false) }
                 var counters by remember { mutableStateOf(0 to 0) }
                 var log by remember { mutableStateOf<List<AppLog.Entry>>(emptyList()) }
                 var masters by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
@@ -168,6 +170,31 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                if (carMode) {
+                    CarModeScreen(
+                        talkgroup = config.talkgroup,
+                        callsign = config.callsign,
+                        sessionState = sessionState,
+                        linkState = linkState,
+                        rxCount = counters.first,
+                        txCount = counters.second,
+                        transmitting = transmitting,
+                        connected = connected,
+                        onPttDown = {
+                            service?.let {
+                                it.setPtt(true)
+                                transmitting = true
+                            }
+                        },
+                        onPttUp = {
+                            service?.let {
+                                it.setPtt(false)
+                                transmitting = false
+                            }
+                        },
+                        onExit = { carMode = false },
+                    )
+                } else {
                 RadioScreen(
                     profiles = profiles,
                     selectedIndex = selectedIndex,
@@ -322,7 +349,9 @@ class MainActivity : ComponentActivity() {
                     },
                     onRequestBatteryExemption = { requestBatteryExemption() },
                     onEnableVolumePtt = { openAccessibilitySettings() },
+                    onCarMode = { carMode = true },
                 )
+                }
             }
         }
     }

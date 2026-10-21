@@ -90,6 +90,7 @@ fun RadioScreen(
     onTogglePtt: () -> Unit,
     onRequestBatteryExemption: () -> Unit,
     onEnableVolumePtt: () -> Unit,
+    onCarMode: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Holo.bgDeep)) {
         HoloHudBackground(Modifier.fillMaxSize())
@@ -256,6 +257,13 @@ fun RadioScreen(
                 transmitting = transmitting,
                 enabled = connected,
                 onClick = onTogglePtt,
+            )
+
+            HoloAction(
+                label = "ENTER CAR MODE",
+                accent = Holo.brassBright,
+                onClick = onCarMode,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
             )
 
             HoloPanel {
