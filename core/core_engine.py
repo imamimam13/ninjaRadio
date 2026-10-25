@@ -2467,17 +2467,34 @@ usrpAGC = -20,10,100
 
                         # Forward pristine 8kHz PCM directly to DVSwitch Mobile and Mumble clients
                         if pcm_chunk and len(pcm_chunk) >= 320:
+                            is_from_mumble = addr[0] not in ("127.0.0.1", "localhost")
                             for offset in range(0, len(pcm_chunk), 320):
                                 frame_pcm = pcm_chunk[offset:offset + 320]
                                 if len(frame_pcm) == 320:
                                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                                     usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, frame_pcm)
                                     self.broadcast_to_usrp_clients(usrp_pkt, tg=tg)
-                                    mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0) + frame_pcm
-                                    try:
-                                        self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                                    except Exception:
-                                        pass
+                                    if not is_from_mumble:
+                                        mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0) + frame_pcm
+                                        try:
+                                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                                        except Exception:
+                                            try:
+                                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                                            except Exception:
+                                                pass
+                            asyncio.create_task(self.dispatch_event_to_backend({
+                                "network": "Direct DMR (Mumble/WebRTC)",
+                                "host": f"{addr[0]}:32100",
+                                "src_id": dmr_id,
+                                "dst_tg": tg,
+                                "slot": slot,
+                                "callsign": callsign,
+                                "is_tx": False,
+                                "is_transmitting": True,
+                                "data_type": 1,
+                                "payload": pcm_chunk
+                            }))
 
                         # Encode directly to DMRD frames via Direct Z3DMR Vocoder (Zero Analog_Bridge collision)
                         if self.direct_dmr:
