@@ -923,7 +923,6 @@ async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = 
 
     # Dispatch actual network UDP packet to core and audio bridge
     send_direct_dmr_pcm_to_core(callsign, dmr_id, tg, slot, is_transmitting)
-    send_real_usrp_packet_to_core(callsign, dmr_id, tg, slot, is_transmitting)
 
     # Notify Core DMR engine via HTTP control API
     try:
