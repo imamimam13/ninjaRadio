@@ -330,47 +330,59 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
     return True, "Fallback"
 
 
-def get_matrix_translated_targets(tg: int, slot: int = 2, source_mode: str = "DMR") -> List[dict]:
-    """
-    Queries active bridge_routes in TG Matrix to find all mapped / patched targets for `(tg, slot)`.
-    Supports manual cross-TG and cross-slot mapping (e.g., Local TG 1025 TS2 <-> Peer TG 510 TS1)
-    and independent rules without editing Peer Settings.
-    """
+_BRIDGE_ROUTES_CACHE = {"time": 0.0, "rows": []}
+
+
+def _get_cached_bridge_routes() -> list:
+    now = time.time()
+    if (now - _BRIDGE_ROUTES_CACHE["time"]) < 2.0 and _BRIDGE_ROUTES_CACHE["rows"]:
+        return _BRIDGE_ROUTES_CACHE["rows"]
     db_path = get_db_path()
-    targets = []
     if not db_path:
-        return targets
+        return _BRIDGE_ROUTES_CACHE["rows"]
     try:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT name, source_mode, source_tg, source_slot, target_mode, target_tg, target_slot, bidirectional
+                SELECT id, name, is_active, source_mode, source_tg, source_slot, target_mode, target_tg, target_slot, bidirectional
                 FROM bridge_routes
-                WHERE is_active = 1
-                  AND (source_tg = ? OR (bidirectional = 1 AND target_tg = ?))
-            """, (tg, tg))
-            for r_name, s_mode, s_tg, s_slot, t_mode, t_tg, t_slot, bidir in cursor.fetchall():
-                s_tg = int(s_tg or 0)
-                t_tg = int(t_tg or 0)
-                s_slot = int(s_slot or 2)
-                t_slot = int(t_slot or 2)
-                if s_tg == tg:
-                    targets.append({
-                        "rule_name": r_name,
-                        "mode": str(t_mode or "DMR").upper(),
-                        "tg": t_tg,
-                        "slot": t_slot
-                    })
-                elif bidir and t_tg == tg:
-                    targets.append({
-                        "rule_name": r_name,
-                        "mode": str(s_mode or "DMR").upper(),
-                        "tg": s_tg,
-                        "slot": s_slot
-                    })
+            """)
+            _BRIDGE_ROUTES_CACHE["rows"] = cursor.fetchall()
+            _BRIDGE_ROUTES_CACHE["time"] = now
     except Exception as e:
-        logger.debug(f"get_matrix_translated_targets note: {e}")
+        logger.debug(f"_get_cached_bridge_routes note: {e}")
+    return _BRIDGE_ROUTES_CACHE["rows"]
+
+
+def get_matrix_translated_targets(tg: int, slot: int = 2, source_mode: str = "DMR") -> List[dict]:
+    """
+    Queries active bridge_routes in TG Matrix to find all mapped / patched cross-TG targets for `(tg, slot)`.
+    Supports manual cross-TG mapping (e.g., Local TG 1025 TS2 <-> Peer TG 510 TS1)
+    without duplicating the same TG onto multiple slots.
+    """
+    targets = []
+    for _, r_name, is_active, s_mode, s_tg, s_slot, t_mode, t_tg, t_slot, bidir in _get_cached_bridge_routes():
+        if not is_active:
+            continue
+        s_tg = int(s_tg or 0)
+        t_tg = int(t_tg or 0)
+        s_slot = int(s_slot or 2)
+        t_slot = int(t_slot or 2)
+        if s_tg == tg and t_tg > 0 and t_tg != tg:
+            targets.append({
+                "rule_name": r_name,
+                "mode": str(t_mode or "DMR").upper(),
+                "tg": t_tg,
+                "slot": t_slot
+            })
+        elif bidir and t_tg == tg and s_tg > 0 and s_tg != tg:
+            targets.append({
+                "rule_name": r_name,
+                "mode": str(s_mode or "DMR").upper(),
+                "tg": s_tg,
+                "slot": s_slot
+            })
     return targets
 
 
@@ -393,39 +405,28 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: l
     3. If the peer is configured with `subscribedTgs` containing `tg`, auto-approve immediately!
     4. Otherwise, if peer has no explicit restrictions, allow DMR traffic.
     """
-    db_path = get_db_path()
     peer_upper = (peer_name or "").strip().upper()
+    routes = _get_cached_bridge_routes()
 
-    if db_path:
-        try:
-            import sqlite3
-            with sqlite3.connect(db_path, timeout=1.0) as conn:
-                cursor = conn.cursor()
-                # Check if there is an active rule for this TG
-                cursor.execute("""
-                    SELECT id, name, source_mode, target_mode FROM bridge_routes 
-                    WHERE is_active = 1 
-                      AND (source_tg = ? OR target_tg = ?)
-                """, (tg, tg))
-                active_rows = cursor.fetchall()
-                if active_rows:
-                    for _, r_name, s_m, t_m in active_rows:
-                        # If rule specifies a peer name or general DMR/PEER mode, allow
-                        if not peer_upper or peer_upper in str(r_name).upper() or peer_upper in str(s_m).upper() or peer_upper in str(t_m).upper() or str(t_m).upper() in ("DMR", "PEER", "MUMBLE", "WEBRTC", "ALL"):
-                            return True
+    if routes:
+        active_matches = [
+            (r_id, r_name, s_m, t_m)
+            for r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir in routes
+            if is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg)
+        ]
+        if active_matches:
+            for _, r_name, s_m, t_m in active_matches:
+                if not peer_upper or peer_upper in str(r_name).upper() or peer_upper in str(s_m).upper() or peer_upper in str(t_m).upper() or str(t_m).upper() in ("DMR", "PEER", "MUMBLE", "WEBRTC", "ALL"):
                     return True
+            return True
 
-                # Rule 1: Check if explicitly muted / disabled in TG Matrix
-                cursor.execute("""
-                    SELECT id FROM bridge_routes 
-                    WHERE is_active = 0 
-                      AND (source_tg = ? OR target_tg = ?)
-                    LIMIT 1
-                """, (tg, tg))
-                if cursor.fetchone() is not None:
-                    return False
-        except Exception:
-            pass
+        disabled_matches = [
+            r_id
+            for r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir in routes
+            if not is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg)
+        ]
+        if disabled_matches:
+            return False
 
     # Rule 2: If peer client explicitly subscribed to this TG in Settings, it is APPROVED automatically!
     if client_subscribed_tgs and tg in client_subscribed_tgs:
@@ -1403,8 +1404,7 @@ usrpAGC = -20,10,100
                     active_call = w.get("rx_call") or talker_info.get("callsign") or lookup_callbook_callsign(active_src) or f"ID-{active_src}"
 
                     # Avoid echoing primary bridge if primary bridge is already decoding this exact TG
-                    primary_tg_locked = int(self.primary_tg or self.config.get("primary_tg", 1025))
-                    if self.current_rx_active and self.current_rx_tg == tg and tg == primary_tg_locked:
+                    if self.current_rx_active and self.current_rx_tg == tg and (time.time() - self.current_rx_time) < 1.0:
                         continue
 
                     if key_flag == 1 and len(pcm_payload) >= 320:
@@ -1947,21 +1947,19 @@ usrpAGC = -20,10,100
                                     pass
 
                         # Forward standard voice frame to external USRP clients (DVSwitch Mobile)
-                        # If a dedicated on-demand worker is actively decoding this TG, let the worker handle USRP broadcast to prevent double packet flooding
-                        has_active_worker = any(
-                            w.get("tg") == active_tg and w.get("ab_proc") and w.get("ab_proc").poll() is None
-                            for w in self.bridge_workers.values()
-                        )
-                        if not has_active_worker:
-                            try:
-                                usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, pcm_payload[:320])
-                                self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=active_tg)
-                            except Exception:
-                                pass
+                        try:
+                            usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, pcm_payload[:320])
+                            self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=active_tg)
+                        except Exception:
+                            pass
 
-                    # Dispatch event to backend API for Web Audio player
+                    # Dispatch event to backend API for Web Audio player (at most once per unique TG)
                     if key_flag == 1 and len(pcm_payload) >= 320:
+                        seen_tgs = set()
                         for r_tg, r_slot in routed_tgs:
+                            if r_tg in seen_tgs:
+                                continue
+                            seen_tgs.add(r_tg)
                             traffic_event = {
                                 "network": f"DMR Master ({self.active_peer_host})",
                                 "src_id": active_src,
@@ -1975,17 +1973,16 @@ usrpAGC = -20,10,100
                             asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
                     elif key_flag == 0:
                         # Voice Terminator
-                        has_active_worker = any(
-                            w.get("tg") == active_tg and w.get("ab_proc") and w.get("ab_proc").poll() is None
-                            for w in self.bridge_workers.values()
-                        )
-                        if not has_active_worker:
-                            try:
-                                unkey_fwd = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
-                                self.broadcast_to_usrp_clients(unkey_fwd, tg=active_tg)
-                            except Exception:
-                                pass
+                        try:
+                            unkey_fwd = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
+                            self.broadcast_to_usrp_clients(unkey_fwd, tg=active_tg)
+                        except Exception:
+                            pass
+                        seen_tgs = set()
                         for r_tg, r_slot in routed_tgs:
+                            if r_tg in seen_tgs:
+                                continue
+                            seen_tgs.add(r_tg)
                             traffic_event = {
                                 "network": f"DMR Master ({self.active_peer_host})",
                                 "src_id": active_src,
@@ -2906,7 +2903,7 @@ usrpAGC = -20,10,100
                 for mt in get_matrix_translated_targets(dst_tg, slot):
                     t_tg = mt["tg"]
                     t_slot = mt["slot"]
-                    if t_tg > 0 and (t_tg, t_slot) != (dst_tg, slot):
+                    if t_tg > 0 and t_tg != dst_tg:
                         translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
                         packets_to_route.append((t_tg, t_slot, translated_pkt))
                         if not is_local_mmdvm:
@@ -2939,7 +2936,7 @@ usrpAGC = -20,10,100
                 return
 
             # Single-Source Audio Invariant: Only decode via direct_dmr if Analog_Bridge/MMDVM_Bridge is not active.
-            # When Analog_Bridge is running, ab_rx_loop streams continuous 20ms PCM; double-decoding causes buffer overlap/crackling.
+            # When Analog_Bridge is running, ab_rx_loop streams continuous 20ms PCM; double-decoding causes buffer overlap/slowdown.
             ab_running = bool(
                 self.ab_proc and self.ab_proc.poll() is None and self.mmdvm_proc and self.mmdvm_proc.poll() is None
             )
@@ -3039,7 +3036,7 @@ usrpAGC = -20,10,100
     def handle_peer_traffic(self, traffic: dict):
         """
         Handles incoming DMR traffic from upstream peer (e.g. BRIDI).
-        Suppresses loopback, applies TG Matrix translations, and broadcasts to local hotspots + MMDVM_Bridge (Web/Mumble).
+        Suppresses loopback, applies TG Matrix translations, and broadcasts to local hotspots + MMDVM_Bridge (Web/DVSwitch/Mumble).
         """
         try:
             src_id = traffic.get("src_id", 0)
@@ -3052,6 +3049,14 @@ usrpAGC = -20,10,100
             # 1. Loopback suppression: if transmission originated locally, drop!
             if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id):
                 return
+
+            # 1b. Multi-peer deduplication: if another peer is already streaming this exact (src_id, dst_tg) within 0.5s, drop duplicate!
+            if not hasattr(self, "_active_peer_streams"):
+                self._active_peer_streams = {}
+            stream_lock = self._active_peer_streams.get((src_id, dst_tg))
+            if stream_lock and stream_lock[0] != network_name and (now - stream_lock[1]) < 0.5:
+                return
+            self._active_peer_streams[(src_id, dst_tg)] = (network_name, now)
 
             # 2. Check TG Matrix bridging: drop incoming peer traffic ONLY if explicitly disabled
             if not is_tg_bridged_to_peer(dst_tg, network_name, [dst_tg]):
@@ -3076,13 +3081,13 @@ usrpAGC = -20,10,100
                 }
 
             # 3. Forward DMRD frame (and any TG Matrix translated frames) to our local DMR Master Server
-            # so all connected local hotspots and MMDVM_Bridge (Web Audio/Mumble) hear it!
+            # so all connected local hotspots and MMDVM_Bridge (Web Audio/DVSwitch/Mumble) hear it!
             if self.dmr_master_server and raw_packet:
                 self.dmr_master_server.broadcast_dmrd(raw_packet)
                 for mt in get_matrix_translated_targets(dst_tg, slot):
                     t_tg = mt["tg"]
                     t_slot = mt["slot"]
-                    if t_tg > 0 and (t_tg, t_slot) != (dst_tg, slot):
+                    if t_tg > 0 and t_tg != dst_tg:
                         translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
                         self.active_talkers_by_tg[t_tg] = {
                             "src": src_id,

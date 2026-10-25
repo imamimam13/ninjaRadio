@@ -694,6 +694,19 @@ class HomeBrewMasterServer:
         stream_id = int.from_bytes(data[16:20], "big")
         now = time.time()
 
+        # Deduplicate identical DMR voice bursts within 45ms so MMDVM_Bridge never gets double-fed
+        if data_type == 1 and len(data) >= 53:
+            burst_sig = (src_id, dst_tg, stream_id, dtype_vseq, data[20:53])
+            last_sig_time = getattr(self, "_last_burst_sigs", {}).get(burst_sig, 0.0)
+            if (now - last_sig_time) < 0.045:
+                return
+            if not hasattr(self, "_last_burst_sigs"):
+                self._last_burst_sigs = {}
+            self._last_burst_sigs[burst_sig] = now
+            if len(self._last_burst_sigs) > 128:
+                cutoff = now - 0.2
+                self._last_burst_sigs = {k: v for k, v in self._last_burst_sigs.items() if v > cutoff}
+
         self.total_tx_packets += 1
 
         sender_call = lookup_callbook_callsign(src_id)
@@ -759,15 +772,30 @@ class HomeBrewMasterServer:
             target_slot = orig_slot
 
             if is_local_bridge:
-                # If this transmission originated locally from Direct Web PTT or local USRP,
-                # local MMDVM_Bridge (Analog_Bridge) does NOT need to decode it to PCM because Web PTT and
-                # DVSwitch Mobile already stream pristine PCM directly without loss.
-                # Dropping it here prevents Analog_Bridge from generating a delayed (2-3s) duplicate echo loopback.
                 if self.get_active_local_tx(src_id) is not None:
                     continue
-                # Local MMDVM_Bridge (DVSwitch.ini) on 127.0.0.1 must receive external DMR voice on Slot 2
-                # so Analog_Bridge & Dashboard Web Audio stream flawlessly!
-                target_slot = 2
+                is_primary_bridge = (addr[1] == 62032)
+                if is_primary_bridge:
+                    p_tg = getattr(self, "_primary_bridge_tg", 0)
+                    p_until = getattr(self, "_primary_bridge_until", 0.0)
+                    if p_tg and p_tg != dst_tg and now < p_until:
+                        # Primary bridge is busy decoding another TG; let the dedicated worker handle dst_tg
+                        continue
+                    self._primary_bridge_tg = dst_tg
+                    self._primary_bridge_until = (now + 0.25) if data_type == 2 else (now + 1.5)
+                    target_slot = 2
+                else:
+                    # Worker MMDVM_Bridge (ports 62033+): ONLY deliver if subscribed to dst_tg AND primary bridge is busy on another TG!
+                    ts1_tgs = client.get("ts1_tgs") or []
+                    ts2_tgs = client.get("ts2_tgs") or []
+                    if dst_tg not in ts1_tgs and dst_tg not in ts2_tgs:
+                        continue
+                    p_tg = getattr(self, "_primary_bridge_tg", 0)
+                    p_until = getattr(self, "_primary_bridge_until", 0.0)
+                    if p_tg == dst_tg and now < p_until:
+                        # Primary bridge is already decoding dst_tg; skip worker to prevent 2x QEMU md380-emu load & duplicate audio
+                        continue
+                    target_slot = 1 if (dst_tg in ts1_tgs and dst_tg not in ts2_tgs) else 2
             else:
                 ts1_tgs = client.get("ts1_tgs") or []
                 ts2_tgs = client.get("ts2_tgs") or []
