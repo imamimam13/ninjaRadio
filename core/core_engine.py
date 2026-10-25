@@ -1409,20 +1409,8 @@ usrpAGC = -20,10,100
 
                     if key_flag == 1 and len(pcm_payload) >= 320:
                         w["rx_active"] = True
-                        chunk_320 = pcm_payload[:320]
-                        # Forward audio frame strictly to DVSwitch Mobile clients tuned to this worker's TG
-                        try:
-                            usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, chunk_320)
-                            self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=tg)
-                        except Exception:
-                            pass
                     elif key_flag == 0 and w.get("rx_active"):
                         w["rx_active"] = False
-                        try:
-                            unkey_fwd = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
-                            self.broadcast_to_usrp_clients(unkey_fwd, tg=tg)
-                        except Exception:
-                            pass
                         w["rx_src"] = 0
                         w["rx_call"] = ""
             except asyncio.CancelledError:
@@ -1465,8 +1453,14 @@ usrpAGC = -20,10,100
         except Exception as e:
             logger.error(f"Failed to initialize DirectDmrEngine: {e}")
 
-        # Start DVSwitch daemons (md380-emu, Analog_Bridge, MMDVM_Bridge)
-        self.start_daemons()
+        # Start DVSwitch daemons (md380-emu, Analog_Bridge, MMDVM_Bridge) only if explicitly enabled in config
+        # (Kept 100% intact in codebase for future cross-mode / hardware bridge use)
+        if bool(self.config.get("enable_legacy_ab_daemons", False)):
+            self.start_daemons()
+            asyncio.create_task(self.run_process_watchdog())
+            asyncio.create_task(self.restore_configured_workers())
+        else:
+            logger.info("⚡ Direct Multi-TG C++ Vocoder Mode active (Web, DVSwitch Mobile, Mumble -> 100% Direct PCM<->DMR). Multi-Analog_Bridge workers standby.")
 
         # 1. Listen on UDP 32001 (where Analog_Bridge emits decoded 8kHz 16-bit PCM)
         try:
@@ -1498,9 +1492,6 @@ usrpAGC = -20,10,100
         except Exception as e:
             logger.error(f"Failed to bind Web PTT ingress port {WEB_PTT_PORT}: {e}")
 
-        # 3. Process Watchdog
-        asyncio.create_task(self.run_process_watchdog())
-
         # 4. DMR Metadata Monitor
         asyncio.create_task(self.run_dvswitch_metadata_monitor())
 
@@ -1509,9 +1500,6 @@ usrpAGC = -20,10,100
 
         # 6. Synchronize Native DMR Upstream Peer Clients (e.g., BRIDI)
         asyncio.create_task(self.sync_peer_clients())
-
-        # 7. Auto-restore configured on-demand workers
-        asyncio.create_task(self.restore_configured_workers())
 
     async def restore_configured_workers(self):
         """Restores configured workers after engine boots."""
@@ -1751,165 +1739,19 @@ usrpAGC = -20,10,100
 
     async def run_ab_pcm_rx_loop(self):
         """
-        Receives 8kHz 16-bit PCM USRP frames decoded by Analog_Bridge + md380-emu.
-        Dedicated strictly to external DVSwitch Mobile clients (and Mumble VoIP).
-        Web (/dashboard and /radio) uses DirectDmrEngine (PCM <-> DMR directly without Analog_Bridge).
+        Receives 8kHz 16-bit PCM USRP frames decoded by Analog_Bridge + md380-emu (when legacy daemons are enabled).
+        Note: Web, Mumble, and DVSwitch Mobile are now 100% served directly by DirectDmrEngine (Multi-TG C++ Vocoder).
         """
         loop = asyncio.get_running_loop()
-        logger.info("📻 Started DVSwitch PCM Audio Rx loop (DVSwitch Mobile dedicated).")
-        last_tlv_push_time = 0.0
+        logger.info("📻 Started DVSwitch PCM Audio Rx loop (Standby for legacy Analog_Bridge).")
         while self.running:
             try:
                 data, _ = await loop.sock_recvfrom(self.ab_pcm_sock, 2048)
-                if len(data) >= 32 and data.startswith(b"USRP"):
-                    self.rx_packet_count += 1
-                    magic, seq, mem, key_flag, talkgroup = struct.unpack(">4sIIII", data[:20])
-                    field4, = struct.unpack(">I", data[20:24])
-                    usrp_type = (field4 >> 24) & 0xFF
-                    if usrp_type == 0 and field4 in (2, 3, 4):
-                        usrp_type = field4
-                    mpxid, res = struct.unpack(">II", data[24:32])
-                    pcm_payload = data[32:]
-                    if key_flag == 0 and usrp_type == 0 and len(pcm_payload) >= 14 and pcm_payload[0] == TLV_TAG_SET_INFO:
-                        if parse_set_info_tlv(pcm_payload) is not None:
-                            usrp_type = USRP_TYPE_TEXT
-
-                    # Handle USRP_TYPE_TEXT (2) metadata packets exported by Analog_Bridge
-                    if usrp_type == 2 and len(pcm_payload) > 0:
-                        try:
-                            # 1. Official binary TLV SET_INFO frame (tag 0x08)
-                            tlv_info = parse_set_info_tlv(pcm_payload)
-                            if tlv_info:
-                                tlv_src = tlv_info["src"]
-                                tlv_tg = tlv_info["tg"]
-                                tlv_slot = tlv_info["slot"]
-                                raw_call = (tlv_info["callsign"] or "").strip()
-
-                                # Self-echo / local TX guard: Do not let Analog_Bridge loopback TLV overwrite DVSwitch Mobile display with BD62BOT
-                                is_local_tlv = self.is_transmitting or (
-                                    tlv_src > 0 and self.dmr_master_server and self.dmr_master_server.is_local_transmission(tlv_src)
-                                )
-                                if is_local_tlv:
-                                    continue
-
-                                # If Analog_Bridge sends src=0 or missing, recover from active_talkers_by_tg
-                                if tlv_src <= 0:
-                                    talker = self.active_talkers_by_tg.get(tlv_tg or self.current_rx_tg, {})
-                                    if talker.get("src", 0) > 10000:
-                                        tlv_src = int(talker["src"])
-                                    elif raw_call:
-                                        tlv_src = lookup_callbook_dmr_id(raw_call) or 0
-
-                                if tlv_src > 0:
-                                    self.current_rx_src = tlv_src
-                                    self.last_rx_src = tlv_src
-
-                                if tlv_tg > 0:
-                                    self.current_rx_tg = tlv_tg
-                                self.current_rx_slot = tlv_slot
-
-                                cb_call_full = lookup_callbook_callsign(tlv_src, include_name=True) if tlv_src > 0 else None
-                                cb_call_only = lookup_callbook_callsign(tlv_src, include_name=False) if tlv_src > 0 else None
-                                if cb_call_only:
-                                    self.current_rx_call = cb_call_only
-                                    mobile_display_call = cb_call_full or cb_call_only
-                                elif raw_call and not raw_call.isdigit() and raw_call != str(tlv_src):
-                                    self.current_rx_call = raw_call.split()[0]
-                                    mobile_display_call = raw_call
-                                else:
-                                    self.current_rx_call = f"ID-{tlv_src}" if tlv_src > 0 else "DMR Station"
-                                    mobile_display_call = self.current_rx_call
-
-                                if tlv_src > 0 and self.current_rx_tg > 0:
-                                    self.active_talkers_by_tg[self.current_rx_tg] = {
-                                        "src": tlv_src,
-                                        "callsign": self.current_rx_call,
-                                        "slot": self.current_rx_slot,
-                                        "time": time.time()
-                                    }
-                                    # Forward authentic TLV SET_INFO + INFO JSON directly to DVSwitch Mobile clients
-                                    try:
-                                        display_call = self.current_rx_call or mobile_display_call or f"ID-{tlv_src}"
-                                        fwd_tlv = build_set_info_tlv(tlv_src, tlv_info.get("rpt", 0), self.current_rx_tg, self.current_rx_slot, tlv_info.get("cc", 1), display_call)
-                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=self.current_rx_tg, exclude_addr=self.active_tx_client_addr)
-                                    except Exception as ex:
-                                        logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
-                            else:
-                                meta_str = pcm_payload.decode("ascii", errors="ignore").strip()
-                                logger.info(f"📋 USRP Text Metadata: {meta_str}")
-                                m_call = re.search(r'(?:call|callsign)\s*[:=]\s*([A-Za-z0-9/_-]+)', meta_str, re.IGNORECASE)
-                                m_id = re.search(r'(?:id|dmr_id|src)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
-                                m_tg = re.search(r'(?:tg|talkgroup|dst)\s*[:=]\s*(\d+)', meta_str, re.IGNORECASE)
-                                if m_call:
-                                    self.current_rx_call = m_call.group(1)
-                                if m_id:
-                                    self.current_rx_src = int(m_id.group(1))
-                                    self.last_rx_src = self.current_rx_src
-                                if m_tg:
-                                    self.current_rx_tg = int(m_tg.group(1))
-                        except Exception as e:
-                            logger.debug(f"Metadata parse note: {e}")
-                        continue
-
-                    # Resolve incoming talker info (never use operator's own identity as RX talker)
-                    primary_tg = int(self.primary_tg or self.config.get("primary_tg", 1025))
-                    active_tg = self.current_rx_tg if self.current_rx_tg > 0 else (talkgroup if (0 < talkgroup < 16777215) else primary_tg)
-
-                    now = time.time()
-                    # If talker identity or TG is not yet known, inspect active_talkers_by_tg for the most recent active talker (within 4.0s)
-                    if self.current_rx_src <= 0 or self.current_rx_tg <= 0:
-                        recent_tg = 0
-                        recent_time = 0
-                        for tg_cand, t_info in self.active_talkers_by_tg.items():
-                            if t_info.get("time", 0) > recent_time and (now - t_info.get("time", 0) < 4.0):
-                                recent_time = t_info["time"]
-                                recent_tg = tg_cand
-                        if recent_tg > 0:
-                            active_tg = recent_tg
-                            self.current_rx_tg = recent_tg
-                            talker_for_tg = self.active_talkers_by_tg.get(active_tg, {})
-                            self.current_rx_src = talker_for_tg.get("src", 0)
-                            self.current_rx_call = talker_for_tg.get("callsign", "")
-                            self.current_rx_slot = talker_for_tg.get("slot", 2)
-
-                    talker_for_tg = self.active_talkers_by_tg.get(active_tg, {})
-                    active_slot = self.current_rx_slot if self.current_rx_slot > 0 else (talker_for_tg.get("slot") or 2)
-                    active_src = self.current_rx_src if self.current_rx_src > 0 else (talker_for_tg.get("src") or self.last_rx_src)
-                    active_call = self.current_rx_call or talker_for_tg.get("callsign") or (lookup_callbook_callsign(active_src) if active_src > 0 else None) or (f"ID-{active_src}" if active_src > 0 else "DMR Station")
-
-                    # Refresh active timestamp while receiving audio packets
-                    self.current_rx_time = now
-                    self.current_rx_active = True
-
-                    # Self-echo suppression: If this incoming frame on port 32001 is from our own active Web PTT transmission,
-                    # drop it so it does not loop back into DVSwitch Mobile!
-                    is_local = self.is_transmitting or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(active_src))
-                    if is_local and (active_src == self.current_tx_dmr_id or active_src == self.current_operator_dmr_id):
-                        continue
-
-                    # Forward standard voice frame strictly to external USRP clients (DVSwitch Mobile)
-                    if key_flag == 1 and len(pcm_payload) >= 320:
-                        try:
-                            usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, pcm_payload[:320])
-                            self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=active_tg)
-                        except Exception:
-                            pass
-                    elif key_flag == 0:
-                        # Voice Terminator to DVSwitch Mobile
-                        try:
-                            unkey_fwd = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
-                            self.broadcast_to_usrp_clients(unkey_fwd, tg=active_tg)
-                        except Exception:
-                            pass
-                        self.current_rx_active = False
-                        self.current_rx_tg = 0
-                        self.current_rx_src = 0
-                        self.current_rx_call = ""
-                        self.current_dvswitch_talker_src = 0
+                # Drain socket cleanly; DirectDmrEngine handles all live RX audio for Web, Mumble, and DVSwitch Mobile
             except Exception as e:
                 if self.running:
                     logger.debug(f"ab_pcm_rx_loop note: {e}")
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.05)
 
     def send_set_info_to_ab(self, src: int, callsign: str, tg: int, slot: int, port: int = AB_USRP_RX_PORT):
         """Sends official DVSwitch TLV SET_INFO frame to Analog_Bridge before audio frames."""
@@ -2225,6 +2067,8 @@ usrpAGC = -20,10,100
                             active_id = self.current_tx_dmr_id or client_meta_unkey.get("src") or dmr_id or self.last_dvswitch_identity.get("src") or self.current_operator_dmr_id or default_server_id
                             active_call = getattr(self, "current_tx_callsign", "") or client_meta_unkey.get("callsign") or lookup_callbook_callsign(active_id) or self.last_dvswitch_identity.get("callsign") or self.current_operator_callsign or f"ID-{active_id}"
                             self.stop_carrier_tx(active_tg, active_slot, active_id)
+                            if self.direct_dmr:
+                                self.direct_dmr.push_web_ptt_pcm(active_call, active_id, active_tg, active_slot, b"", is_tx=False)
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
                                 "host": f"{addr[0]}:{addr[1]}",
@@ -2303,20 +2147,10 @@ usrpAGC = -20,10,100
                                 logger.warning(f"🛑 [TX-FIREWALL] Blocked PTT from {addr} ({target_call} - {target_dmr_id}) to TG {target_tg}: {reason}")
                             continue
 
-                        # Check if a dedicated on-demand worker is active for target_tg (FIXED: check "ab_proc", not "proc")
-                        target_worker_port = AB_USRP_RX_PORT
-                        for w in self.bridge_workers.values():
-                            ab_p = w.get("ab_proc")
-                            if w.get("tg") == target_tg and ab_p and ab_p.poll() is None:
-                                target_worker_port = w.get("usrp_rx_port", AB_USRP_RX_PORT)
-                                w["tx_packets"] = w.get("tx_packets", 0) + 1
-                                break
-
                         if self.dmr_master_server:
                             self.dmr_master_server.mark_local_transmission(target_dmr_id, target_tg, target_slot)
 
                         if not self.tx_identity_sent or not self.is_transmitting or self.current_tx_tg != target_tg or self.current_tx_dmr_id != target_dmr_id:
-                            self.send_set_info_to_ab(target_dmr_id, target_call, target_tg, target_slot, port=target_worker_port)
                             self.tx_identity_sent = True
                             self.is_transmitting = True
                             self.active_tx_client_addr = addr
@@ -2325,7 +2159,7 @@ usrpAGC = -20,10,100
                             self.current_tx_dmr_id = target_dmr_id
                             self.current_tx_callsign = target_call
                             self.current_tx_start_time = now
-                            logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot}, Port: {target_worker_port})")
+                            logger.info(f"[USRP-Ingress] 🔴 Direct Multi-TG PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot})")
 
                             # Forward TLV SET_INFO to external DVSwitch clients tuned to this TG so they display caller identity
                             try:
@@ -2337,18 +2171,18 @@ usrpAGC = -20,10,100
                         self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                         chunk_pcm = payload[:320]
                         std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk_pcm)
-                        try:
-                            self.bridge_sock.sendto(std_pkt, ("127.0.0.1", target_worker_port))
-                        except Exception as e:
-                            logger.debug(f"Error forwarding USRP to Analog_Bridge port {target_worker_port}: {e}")
 
-                        # Forward audio burst to external DVSwitch Mobile clients tuned to target_tg
+                        # Encode directly to DMRD via DirectDmrEngine (Multi-TG C++ Vocoder)
+                        if self.direct_dmr:
+                            self.direct_dmr.push_web_ptt_pcm(target_call, target_dmr_id, target_tg, target_slot, chunk_pcm, is_tx=True)
+
+                        # Forward audio burst to other external DVSwitch Mobile clients tuned to target_tg
                         try:
                             self.broadcast_to_usrp_clients(std_pkt, tg=target_tg, exclude_addr=addr)
                         except Exception:
                             pass
 
-                        # Forward audio burst to Mumble Bridge so Mumble clients hear Web PTT / DVSwitch Mobile
+                        # Forward audio burst to Mumble Bridge so Mumble clients hear DVSwitch Mobile
                         mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq & 0x7FFFFFFF, 0, 1, target_tg, target_dmr_id, target_slot, 0) + chunk_pcm
                         try:
                             self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
@@ -2358,7 +2192,7 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
 
-                        # Forward audio burst to Web Audio Player & keep ACTIVE_STREAMS alive (eliminates 2s cutoff)
+                        # Forward audio burst to Web Audio Player & keep ACTIVE_STREAMS alive
                         traffic_event = {
                             "network": f"DVSwitch Mobile ({addr[0]})",
                             "src_id": target_dmr_id,
@@ -2622,12 +2456,13 @@ usrpAGC = -20,10,100
             self.dmr_master_server.server_dmr_id = int(self.config.get("server_dmr_id", 5109999))
             if "parrot_tgs" in self.config and isinstance(self.config["parrot_tgs"], list):
                 self.dmr_master_server.parrot_tgs = [int(x) for x in self.config["parrot_tgs"]]
-        self.stop_bridge_daemons()
-        self.generate_configs()
-        time.sleep(0.3)
-        self.start_daemons()
+        if bool(self.config.get("enable_legacy_ab_daemons", False)):
+            self.stop_bridge_daemons()
+            self.generate_configs()
+            time.sleep(0.3)
+            self.start_daemons()
         await self.sync_peer_clients()
-        logger.info("✓ DVSwitch stack restarted with updated configuration.")
+        logger.info("✓ Configuration reloaded.")
 
     def tune_remote(self, tg: int, slot: int):
         """Sends DVSwitch TLV Remote Command to dynamically tune txTg and txTs in Analog_Bridge."""
@@ -2792,6 +2627,44 @@ usrpAGC = -20,10,100
                 port=AB_USRP_RX_PORT
             )
 
+    def _broadcast_direct_rx_to_dvswitch_mobile(self, src_id: int, callsign: str, tg: int, slot: int, data_type: int, decoded_pcm: bytes):
+        """
+        Streams decoded PCM (and TLV SET_INFO caller metadata) directly from DirectDmrEngine
+        to all external DVSwitch Mobile clients tuned to `tg` (Multi-TG Switchboard).
+        """
+        if not self.registered_usrp_clients:
+            return
+        try:
+            now = time.time()
+            if not hasattr(self, "_last_dvs_tlv_by_tg"):
+                self._last_dvs_tlv_by_tg = {}
+            last_tlv = self._last_dvs_tlv_by_tg.get(tg, (0, 0.0))
+
+            # Send TLV SET_INFO on voice header (data_type == 0) or when talker changes / every 2.0s for late-entry
+            if data_type == 0 or (data_type == 1 and (last_tlv[0] != src_id or (now - last_tlv[1]) > 2.0)):
+                self._last_dvs_tlv_by_tg[tg] = (src_id, now)
+                cb_full = lookup_callbook_callsign(src_id, include_name=True) if src_id > 0 else None
+                display_call = cb_full or callsign or f"ID-{src_id}"
+                rpt_id = int(self.config.get("server_dmr_id", 5109999))
+                fwd_tlv = build_set_info_tlv(src_id, rpt_id, tg, slot, 1, display_call)
+                self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                self.broadcast_to_usrp_clients(build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=tg, exclude_addr=self.active_tx_client_addr)
+
+            if data_type == 1 and decoded_pcm:
+                for offset in range(0, len(decoded_pcm), 320):
+                    chunk_320 = decoded_pcm[offset:offset + 320]
+                    if len(chunk_320) == 320:
+                        self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                        usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk_320)
+                        self.broadcast_to_usrp_clients(usrp_pkt, tg=tg, exclude_addr=self.active_tx_client_addr)
+            elif data_type == 2:
+                self._last_dvs_tlv_by_tg.pop(tg, None)
+                self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                unkey_pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
+                self.broadcast_to_usrp_clients(unkey_pkt, tg=tg, exclude_addr=self.active_tx_client_addr)
+        except Exception as e:
+            logger.debug(f"_broadcast_direct_rx_to_dvswitch_mobile note: {e}")
+
     def handle_dmr_master_traffic(self, traffic: dict):
         """Callback from HomeBrewMasterServer when an external hotspot or MMDVM_Bridge transmits."""
         try:
@@ -2860,9 +2733,10 @@ usrpAGC = -20,10,100
             if is_local_mmdvm:
                 return
 
-            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio) and Mumble without Analog_Bridge
+            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
             decoded_pcm = b""
-            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            data_type = traffic.get("data_type", 1)
+            if data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
@@ -2873,6 +2747,10 @@ usrpAGC = -20,10,100
                 if r_tg in seen_web_tgs:
                     continue
                 seen_web_tgs.add(r_tg)
+                # 1. Stream Multi-TG USRP directly to external DVSwitch Mobile clients tuned to r_tg
+                self._broadcast_direct_rx_to_dvswitch_mobile(src_id, callsign, r_tg, r_slot, data_type, decoded_pcm)
+
+                # 2. Stream to Web (/dashboard & /radio) and Mumble
                 traffic_event = {
                     "network": traffic.get("network", "Local DMR Master (62031)"),
                     "src_id": src_id,
@@ -2880,7 +2758,7 @@ usrpAGC = -20,10,100
                     "slot": r_slot,
                     "callsign": callsign,
                     "is_tx": False,
-                    "data_type": traffic.get("data_type", 1)
+                    "data_type": data_type
                 }
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
@@ -2971,8 +2849,8 @@ usrpAGC = -20,10,100
     def handle_peer_traffic(self, traffic: dict):
         """
         Handles incoming DMR traffic from upstream peer (e.g. BRIDI).
-        Suppresses loopback, applies TG Matrix translations, and broadcasts to local hotspots + MMDVM_Bridge (DVSwitch).
-        Decodes DMR -> PCM directly via DirectDmrEngine (libopendmr.so) for Web (/dashboard & /radio) and Mumble.
+        Suppresses loopback, applies TG Matrix translations, and broadcasts to local hotspots.
+        Decodes DMR -> PCM directly via DirectDmrEngine (libopendmr.so) for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile.
         """
         try:
             src_id = traffic.get("src_id", 0)
@@ -3000,7 +2878,7 @@ usrpAGC = -20,10,100
 
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
-            # Update live RX metadata immediately so Analog_Bridge & Worker PCM loops know the caller even on late entry!
+            # Update live RX metadata immediately
             self.current_rx_src = src_id
             self.current_rx_tg = dst_tg
             self.current_rx_slot = slot
@@ -3017,7 +2895,7 @@ usrpAGC = -20,10,100
                 }
 
             # 3. Forward DMRD frame (and any TG Matrix translated frames) to our local DMR Master Server
-            # so all connected local hotspots and MMDVM_Bridge (DVSwitch Mobile) hear it!
+            # so all connected local hotspots hear it!
             routed_tgs = [(dst_tg, slot)]
             if self.dmr_master_server and raw_packet:
                 self.dmr_master_server.broadcast_dmrd(raw_packet)
@@ -3036,20 +2914,25 @@ usrpAGC = -20,10,100
                         if (t_tg, t_slot) not in routed_tgs:
                             routed_tgs.append((t_tg, t_slot))
 
-            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio) and Mumble without Analog_Bridge
+            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
             decoded_pcm = b""
-            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            data_type = traffic.get("data_type", 1)
+            if data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
                     pass
 
-            # 4. Last heard & live traffic event to backend (at most once per unique TG)
+            # 4. Last heard & live traffic event to backend + DVSwitch Mobile + Mumble (at most once per unique TG)
             seen_web_tgs = set()
             for r_tg, r_slot in routed_tgs:
                 if r_tg in seen_web_tgs:
                     continue
                 seen_web_tgs.add(r_tg)
+                # 1. Stream Multi-TG USRP directly to external DVSwitch Mobile clients tuned to r_tg
+                self._broadcast_direct_rx_to_dvswitch_mobile(src_id, callsign, r_tg, r_slot, data_type, decoded_pcm)
+
+                # 2. Stream to Web (/dashboard & /radio) and Mumble
                 traffic_event = {
                     "network": f"Peer: {network_name}",
                     "src_id": src_id,
@@ -3057,7 +2940,7 @@ usrpAGC = -20,10,100
                     "slot": r_slot,
                     "callsign": callsign,
                     "is_tx": False,
-                    "data_type": traffic.get("data_type", 1)
+                    "data_type": data_type
                 }
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
