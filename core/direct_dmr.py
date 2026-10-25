@@ -520,7 +520,16 @@ def build_dmrd_packet(
     stream_id: Optional[int] = None,
     call_type: str = "group"
 ) -> bytes:
-    """Constructs a valid standard 53-byte HomeBrew DMRD packet."""
+    """
+    Constructs a valid standard 53-byte HomeBrew DMRD packet.
+    Byte 15 (bits) follows the official MMDVMHost / HBlink3 / Z3DMR specification:
+      - Bit 7 (0x80): Slot (0 = TS1, 1 = TS2)
+      - Bit 6 (0x40): Call Type (0 = Group, 1 = Unit/Private)
+      - Voice LC Header (data_type == 0): frame_type=2 (0x20), dtype=1 (DT_VOICE_LC_HEADER) -> 0x21
+      - Voice Burst A (data_type == 1, seq == 0): frame_type=1 (0x10), seq=0 (DT_VOICE_SYNC) -> 0x10
+      - Voice Bursts B..F (data_type == 1, seq == 1..5): frame_type=0 (0x00), seq=1..5 (DT_VOICE) -> 0x01..0x05
+      - Voice Terminator (data_type == 2): frame_type=2 (0x20), dtype=2 (DT_TERMINATOR_WITH_LC) -> 0x22
+    """
     global _stream_seq_counter
     _stream_seq_counter = (_stream_seq_counter + 1) & 0xFF
 
@@ -529,8 +538,19 @@ def build_dmrd_packet(
         bits |= 0x80
     if call_type == "unit":
         bits |= 0x40
-    bits |= (data_type & 0x03) << 4
-    bits |= (seq & 0x0F)
+
+    if data_type == 0:
+        bits |= 0x21  # Frame Type 2 (Data Sync) | DT_VOICE_LC_HEADER (1)
+    elif data_type == 1:
+        vseq = seq % 6
+        if vseq == 0:
+            bits |= 0x10  # Frame Type 1 (Voice Sync) | Burst A (0)
+        else:
+            bits |= (vseq & 0x0F)  # Frame Type 0 (Voice with Embedded LC) | Bursts B..F (1..5)
+    elif data_type == 2:
+        bits |= 0x22  # Frame Type 2 (Data Sync) | DT_TERMINATOR_WITH_LC (2)
+    else:
+        bits |= ((data_type & 0x03) << 4) | (seq & 0x0F)
 
     # For Voice Header (data_type = 0), if payload is empty, construct a valid header with BPTC(196,96) LC
     if data_type == 0 and (not payload or len(payload) == 0):
@@ -560,11 +580,14 @@ class DirectDmrEngine:
     """
     Direct Z3DMR-Style Engine for WebRTC / Web PTT:
     - Encodes 8kHz PCM to DMRD frames in real time (Zero Analog_Bridge overhead).
+    - Paces outgoing DMRD superframe bursts at strict 60ms TDMA intervals so MMDVMHost/Z3DMR never experience burst bunching or sync loss.
     - Decodes incoming DMR bursts directly to 8kHz PCM for Web Audio Player.
     - Completely eliminates resource competition with DVSwitch Mobile.
     """
 
     def __init__(self, dmr_master_broadcast_fn: Callable[[bytes], None], rpt_id: int = 5109999):
+        import queue
+        import threading
         self.vocoder = DirectOpenDmrVocoder()
         self.broadcast_fn = dmr_master_broadcast_fn
         self.rpt_id = rpt_id
@@ -582,7 +605,39 @@ class DirectDmrEngine:
         self.current_term_burst = b""
         self.tx_pcm_buffer = bytearray()
         self.last_tx_ts = 0.0
+
+        # Real-time 60ms TDMA Burst Pacer Queue
+        self._pacer_queue: "queue.Queue[Tuple[bytes, float]]" = queue.Queue()
+        self._pacer_thread = threading.Thread(target=self._run_pacer_loop, daemon=True, name="DirectDMR-TDMA-Pacer")
+        self._pacer_thread.start()
         logger.info(f"✓ Direct Z3DMR Engine ready (Vocoder available: {self.vocoder.is_available()}, version: {self.vocoder.version()})")
+
+    def _run_pacer_loop(self):
+        """Dispatches DMRD bursts at a strict 60ms monotonic cadence required by MMDVMHost and Z3DMR."""
+        next_send_mono = 0.0
+        while True:
+            try:
+                pkt, interval_s = self._pacer_queue.get()
+                now_mono = time.monotonic()
+                if next_send_mono <= 0.0 or (now_mono - next_send_mono) > 0.24:
+                    # Stream start or after idle gap: send immediately and anchor cadence clock
+                    next_send_mono = now_mono
+                elif now_mono < next_send_mono:
+                    time.sleep(next_send_mono - now_mono)
+
+                if self.broadcast_fn:
+                    try:
+                        self.broadcast_fn(pkt)
+                    except Exception as ex:
+                        logger.debug(f"[DirectDMR] Pacer broadcast error: {ex}")
+
+                next_send_mono += interval_s
+            except Exception as e:
+                logger.debug(f"[DirectDMR] Pacer loop note: {e}")
+                time.sleep(0.01)
+
+    def _enqueue_paced_pkt(self, pkt: bytes, interval_s: float = 0.060):
+        self._pacer_queue.put((pkt, interval_s))
 
     def push_web_ptt_pcm(
         self,
@@ -595,7 +650,7 @@ class DirectDmrEngine:
     ) -> List[bytes]:
         """
         Receives PCM audio chunks from Web PTT, encodes them to DMRD packets,
-        and broadcasts them directly to DMR Master and connected repeaters.
+        and broadcasts them via the 60ms TDMA pacer to DMR Master and connected repeaters.
         """
         out_packets = []
         now = time.time()
@@ -603,10 +658,14 @@ class DirectDmrEngine:
         if not is_tx:
             # PTT Released (Unkey)
             if self.in_tx:
-                # Flush residual buffer if at least 1 burst can be formed
-                if len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
-                    burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
-                    del self.tx_pcm_buffer[:BURST_PCM_BYTES]
+                # Flush any remaining PCM in buffer (pad partial burst with silence if >= 20ms)
+                while len(self.tx_pcm_buffer) >= 320:
+                    if len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
+                        burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
+                        del self.tx_pcm_buffer[:BURST_PCM_BYTES]
+                    else:
+                        burst_pcm = bytes(self.tx_pcm_buffer).ljust(BURST_PCM_BYTES, b"\x00")
+                        self.tx_pcm_buffer.clear()
                     burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                     pkt = build_dmrd_packet(
                         src_id=self.current_src_id,
@@ -619,24 +678,24 @@ class DirectDmrEngine:
                         stream_id=self.current_stream_id
                     )
                     out_packets.append(pkt)
-                    if self.broadcast_fn:
-                        self.broadcast_fn(pkt)
+                    self._enqueue_paced_pkt(pkt, 0.060)
+                    self.current_burst_seq = (self.current_burst_seq + 1) % 6
 
-                # Send DMRD Voice Terminator (data_type = 2) with valid BPTC(196,96) Terminator LC
+                # Send 2 DMRD Voice Terminators (0x22) with valid BPTC(196,96) Terminator LC for reliable RF unkey
                 term_burst = self.current_term_burst or build_dmr_terminator_burst(self.current_src_id, self.current_tg, self.current_slot)
-                term_pkt = build_dmrd_packet(
-                    src_id=self.current_src_id,
-                    dst_tg=self.current_tg,
-                    slot=self.current_slot,
-                    data_type=2,
-                    seq=0,
-                    payload=term_burst,
-                    rpt_id=self.rpt_id,
-                    stream_id=self.current_stream_id
-                )
-                out_packets.append(term_pkt)
-                if self.broadcast_fn:
-                    self.broadcast_fn(term_pkt)
+                for _ in range(2):
+                    term_pkt = build_dmrd_packet(
+                        src_id=self.current_src_id,
+                        dst_tg=self.current_tg,
+                        slot=self.current_slot,
+                        data_type=2,
+                        seq=0,
+                        payload=term_burst,
+                        rpt_id=self.rpt_id,
+                        stream_id=self.current_stream_id
+                    )
+                    out_packets.append(term_pkt)
+                    self._enqueue_paced_pkt(term_pkt, 0.030)
 
                 logger.info(f"🎙️ [DirectDMR] Unkeyed TX session for {self.current_callsign} (TG {self.current_tg})")
 
@@ -648,9 +707,9 @@ class DirectDmrEngine:
 
         # PTT Active (Keyed)
         if not self.in_tx or self.current_tg != tg or self.current_src_id != dmr_id:
-            # Start new transmission session: send DMRD Voice Header (data_type = 0)
+            # Start new transmission session: send DMRD Voice Header (0x21)
             self.in_tx = True
-            self.current_stream_id = int(now) & 0xFFFFFFFF
+            self.current_stream_id = int(now * 1000) & 0xFFFFFFFF
             self.current_burst_seq = 0
             self.current_tg = tg
             self.current_slot = slot if slot in (1, 2) else 2
@@ -667,7 +726,7 @@ class DirectDmrEngine:
                 self.vocoder.encode_frame(warmup_pcm)
                 self.vocoder.encode_frame(warmup_pcm)
 
-            # Send 3 Voice Header preamble packets (seq 0, 1, 2) per ETSI DMR / HomeBrew standard
+            # Send 3 Voice Header preamble packets (0x21) per ETSI DMR / HomeBrew standard
             for p_seq in range(3):
                 hdr_pkt = build_dmrd_packet(
                     src_id=self.current_src_id,
@@ -680,11 +739,10 @@ class DirectDmrEngine:
                     stream_id=self.current_stream_id
                 )
                 out_packets.append(hdr_pkt)
-                if self.broadcast_fn:
-                    self.broadcast_fn(hdr_pkt)
-            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id}, 3x Preamble sent)")
+                self._enqueue_paced_pkt(hdr_pkt, 0.020)
+            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id}, 3x Preamble 0x21 sent)")
 
-        # Accumulate PCM and encode 960-byte (60ms) superframes
+        # Accumulate PCM and encode 960-byte (60ms) bursts
         if pcm_chunk:
             self.tx_pcm_buffer.extend(pcm_chunk)
             self.last_tx_ts = now
@@ -715,8 +773,7 @@ class DirectDmrEngine:
                     stream_id=self.current_stream_id
                 )
                 out_packets.append(pkt)
-                if self.broadcast_fn:
-                    self.broadcast_fn(pkt)
+                self._enqueue_paced_pkt(pkt, 0.060)
 
                 self.current_burst_seq = (self.current_burst_seq + 1) % 6
 

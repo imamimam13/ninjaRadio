@@ -401,8 +401,29 @@ class HomeBrewClient:
             bits = data[15]
             slot = 2 if (bits & 0x80) else 1
             call_type = "unit" if (bits & 0x40) else "group"
-            data_type = (bits & 0x30) >> 4  # 0=Header, 1=Voice, 2=Terminator, 3=Data
-            sequence = bits & 0x0F  # Burst sequence 0..5 (A..F)
+            frame_type = (bits & 0x30) >> 4
+            dtype_vseq = bits & 0x0F
+            if frame_type == 2:
+                if dtype_vseq == 1:
+                    data_type = 0  # Voice LC Header (0x21)
+                elif dtype_vseq in (0, 2):
+                    data_type = 2  # Voice Terminator with LC (0x22 or legacy 0x20)
+                else:
+                    data_type = 3  # CSBK / Data
+                sequence = 0
+            elif frame_type == 1:
+                data_type = 1      # Voice Burst A (0x10)
+                sequence = dtype_vseq
+            elif frame_type == 0:
+                if dtype_vseq in (1, 2, 3, 4, 5):
+                    data_type = 1  # Voice Bursts B..F (0x01..0x05)
+                    sequence = dtype_vseq
+                else:
+                    data_type = 0  # Legacy Voice Header (0x00)
+                    sequence = 0
+            else:
+                data_type = 3
+                sequence = dtype_vseq
             stream_id = int.from_bytes(data[16:20], "big")
             payload = data[20:]
 
@@ -456,8 +477,15 @@ class HomeBrewClient:
             bits |= 0x80
         if call_type == "unit":
             bits |= 0x40
-        bits |= ((data_type & 0x03) << 4)
-        bits |= (sequence & 0x0F)
+        if data_type == 0:
+            bits |= 0x21
+        elif data_type == 1:
+            vseq = sequence % 6
+            bits |= 0x10 if vseq == 0 else (vseq & 0x0F)
+        elif data_type == 2:
+            bits |= 0x22
+        else:
+            bits |= ((data_type & 0x03) << 4) | (sequence & 0x0F)
         bits_byte = struct.pack("B", bits)
 
         stream_id_bytes = struct.pack(">I", int(time.time()) & 0xFFFFFFFF)

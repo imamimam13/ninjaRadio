@@ -484,8 +484,29 @@ class HomeBrewMasterServer:
             bits = data[15]
             slot = 2 if (bits & 0x80) else 1
             call_type = "unit" if (bits & 0x40) else "group"
-            data_type = (bits & 0x30) >> 4  # 0=Header, 1=Voice Burst, 2=Voice Terminator, 3=CSBK
-            sequence = bits & 0x0F  # 0..5 (Burst A..F)
+            frame_type = (bits & 0x30) >> 4
+            dtype_vseq = bits & 0x0F
+            if frame_type == 2:
+                if dtype_vseq == 1:
+                    data_type = 0  # Voice LC Header (0x21)
+                elif dtype_vseq in (0, 2):
+                    data_type = 2  # Voice Terminator with LC (0x22 or legacy 0x20)
+                else:
+                    data_type = 3  # CSBK / Data
+                sequence = 0
+            elif frame_type == 1:
+                data_type = 1      # Voice Burst A (0x10)
+                sequence = dtype_vseq
+            elif frame_type == 0:
+                if dtype_vseq in (1, 2, 3, 4, 5):
+                    data_type = 1  # Voice Bursts B..F (0x01..0x05)
+                    sequence = dtype_vseq
+                else:
+                    data_type = 0  # Legacy Voice Header (0x00)
+                    sequence = 0
+            else:
+                data_type = 3
+                sequence = dtype_vseq
             stream_id = int.from_bytes(data[16:20], "big")
             payload = data[20:]
 
@@ -561,19 +582,17 @@ class HomeBrewMasterServer:
                 # Broadcast to other connected hotspots and MMDVM_Bridge
                 self.broadcast_dmrd(data, exclude_addr=addr)
 
-            # Resolve callsign from connected clients if available
-            sender_call = None
-            if addr in self.clients:
-                sender_call = self.clients[addr].get("callsign")
-            if not sender_call or sender_call in ["HOTSPOT", "DVSWITCH"]:
-                for c in self.clients.values():
-                    if c.get("dmr_id") == src_id and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
+            # Resolve subscriber callsign by src_id FIRST (never let 127.0.0.1 MMDVM_Bridge gateway callsign overwrite subscriber identity)
+            sender_call = lookup_callbook_callsign(src_id)
+            if not sender_call:
+                for c_addr, c in self.clients.items():
+                    if c_addr[0] != "127.0.0.1" and str(c.get("dmr_id", "")).startswith(str(src_id)) and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
                         sender_call = c.get("callsign")
                         break
-            if not sender_call or sender_call in ["HOTSPOT", "DVSWITCH"]:
-                cb_call = lookup_callbook_callsign(src_id)
-                if cb_call:
-                    sender_call = cb_call
+            if not sender_call and addr in self.clients and addr[0] != "127.0.0.1":
+                cand = self.clients[addr].get("callsign")
+                if cand and cand not in ["HOTSPOT", "DVSWITCH"]:
+                    sender_call = cand
             callsign_str = sender_call or f"ID-{src_id}"
 
             # Track Active QSO stream & Last Heard list
@@ -662,21 +681,27 @@ class HomeBrewMasterServer:
         orig_bits = data[15]
         orig_slot = 2 if (orig_bits & 0x80) else 1
         call_type = "unit" if (orig_bits & 0x40) else "group"
-        data_type = (orig_bits & 0x30) >> 4
+        frame_type = (orig_bits & 0x30) >> 4
+        dtype_vseq = orig_bits & 0x0F
+        if frame_type == 2:
+            data_type = 0 if dtype_vseq == 1 else (2 if dtype_vseq in (0, 2) else 3)
+        elif frame_type == 1:
+            data_type = 1
+        elif frame_type == 0:
+            data_type = 1 if dtype_vseq in (1, 2, 3, 4, 5) else 0
+        else:
+            data_type = 3
         stream_id = int.from_bytes(data[16:20], "big")
         now = time.time()
 
         self.total_tx_packets += 1
 
-        sender_call = None
-        for c in self.clients.values():
-            if c.get("dmr_id") == src_id and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
-                sender_call = c.get("callsign")
-                break
+        sender_call = lookup_callbook_callsign(src_id)
         if not sender_call:
-            cb_call = lookup_callbook_callsign(src_id)
-            if cb_call:
-                sender_call = cb_call
+            for c_addr, c in self.clients.items():
+                if c_addr[0] != "127.0.0.1" and str(c.get("dmr_id", "")).startswith(str(src_id)) and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
+                    sender_call = c.get("callsign")
+                    break
         callsign_str = sender_call or f"ID-{src_id}"
 
         # Track Active QSO stream & Last Heard list for locally generated DMRD

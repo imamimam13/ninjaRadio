@@ -1818,6 +1818,13 @@ usrpAGC = -20,10,100
                                 tlv_slot = tlv_info["slot"]
                                 raw_call = (tlv_info["callsign"] or "").strip()
 
+                                # Self-echo / local TX guard: Do not let Analog_Bridge loopback TLV overwrite DVSwitch Mobile display with BD62BOT
+                                is_local_tlv = self.is_transmitting or (
+                                    tlv_src > 0 and self.dmr_master_server and self.dmr_master_server.is_local_transmission(tlv_src)
+                                )
+                                if is_local_tlv:
+                                    continue
+
                                 # If Analog_Bridge sends src=0 or missing, recover from active_talkers_by_tg
                                 if tlv_src <= 0:
                                     talker = self.active_talkers_by_tg.get(tlv_tg or self.current_rx_tg, {})
@@ -1857,7 +1864,7 @@ usrpAGC = -20,10,100
                                     try:
                                         display_call = self.current_rx_call or mobile_display_call or f"ID-{tlv_src}"
                                         fwd_tlv = build_set_info_tlv(tlv_src, tlv_info.get("rpt", 0), self.current_rx_tg, self.current_rx_slot, tlv_info.get("cc", 1), display_call)
-                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=self.current_rx_tg)
+                                        self.broadcast_to_usrp_clients(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=self.current_rx_tg, exclude_addr=self.active_tx_client_addr)
                                     except Exception as ex:
                                         logger.debug(f"Error broadcasting TLV to DVSwitch: {ex}")
                             else:
@@ -2069,6 +2076,12 @@ usrpAGC = -20,10,100
                                     elif any(c.isalpha() for c in token) and len(token) >= 3 and token.upper() not in ("DVSWITCH", "CLIENT", "USRP"):
                                         self.client_metadata[addr]["callsign"] = token.upper()
                                         self.last_dvswitch_identity["callsign"] = token.upper()
+                                # Resolve DMR ID from Callbook if only Callsign was given in REG:
+                                if self.client_metadata[addr].get("callsign") and not self.client_metadata[addr].get("src"):
+                                    found_id = lookup_callbook_dmr_id(self.client_metadata[addr]["callsign"]) or lookup_subscriber_csv_id(self.client_metadata[addr]["callsign"])
+                                    if found_id:
+                                        self.client_metadata[addr]["src"] = found_id
+                                        self.last_dvswitch_identity["src"] = found_id
                                 # Resolve callsign from callbook if only ID was given
                                 if self.client_metadata[addr].get("src") and (not self.client_metadata[addr].get("callsign") or self.client_metadata[addr]["callsign"].isdigit()):
                                     cb_c = lookup_callbook_callsign(self.client_metadata[addr]["src"])
@@ -2130,15 +2143,26 @@ usrpAGC = -20,10,100
 
                             if addr not in self.client_metadata:
                                 self.client_metadata[addr] = {}
-                            if c_call and c_call not in ("DVSWITCH", "CLIENT", "USRP"):
-                                self.client_metadata[addr]["callsign"] = str(c_call).upper()
-                                self.last_dvswitch_identity["callsign"] = str(c_call).upper()
+                            if c_call and str(c_call).upper() not in ("DVSWITCH", "CLIENT", "USRP"):
+                                c_call_str = str(c_call).strip().upper()
+                                if c_call_str.isdigit() and len(c_call_str) >= 6:
+                                    c_src = int(c_call_str)
+                                else:
+                                    self.client_metadata[addr]["callsign"] = c_call_str
+                                    self.last_dvswitch_identity["callsign"] = c_call_str
                             if c_src and int(c_src) > 0:
                                 self.client_metadata[addr]["src"] = int(c_src)
                                 self.last_dvswitch_identity["src"] = int(c_src)
                             if c_tg and int(c_tg) > 0:
                                 self.client_metadata[addr]["tg"] = int(c_tg)
                                 self.last_dvswitch_identity["tg"] = int(c_tg)
+
+                            # Resolve DMR ID from Callbook if only Callsign was provided
+                            if self.client_metadata[addr].get("callsign") and not self.client_metadata[addr].get("src"):
+                                found_id = lookup_callbook_dmr_id(self.client_metadata[addr]["callsign"]) or lookup_subscriber_csv_id(self.client_metadata[addr]["callsign"])
+                                if found_id:
+                                    self.client_metadata[addr]["src"] = found_id
+                                    self.last_dvswitch_identity["src"] = found_id
 
                             # Resolve missing callsign/ID from Callbook
                             if self.client_metadata[addr].get("src") and (not self.client_metadata[addr].get("callsign") or self.client_metadata[addr]["callsign"].isdigit()):
@@ -2229,18 +2253,44 @@ usrpAGC = -20,10,100
                     if is_control_pkt and len(payload) >= 14 and payload[0] == TLV_TAG_SET_INFO:
                         tlv_info = parse_set_info_tlv(payload)
                         if tlv_info:
+                            if not is_internal:
+                                self.dvswitch_client_addrs.add(addr)
                             existing = self.client_metadata.get(addr) or self.client_metadata.get(addr[0], {})
                             if tlv_info.get("tg", 0) == 0:
                                 tlv_info["tg"] = existing.get("tg", 0) or self.last_dvswitch_identity.get("tg", 0) or self.primary_tg or int(self.config.get("primary_tg", 1025))
                             if tlv_info.get("slot") not in (1, 2):
                                 tlv_info["slot"] = 2
+
+                            raw_tlv_call = (tlv_info.get("callsign") or "").strip().upper()
+                            if raw_tlv_call in ("DVSWITCH", "CLIENT", "USRP"):
+                                raw_tlv_call = ""
+                                tlv_info["callsign"] = ""
+
+                            # If callsign is actually a numeric DMR ID (e.g. typed into DVSwitch Callsign field)
+                            if tlv_info.get("src", 0) <= 0 and raw_tlv_call.isdigit() and len(raw_tlv_call) >= 6:
+                                tlv_info["src"] = int(raw_tlv_call)
+
+                            # Resolve DMR ID from Callbook / subscriber_ids.csv when DVSwitch sends Callsign with src=0
+                            if tlv_info.get("src", 0) <= 0 and raw_tlv_call and not raw_tlv_call.isdigit():
+                                found_id = lookup_callbook_dmr_id(raw_tlv_call) or lookup_subscriber_csv_id(raw_tlv_call)
+                                if found_id:
+                                    tlv_info["src"] = found_id
+
+                            # Preserve existing session src/callsign if TLV frame omitted them
+                            if tlv_info.get("src", 0) <= 0 and existing.get("src", 0) > 0:
+                                tlv_info["src"] = existing["src"]
+                            if not tlv_info.get("callsign") and existing.get("callsign"):
+                                tlv_info["callsign"] = existing["callsign"]
+
                             if (not tlv_info.get("callsign") or tlv_info["callsign"].isdigit()) and tlv_info.get("src", 0) > 0:
                                 cb_c = lookup_callbook_callsign(tlv_info["src"])
                                 if cb_c:
                                     tlv_info["callsign"] = cb_c
-                            # Strictly protect DVSwitch Mobile identity: only update last_dvswitch_identity if client is genuine DVSwitch
-                            if addr in self.dvswitch_client_addrs and tlv_info.get("src", 0) > 0:
-                                self.last_dvswitch_identity["src"] = tlv_info["src"]
+
+                            # Strictly protect DVSwitch Mobile identity: update last_dvswitch_identity when genuine DVSwitch client
+                            if addr in self.dvswitch_client_addrs:
+                                if tlv_info.get("src", 0) > 0:
+                                    self.last_dvswitch_identity["src"] = tlv_info["src"]
                                 if tlv_info.get("callsign"):
                                     self.last_dvswitch_identity["callsign"] = tlv_info["callsign"]
                                 if tlv_info.get("tg", 0) > 0:
@@ -2256,9 +2306,11 @@ usrpAGC = -20,10,100
                         default_fallback_tg = int(self.primary_tg or self.config.get("default_tg", 510))
                         default_server_id = int(self.config.get("server_dmr_id", 5109999))
                         if self.is_transmitting or self.tx_identity_sent:
-                            active_tg = self.current_tx_tg or tg or default_fallback_tg
-                            active_slot = self.current_tx_slot or slot or 2
-                            active_id = self.current_tx_dmr_id or dmr_id or self.current_operator_dmr_id or default_server_id
+                            client_meta_unkey = self.client_metadata.get(addr) or self.client_metadata.get(addr[0], {})
+                            active_tg = self.current_tx_tg or tg or client_meta_unkey.get("tg") or default_fallback_tg
+                            active_slot = self.current_tx_slot or slot or client_meta_unkey.get("slot") or 2
+                            active_id = self.current_tx_dmr_id or client_meta_unkey.get("src") or dmr_id or self.last_dvswitch_identity.get("src") or self.current_operator_dmr_id or default_server_id
+                            active_call = getattr(self, "current_tx_callsign", "") or client_meta_unkey.get("callsign") or lookup_callbook_callsign(active_id) or self.last_dvswitch_identity.get("callsign") or self.current_operator_callsign or f"ID-{active_id}"
                             self.stop_carrier_tx(active_tg, active_slot, active_id)
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
@@ -2266,7 +2318,7 @@ usrpAGC = -20,10,100
                                 "src_id": active_id,
                                 "dst_tg": active_tg,
                                 "slot": active_slot,
-                                "callsign": self.current_operator_callsign or lookup_callbook_callsign(active_id) or f"ID-{active_id}",
+                                "callsign": active_call,
                                 "is_tx": False,
                                 "is_transmitting": False,
                                 "data_type": 2
@@ -2306,6 +2358,13 @@ usrpAGC = -20,10,100
                         meta_slot = client_meta.get("slot", 2)
                         if meta_slot not in (1, 2):
                             meta_slot = 2
+
+                        # If client_meta has callsign but src is still 0, resolve src from Callbook
+                        if client_meta and client_meta.get("callsign") and not client_meta.get("src"):
+                            resolved_src = lookup_callbook_dmr_id(client_meta["callsign"]) or lookup_subscriber_csv_id(client_meta["callsign"])
+                            if resolved_src:
+                                client_meta["src"] = resolved_src
+                                self.last_dvswitch_identity["src"] = resolved_src
 
                         if client_meta and (not hdr_dmr_id or client_meta.get("src") == hdr_dmr_id):
                             target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or self.last_dvswitch_identity.get("src", 0) or self.current_operator_dmr_id or 1022057
@@ -2351,6 +2410,7 @@ usrpAGC = -20,10,100
                             self.current_tx_tg = target_tg
                             self.current_tx_slot = target_slot
                             self.current_tx_dmr_id = target_dmr_id
+                            self.current_tx_callsign = target_call
                             self.current_tx_start_time = now
                             logger.info(f"[USRP-Ingress] 🔴 PTT Keyed up from {addr} (Call: {target_call}, ID: {target_dmr_id}, TG: {target_tg}, Slot: {target_slot}, Port: {target_worker_port})")
 
@@ -2809,24 +2869,27 @@ usrpAGC = -20,10,100
             dst_tg = traffic.get("dst_tg", 0)
             slot = traffic.get("slot", 2)
             now = time.time()
+            host_str = str(traffic.get("host", ""))
+            is_local_mmdvm = host_str.startswith("127.0.0.1")
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
-            self.current_rx_src = src_id
-            self.current_rx_tg = dst_tg
-            self.current_rx_slot = slot
-            self.current_rx_call = callsign
-            self.current_rx_time = now
-            self.current_rx_active = True
-            self.last_rx_src = src_id
-            self.rx_packet_count += 1
+            if not is_local_mmdvm:
+                self.current_rx_src = src_id
+                self.current_rx_tg = dst_tg
+                self.current_rx_slot = slot
+                self.current_rx_call = callsign
+                self.current_rx_time = now
+                self.current_rx_active = True
+                self.last_rx_src = src_id
+                self.rx_packet_count += 1
 
-            if dst_tg > 0 and src_id > 0:
-                self.active_talkers_by_tg[dst_tg] = {
-                    "src": src_id,
-                    "callsign": callsign,
-                    "slot": slot,
-                    "time": now
-                }
+                if dst_tg > 0 and src_id > 0:
+                    self.active_talkers_by_tg[dst_tg] = {
+                        "src": src_id,
+                        "callsign": callsign,
+                        "slot": slot,
+                        "time": now
+                    }
 
             raw_packet = traffic.get("raw_packet")
             # Build list of (target_tg, target_slot, packet_bytes) including manual TG Matrix cross-TG mappings
@@ -2838,12 +2901,13 @@ usrpAGC = -20,10,100
                     if t_tg > 0 and (t_tg, t_slot) != (dst_tg, slot):
                         translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
                         packets_to_route.append((t_tg, t_slot, translated_pkt))
-                        self.active_talkers_by_tg[t_tg] = {
-                            "src": src_id,
-                            "callsign": callsign,
-                            "slot": t_slot,
-                            "time": now
-                        }
+                        if not is_local_mmdvm:
+                            self.active_talkers_by_tg[t_tg] = {
+                                "src": src_id,
+                                "callsign": callsign,
+                                "slot": t_slot,
+                                "time": now
+                            }
                         # Also broadcast the translated TG to local hotspots on our DMR Master Server
                         if self.dmr_master_server:
                             self.dmr_master_server.broadcast_dmrd(translated_pkt)
@@ -2862,15 +2926,26 @@ usrpAGC = -20,10,100
                                         logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
                                     break
 
-            # Decode incoming DMR burst to 8kHz PCM for Web Audio player (Zero Analog_Bridge overhead)
+            # If packet originated from local MMDVM_Bridge (127.0.0.1), USRP ingress already dispatched clean 20ms PCM to backend
+            if is_local_mmdvm:
+                return
+
+            # Single-Source Audio Invariant: Only decode via direct_dmr if Analog_Bridge/MMDVM_Bridge is not active.
+            # When Analog_Bridge is running, ab_rx_loop streams continuous 20ms PCM; double-decoding causes buffer overlap/crackling.
+            ab_running = bool(
+                self.ab_proc and self.ab_proc.poll() is None and self.mmdvm_proc and self.mmdvm_proc.poll() is None
+            )
             decoded_pcm = b""
-            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            if not ab_running and traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
                     pass
 
-            # Dispatch traffic notification to backend for live monitor & web clients
+            # Dispatch traffic notification to backend (skip empty voice burst events when ab_rx_loop is already streaming PCM)
+            if ab_running and traffic.get("data_type") == 1 and not decoded_pcm:
+                return
+
             traffic_event = {
                 "network": traffic.get("network", "Local DMR Master (62031)"),
                 "src_id": src_id,
@@ -3009,13 +3084,19 @@ usrpAGC = -20,10,100
                         }
                         self.dmr_master_server.broadcast_dmrd(translated_pkt)
 
-            # Direct vocoder decoding for Web Audio player (Zero Analog_Bridge overhead)
+            # Single-Source Audio Invariant: Only decode via direct_dmr if Analog_Bridge/MMDVM_Bridge is not active.
+            ab_running = bool(
+                self.ab_proc and self.ab_proc.poll() is None and self.mmdvm_proc and self.mmdvm_proc.poll() is None
+            )
             decoded_pcm = b""
-            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            if not ab_running and traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
                     pass
+
+            if ab_running and traffic.get("data_type") == 1 and not decoded_pcm:
+                return
 
             # 4. Last heard & live traffic event to backend
             traffic_event = {
