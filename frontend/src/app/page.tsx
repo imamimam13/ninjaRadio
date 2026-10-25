@@ -55,9 +55,9 @@ export default function DashboardPage() {
         hpf.frequency.value = 250;
         hpf.Q.value = 0.707;
 
-        // 3. Clear voice gain (natural level)
+        // 3. Clear voice gain (natural level matching /radio)
         const gainNode = ctx.createGain();
-        gainNode.gain.value = 1.1;
+        gainNode.gain.value = 1.0;
 
         // 4. Relaxed Dynamics Compressor: transparent peak protection without robotic squashing
         const comp = ctx.createDynamicsCompressor();
@@ -158,7 +158,9 @@ export default function DashboardPage() {
       }
 
       const now = ctx.currentTime;
-      if (rxNextTimeRef.current < now || rxNextTimeRef.current > now + 0.45) {
+      if (!rxNextTimeRef.current || rxNextTimeRef.current < now) {
+        rxNextTimeRef.current = now + 0.15;
+      } else if (rxNextTimeRef.current > now + 0.85) {
         rxNextTimeRef.current = now + 0.15;
       }
       source.start(rxNextTimeRef.current);

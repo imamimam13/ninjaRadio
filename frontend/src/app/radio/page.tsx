@@ -729,14 +729,27 @@ export default function RadioPocketMode() {
   const startLiveMicrophoneStream = async (tgNum: number) => {
     try {
       txAccumulatorRef.current = [];
-      let stream: MediaStream | null = armedMicStreamRef.current;
+      let stream: MediaStream | null = null;
+      const voxOrCableAlive =
+        (isVoxEnabled || isCableGatewayActive) &&
+        !!micStreamRef.current &&
+        micStreamRef.current.getAudioTracks().length > 0 &&
+        micStreamRef.current.getAudioTracks().every((t) => t.readyState === "live");
       const armedAlive =
-        !!stream && stream.getAudioTracks().length > 0 && stream.getAudioTracks().every((t) => t.readyState === "live");
-      if (stream && armedAlive) {
+        !!armedMicStreamRef.current &&
+        armedMicStreamRef.current.getAudioTracks().length > 0 &&
+        armedMicStreamRef.current.getAudioTracks().every((t) => t.readyState === "live");
+
+      if (voxOrCableAlive && micStreamRef.current) {
+        stream = micStreamRef.current;
+        stream.getAudioTracks().forEach((t) => { t.enabled = true; });
+      } else if (armedAlive && armedMicStreamRef.current) {
+        stream = armedMicStreamRef.current;
         stream.getAudioTracks().forEach((t) => { t.enabled = true; });
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: {
+            ...(selectedAudioDeviceId ? { deviceId: { exact: selectedAudioDeviceId } } : {}),
             channelCount: 1,
             echoCancellation: isCableGatewayActive ? false : true,
             noiseSuppression: isCableGatewayActive ? false : true,
@@ -764,10 +777,10 @@ export default function RadioPocketMode() {
       const source = ctx.createMediaStreamSource(stream);
       txSourceNodeRef.current = source;
 
-      // 1. High-pass filter (200 Hz): Eliminates microphone plosives, breath thumps, and DC bias
+      // 1. High-pass filter (200 Hz / 300 Hz for Cable): Eliminates microphone plosives, CTCSS tones, and DC bias
       const hpf = ctx.createBiquadFilter();
       hpf.type = "highpass";
-      hpf.frequency.value = 200;
+      hpf.frequency.value = isCableGatewayActive && enableBandpassFilter ? 300 : 200;
       hpf.Q.value = 0.707;
 
       // 2. Low-pass anti-aliasing filter (3400 Hz): Cuts frequencies above Nyquist before 8kHz downsampling
@@ -804,7 +817,7 @@ export default function RadioPocketMode() {
         // Accumulate samples and dispatch ONLY exact 160-sample (20ms / 320-byte) frames
         txAccumulatorRef.current.push(...newSamples);
 
-        const MIC_BOOST = 2.5; // Optimal speech deviation pre-amp for DMR vocoder
+        const MIC_BOOST = isCableGatewayActive ? 2.5 * cableGain : 2.5; // Optimal speech deviation pre-amp for DMR vocoder
         while (txAccumulatorRef.current.length >= 160) {
           const frame = txAccumulatorRef.current.splice(0, 160);
           const pcm16 = new Int16Array(160);
@@ -867,7 +880,9 @@ export default function RadioPocketMode() {
     if (txMicStreamRef.current) {
       const s = txMicStreamRef.current;
       try { s.getTracks().forEach((t) => { t.onended = null; }); } catch {}
-      if (s === armedMicStreamRef.current && lockscreenPttRef.current) {
+      if (s === micStreamRef.current && (isVoxEnabled || isCableGatewayActive)) {
+        // Keep the VOX / Cable Gateway monitor stream alive so it continues listening for next speech/carrier!
+      } else if (s === armedMicStreamRef.current && lockscreenPttRef.current) {
         // Keep the mic armed for lockscreen PTT, just stop capturing audio.
         try { s.getAudioTracks().forEach((t) => { t.enabled = false; }); } catch {}
       } else {
@@ -992,7 +1007,19 @@ export default function RadioPocketMode() {
     isTxRef.current = isTransmitting;
   }, [isTransmitting]);
 
+  const startTxRef = useRef<(() => void) | null>(null);
+  startTxRef.current = startTx;
   stopTxRef.current = stopTx;
+
+  const voxThresholdRef = useRef(voxThreshold);
+  voxThresholdRef.current = voxThreshold;
+  const cableNoiseGateRef = useRef(cableNoiseGate);
+  cableNoiseGateRef.current = cableNoiseGate;
+  const isVoxEnabledRef = useRef(isVoxEnabled);
+  isVoxEnabledRef.current = isVoxEnabled;
+  const isCableGatewayActiveRef = useRef(isCableGatewayActive);
+  isCableGatewayActiveRef.current = isCableGatewayActive;
+  const voxTotTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Lockscreen / notification-shade media controls (Media Session API)
   useMediaSession({
@@ -1038,24 +1065,32 @@ export default function RadioPocketMode() {
     const shouldListen = isVoxEnabled || isCableGatewayActive;
 
     if (!shouldListen) {
+      if (voxHangTimerRef.current) {
+        clearTimeout(voxHangTimerRef.current);
+        voxHangTimerRef.current = null;
+      }
+      if (voxTotTimerRef.current) {
+        clearTimeout(voxTotTimerRef.current);
+        voxTotTimerRef.current = null;
+      }
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((t) => t.stop());
         micStreamRef.current = null;
       }
       if (audioContextRef.current) {
-        audioContextRef.current.close();
+        audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;
       }
-      if (voxHangTimerRef.current) {
-        clearTimeout(voxHangTimerRef.current);
+      if (isTxRef.current) {
+        stopTxRef.current?.();
       }
-      if (isTxRef.current && isVoxEnabled) stopTx();
       setCurrentMicDb(-100);
       setIsCableRxActive(false);
       return;
     }
 
     let animationFrameId: number;
+    let disposed = false;
 
     const initAudioStream = async () => {
       try {
@@ -1067,15 +1102,26 @@ export default function RadioPocketMode() {
                 noiseSuppression: !isCableGatewayActive,
                 autoGainControl: false, // Let user control gain manually
               }
-            : true,
+            : {
+                echoCancellation: !isCableGatewayActive,
+                noiseSuppression: !isCableGatewayActive,
+                autoGainControl: false,
+              },
         };
 
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (disposed) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         micStreamRef.current = stream;
 
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
         const ctx = new AudioCtx();
         audioContextRef.current = ctx;
+        if (ctx.state === "suspended") {
+          await ctx.resume().catch(() => {});
+        }
 
         const source = ctx.createMediaStreamSource(stream);
         let lastNode: AudioNode = source;
@@ -1105,13 +1151,48 @@ export default function RadioPocketMode() {
 
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.25; // Fast decay so VOX unkeys promptly when speech ends
         lastNode.connect(analyser);
         analyserRef.current = analyser;
 
         const buffer = new Uint8Array(analyser.frequencyBinCount);
+        let lastUiUpdateMs = 0;
+
+        const triggerAutoTxStart = () => {
+          if (voxHangTimerRef.current) {
+            clearTimeout(voxHangTimerRef.current);
+            voxHangTimerRef.current = null;
+          }
+          if (!isTxRef.current) {
+            startTxRef.current?.();
+            // Safety Time-Out Timer (TOT: 120s) to prevent permanent open-mic on static noise
+            if (voxTotTimerRef.current) clearTimeout(voxTotTimerRef.current);
+            voxTotTimerRef.current = setTimeout(() => {
+              voxTotTimerRef.current = null;
+              if (isTxRef.current) {
+                stopTxRef.current?.();
+              }
+            }, 120000);
+          }
+        };
+
+        const scheduleAutoTxStop = (hangoverMs: number) => {
+          if (isTxRef.current && !voxHangTimerRef.current) {
+            voxHangTimerRef.current = setTimeout(() => {
+              voxHangTimerRef.current = null;
+              if (voxTotTimerRef.current) {
+                clearTimeout(voxTotTimerRef.current);
+                voxTotTimerRef.current = null;
+              }
+              if (isTxRef.current) {
+                stopTxRef.current?.();
+              }
+            }, hangoverMs);
+          }
+        };
 
         const processAudioLevel = () => {
-          if (!isVoxEnabled && !isCableGatewayActive) return;
+          if (disposed || (!isVoxEnabledRef.current && !isCableGatewayActiveRef.current)) return;
           analyser.getByteFrequencyData(buffer);
 
           let sum = 0;
@@ -1120,33 +1201,38 @@ export default function RadioPocketMode() {
           }
           const rms = Math.sqrt(sum / buffer.length);
           const db = rms > 0 ? 20 * Math.log10(rms / 255) : -100;
-          setCurrentMicDb(Math.round(db));
 
-          // 1. CABLE GATEWAY CARRIER (COS/SQUELCH DETECT)
-          if (isCableGatewayActive) {
-            const hasCarrier = db > cableNoiseGate;
-            setIsCableRxActive(hasCarrier);
+          const nowMs = performance.now();
+          if (nowMs - lastUiUpdateMs >= 80) {
+            lastUiUpdateMs = nowMs;
+            setCurrentMicDb(Math.round(db));
           }
 
-          // 2. VOX HANDS-FREE PTT TRIGGER
-          if (isVoxEnabled) {
-            if (db > voxThreshold) {
-              if (voxHangTimerRef.current) {
-                clearTimeout(voxHangTimerRef.current);
-                voxHangTimerRef.current = null;
+          // 1. CABLE GATEWAY CARRIER (COS/SQUELCH DETECT WITH HYSTERESIS)
+          if (isCableGatewayActiveRef.current) {
+            const gateAttack = cableNoiseGateRef.current;
+            const gateRelease = gateAttack - 3; // 3 dB Schmitt-trigger hysteresis
+            const hasCarrier = isTxRef.current ? db > gateRelease : db > gateAttack;
+            setIsCableRxActive((prev) => (prev !== hasCarrier ? hasCarrier : prev));
+            if (!isVoxEnabledRef.current) {
+              if (hasCarrier) {
+                triggerAutoTxStart();
+              } else {
+                scheduleAutoTxStop(450);
               }
-              if (!isTxRef.current) {
-                startTx();
-              }
+            }
+          }
+
+          // 2. VOX HANDS-FREE PTT TRIGGER (DUAL-THRESHOLD HYSTERESIS + 550ms HANGOVER)
+          if (isVoxEnabledRef.current) {
+            const voxAttack = voxThresholdRef.current;
+            const voxRelease = voxAttack - 3; // 3 dB Schmitt-trigger hysteresis
+            const hasSpeech = isTxRef.current ? db > voxRelease : db > voxAttack;
+
+            if (hasSpeech) {
+              triggerAutoTxStart();
             } else {
-              if (isTxRef.current && !voxHangTimerRef.current) {
-                voxHangTimerRef.current = setTimeout(() => {
-                  if (isTxRef.current) {
-                    stopTx();
-                  }
-                  voxHangTimerRef.current = null;
-                }, 650);
-              }
+              scheduleAutoTxStop(550);
             }
           }
 
@@ -1164,15 +1250,23 @@ export default function RadioPocketMode() {
     initAudioStream();
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(animationFrameId);
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
       if (voxHangTimerRef.current) {
         clearTimeout(voxHangTimerRef.current);
+        voxHangTimerRef.current = null;
+      }
+      if (voxTotTimerRef.current) {
+        clearTimeout(voxTotTimerRef.current);
+        voxTotTimerRef.current = null;
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((t) => t.stop());
+        micStreamRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
       }
     };
   }, [
@@ -1181,10 +1275,6 @@ export default function RadioPocketMode() {
     selectedAudioDeviceId,
     cableGain,
     enableBandpassFilter,
-    cableNoiseGate,
-    voxThreshold,
-    startTx,
-    stopTx,
   ]);
 
   // 1000 Hz Line-Out Calibration Tone Generator
