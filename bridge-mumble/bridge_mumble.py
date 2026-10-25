@@ -1113,23 +1113,18 @@ class MumbleGatewayBot:
                             samples_8k = samples_48k[::6]
                         pcm_8k = samples_8k.tobytes()
 
-                        # Dispatch binary TLV SET_INFO at start of transmission to carry over callsign and DMR ID
+                        # Buffer and send exact 320-byte (20ms) 8kHz mono PCM frames directly to DirectDmrEngine (UDP 32100 NPTT)
                         if not active_mumble_tx:
-                            tx_seq = (tx_seq + 1) & 0x7FFFFFFF
-                            tlv = build_set_info_tlv(user_dmr_id, 5109999, self.tg, self.slot, 1, user_callsign)
-                            tlv_pkt = build_usrp_frame(tx_seq, 0, 2, tlv)
-                            self.usrp_sock.sendto(tlv_pkt, (USRP_HOST, USRP_PORT))
-                            logger.info(f"[MUMBLE-TX] 🔴 PTT TRANSMIT from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg} Slot {self.slot}")
+                            logger.info(f"[MUMBLE-TX] 🔴 DIRECT DMR TRANSMIT from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg} Slot {self.slot}")
                             self.tx_pcm_buffer.clear()
 
-                        # Buffer and send exact 320-byte (20ms) 8kHz mono PCM frames
                         self.tx_pcm_buffer.extend(pcm_8k)
+                        call_bytes = (user_callsign or "MUMBLE").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                         while len(self.tx_pcm_buffer) >= 320:
                             chunk = bytes(self.tx_pcm_buffer[:320])
                             self.tx_pcm_buffer = self.tx_pcm_buffer[320:]
-                            tx_seq = (tx_seq + 1) & 0x7FFFFFFF
-                            voice_pkt = build_usrp_frame(tx_seq, 1, 0, chunk)
-                            self.usrp_sock.sendto(voice_pkt, (USRP_HOST, USRP_PORT))
+                            nptt_pkt = struct.pack(">4sIIII?16s", b"NPTT", int(user_dmr_id), int(self.tg), int(self.slot), len(chunk), True, call_bytes) + chunk
+                            self.usrp_sock.sendto(nptt_pkt, (USRP_HOST, 32100))
 
                         last_mumble_tx = time.time()
                         active_mumble_tx = (user, self.tg, self.slot, user_dmr_id, user_callsign, last_mumble_tx, self.usrp_sock)
@@ -1198,7 +1193,7 @@ class MumbleGatewayBot:
 
 def run_usrp_listener(gateway_pool):
     """
-    Listens for PCM audio frames from Core / DMR USRP UDP port (12346) and routes to the appropriate room bot.
+    Listens for PCM audio frames from Core DirectDmrEngine UDP port (12346) and routes to the appropriate room bot.
     """
     global last_dmr_tx
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1237,19 +1232,19 @@ def run_usrp_listener(gateway_pool):
             time.sleep(0.02)
 
 def ptt_watchdog_loop(usrp_sock):
-    """Detects when a Mumble/Mumla user stops talking and transmits PTT release to USRP/DMR."""
+    """Detects when a Mumble/Mumla user stops talking and transmits PTT release directly to DirectDmrEngine (UDP 32100)."""
     global active_mumble_tx, tx_seq
     while IS_BRIDGING:
         time.sleep(0.05)
         if active_mumble_tx:
             user_info, tg, slot, dmr_id, callsign, last_seen, bot_sock = active_mumble_tx
             if time.time() - last_seen > 0.35:
-                tx_seq = (tx_seq + 1) & 0x7FFFFFFF
-                unkey_pkt = build_usrp_frame(tx_seq, 0, 0, b"\x00" * 320)
                 try:
                     target_sock = bot_sock or usrp_sock
-                    target_sock.sendto(unkey_pkt, (USRP_HOST, USRP_PORT))
-                    logger.info(f"[MUMBLE-TX] ⏹️ PTT RELEASE from {callsign} ({dmr_id}) -> TG {tg} Slot {slot}")
+                    call_bytes = (callsign or "MUMBLE").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                    unkey_nptt = struct.pack(">4sIIII?16s", b"NPTT", int(dmr_id), int(tg), int(slot), 0, False, call_bytes)
+                    target_sock.sendto(unkey_nptt, (USRP_HOST, 32100))
+                    logger.info(f"[MUMBLE-TX] ⏹️ DIRECT DMR RELEASE from {callsign} ({dmr_id}) -> TG {tg} Slot {slot}")
                 except Exception:
                     pass
                 active_mumble_tx = None
