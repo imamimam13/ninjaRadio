@@ -68,20 +68,36 @@ def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
     if len(payload) < 14 or payload[0] != TLV_TAG_SET_INFO:
         return None
     length = payload[1]
-    if len(payload) < 2 + length or length < 12:
+    if len(payload) < 2 + length or length < 12 or length > 44:
         return None
+    # If the frame is padded (e.g. 320-byte USRP frame), bytes immediately following TLV body must be zero padding
+    if len(payload) > 2 + length:
+        tail_check = payload[2 + length : min(len(payload), 2 + length + 16)]
+        if any(b != 0 for b in tail_check):
+            return None
     body = payload[2:2 + length]
-    logger.info(f"🔍 [PARSE-SET-INFO] body len={len(body)}, hex={body.hex()}")
-    slot = body[10]
-    if slot not in (1, 2):
-        slot = 2
-    callsign = body[12:].split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
+    raw_slot = body[10]
+    raw_cc = body[11]
+    # Strict DMR field validation: slot must be 0, 1, or 2; color code must be 0..15
+    if raw_slot not in (0, 1, 2) or raw_cc > 15:
+        return None
+    slot = raw_slot if raw_slot in (1, 2) else 2
+    raw_call_bytes = body[12:].split(b"\x00", 1)[0]
+    try:
+        callsign = raw_call_bytes.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    if callsign and not re.match(r"^[A-Za-z0-9 _/\-\.]{1,24}$", callsign):
+        return None
+    src = int.from_bytes(body[0:3], "big")
+    tg = int.from_bytes(body[7:10], "big")
+    logger.info(f"🔍 [PARSE-SET-INFO] src={src}, tg={tg}, slot={slot}, call='{callsign}'")
     return {
-        "src": int.from_bytes(body[0:3], "big"),
+        "src": src,
         "rpt": int.from_bytes(body[3:7], "big"),
-        "tg": int.from_bytes(body[7:10], "big"),
+        "tg": tg,
         "slot": slot,
-        "cc": body[11] if body[11] else 1,
+        "cc": raw_cc if raw_cc else 1,
         "callsign": callsign,
     }
 
@@ -1804,8 +1820,9 @@ usrpAGC = -20,10,100
                         usrp_type = field4
                     mpxid, res = struct.unpack(">II", data[24:32])
                     pcm_payload = data[32:]
-                    if len(pcm_payload) > 0 and pcm_payload[0] == TLV_TAG_SET_INFO:
-                        usrp_type = USRP_TYPE_TEXT
+                    if key_flag == 0 and usrp_type == 0 and len(pcm_payload) >= 14 and pcm_payload[0] == TLV_TAG_SET_INFO:
+                        if parse_set_info_tlv(pcm_payload) is not None:
+                            usrp_type = USRP_TYPE_TEXT
 
                     # Handle USRP_TYPE_TEXT (2) metadata packets exported by Analog_Bridge
                     if usrp_type == 2 and len(pcm_payload) > 0:
@@ -2030,7 +2047,7 @@ usrpAGC = -20,10,100
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                     payload = data[32:]
                     packet_type = (dmr_id >> 24) & 0xFF
-                    is_control_pkt = (key_flag == 0) or (packet_type in [USRP_TYPE_TEXT, 4, 3])
+                    is_control_pkt = packet_type in [USRP_TYPE_TEXT, 1, 3, 4]
 
                     hdr_src = dmr_id & 0xFFFFFF
                     hdr_tg = tg if (0 < tg < 16777215) else 0
@@ -2207,12 +2224,13 @@ usrpAGC = -20,10,100
 
                     # Handle remote talkgroup tuning / commands from DVSwitch Mobile
                     cmd_str = ""
-                    if len(payload) >= 3 and payload[0] == 5:  # TLV_TAG_REMOTE_CMD
+                    if is_control_pkt and len(payload) >= 3 and payload[0] == 5:  # TLV_TAG_REMOTE_CMD
                         cmd_len = payload[1]
-                        cmd_str = payload[2:2 + cmd_len].decode("ascii", errors="ignore").strip()
-                    elif len(payload) >= 5 and payload[0] == 3:  # TLV_TAG_TG_TUNE
+                        if cmd_len <= 64 and len(payload) >= 2 + cmd_len:
+                            cmd_str = payload[2:2 + cmd_len].decode("ascii", errors="ignore").strip()
+                    elif is_control_pkt and len(payload) >= 5 and payload[0] == 3:  # TLV_TAG_TG_TUNE
                         tune_val = int.from_bytes(payload[2:2 + payload[1]], "big") if payload[1] <= 4 else 0
-                        if tune_val > 0:
+                        if 0 < tune_val < 16777215:
                             self.dvswitch_client_addrs.add(addr)
                             if addr not in self.client_metadata:
                                 self.client_metadata[addr] = {}
