@@ -1410,32 +1410,12 @@ usrpAGC = -20,10,100
                     if key_flag == 1 and len(pcm_payload) >= 320:
                         w["rx_active"] = True
                         chunk_320 = pcm_payload[:320]
-                        try:
-                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, tg, active_src, slot, 0) + chunk_320
-                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                        except Exception:
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                pass
-                        # Forward audio frame to DVSwitch Mobile clients tuned to this worker's TG
+                        # Forward audio frame strictly to DVSwitch Mobile clients tuned to this worker's TG
                         try:
                             usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, chunk_320)
                             self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=tg)
                         except Exception:
                             pass
-                        asyncio.create_task(self.dispatch_event_to_backend({
-                            "network": f"Analog_Bridge (Worker TG {tg})",
-                            "host": "127.0.0.1",
-                            "src_id": active_src,
-                            "dst_tg": tg,
-                            "slot": slot,
-                            "callsign": active_call,
-                            "is_tx": False,
-                            "is_transmitting": True,
-                            "data_type": 1,
-                            "payload": chunk_320
-                        }))
                     elif key_flag == 0 and w.get("rx_active"):
                         w["rx_active"] = False
                         try:
@@ -1443,17 +1423,6 @@ usrpAGC = -20,10,100
                             self.broadcast_to_usrp_clients(unkey_fwd, tg=tg)
                         except Exception:
                             pass
-                        asyncio.create_task(self.dispatch_event_to_backend({
-                            "network": f"Analog_Bridge (Worker TG {tg})",
-                            "host": "127.0.0.1",
-                            "src_id": active_src,
-                            "dst_tg": tg,
-                            "slot": slot,
-                            "callsign": active_call,
-                            "is_tx": False,
-                            "is_transmitting": False,
-                            "data_type": 2
-                        }))
                         w["rx_src"] = 0
                         w["rx_call"] = ""
             except asyncio.CancelledError:
@@ -1749,17 +1718,6 @@ usrpAGC = -20,10,100
                             if self.current_rx_active:
                                 self.current_rx_active = False
                                 logger.info(f"⏹️ MMDVM Call Ended: {self.current_rx_call} ({self.current_rx_src}) -> TG {self.current_rx_tg}")
-                                if self.current_rx_tg > 0 and self.current_rx_src > 0:
-                                    term_event = {
-                                        "network": f"DMR Master ({self.active_peer_host})",
-                                        "src_id": self.current_rx_src,
-                                        "dst_tg": self.current_rx_tg,
-                                        "slot": self.current_rx_slot,
-                                        "callsign": self.current_rx_call,
-                                        "data_type": 2,
-                                        "is_tx": False
-                                    }
-                                    asyncio.create_task(self.dispatch_event_to_backend(term_event))
                                 self.current_rx_tg = 0
                                 self.current_rx_src = 0
                                 self.current_rx_call = ""
@@ -1793,11 +1751,12 @@ usrpAGC = -20,10,100
 
     async def run_ab_pcm_rx_loop(self):
         """
-        Receives pure, authentic 8kHz 16-bit PCM USRP frames decoded by Analog_Bridge + md380-emu.
-        Dispatches directly to Web Audio, Mumble VoIP, and DVSwitch Mobile clients.
+        Receives 8kHz 16-bit PCM USRP frames decoded by Analog_Bridge + md380-emu.
+        Dedicated strictly to external DVSwitch Mobile clients (and Mumble VoIP).
+        Web (/dashboard and /radio) uses DirectDmrEngine (PCM <-> DMR directly without Analog_Bridge).
         """
         loop = asyncio.get_running_loop()
-        logger.info("📻 Started DVSwitch PCM Audio Rx loop.")
+        logger.info("📻 Started DVSwitch PCM Audio Rx loop (DVSwitch Mobile dedicated).")
         last_tlv_push_time = 0.0
         while self.running:
             try:
@@ -1923,76 +1882,25 @@ usrpAGC = -20,10,100
                     self.current_rx_active = True
 
                     # Self-echo suppression: If this incoming frame on port 32001 is from our own active Web PTT transmission,
-                    # drop it so it does not loop back into DVSwitch Mobile or the Web Audio Player!
+                    # drop it so it does not loop back into DVSwitch Mobile!
                     is_local = self.is_transmitting or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(active_src))
                     if is_local and (active_src == self.current_tx_dmr_id or active_src == self.current_operator_dmr_id):
                         continue
 
-                    # Determine all target TGs (including any cross-TG translations from TG Matrix)
-                    routed_tgs = [(active_tg, active_slot)]
-                    for mt in get_matrix_translated_targets(active_tg, active_slot):
-                        t_pair = (mt["tg"], mt["slot"])
-                        if mt["tg"] > 0 and t_pair not in routed_tgs:
-                            routed_tgs.append(t_pair)
-
-                    if len(pcm_payload) >= 320:
-                        for r_tg, r_slot in routed_tgs:
-                            try:
-                                mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, key_flag, r_tg, active_src, r_slot, 0) + pcm_payload
-                                self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                try:
-                                    self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                                except Exception:
-                                    pass
-
-                        # Forward standard voice frame to external USRP clients (DVSwitch Mobile)
+                    # Forward standard voice frame strictly to external USRP clients (DVSwitch Mobile)
+                    if key_flag == 1 and len(pcm_payload) >= 320:
                         try:
                             usrp_mobile_pkt = build_usrp_frame(seq, key_flag, USRP_TYPE_VOICE, pcm_payload[:320])
                             self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=active_tg)
                         except Exception:
                             pass
-
-                    # Dispatch event to backend API for Web Audio player (at most once per unique TG)
-                    if key_flag == 1 and len(pcm_payload) >= 320:
-                        seen_tgs = set()
-                        for r_tg, r_slot in routed_tgs:
-                            if r_tg in seen_tgs:
-                                continue
-                            seen_tgs.add(r_tg)
-                            traffic_event = {
-                                "network": f"DMR Master ({self.active_peer_host})",
-                                "src_id": active_src,
-                                "dst_tg": r_tg,
-                                "slot": r_slot,
-                                "callsign": active_call,
-                                "payload": pcm_payload[:320],
-                                "data_type": 1,
-                                "is_tx": False
-                            }
-                            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
                     elif key_flag == 0:
-                        # Voice Terminator
+                        # Voice Terminator to DVSwitch Mobile
                         try:
                             unkey_fwd = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
                             self.broadcast_to_usrp_clients(unkey_fwd, tg=active_tg)
                         except Exception:
                             pass
-                        seen_tgs = set()
-                        for r_tg, r_slot in routed_tgs:
-                            if r_tg in seen_tgs:
-                                continue
-                            seen_tgs.add(r_tg)
-                            traffic_event = {
-                                "network": f"DMR Master ({self.active_peer_host})",
-                                "src_id": active_src,
-                                "dst_tg": r_tg,
-                                "slot": r_slot,
-                                "callsign": active_call,
-                                "data_type": 2,
-                                "is_tx": False
-                            }
-                            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
                         self.current_rx_active = False
                         self.current_rx_tg = 0
                         self.current_rx_src = 0
@@ -2935,34 +2843,44 @@ usrpAGC = -20,10,100
             if is_local_mmdvm:
                 return
 
-            # Single-Source Audio Invariant: Only decode via direct_dmr if Analog_Bridge/MMDVM_Bridge is not active.
-            # When Analog_Bridge is running, ab_rx_loop streams continuous 20ms PCM; double-decoding causes buffer overlap/slowdown.
-            ab_running = bool(
-                self.ab_proc and self.ab_proc.poll() is None and self.mmdvm_proc and self.mmdvm_proc.poll() is None
-            )
+            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio) and Mumble without Analog_Bridge
             decoded_pcm = b""
-            if not ab_running and traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
                     pass
 
-            # Dispatch traffic notification to backend (skip empty voice burst events when ab_rx_loop is already streaming PCM)
-            if ab_running and traffic.get("data_type") == 1 and not decoded_pcm:
-                return
-
-            traffic_event = {
-                "network": traffic.get("network", "Local DMR Master (62031)"),
-                "src_id": src_id,
-                "dst_tg": dst_tg,
-                "slot": slot,
-                "callsign": callsign,
-                "is_tx": False,
-                "data_type": traffic.get("data_type", 1)
-            }
-            if decoded_pcm:
-                traffic_event["payload"] = decoded_pcm
-            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+            seen_web_tgs = set()
+            for r_tg, r_slot, _ in packets_to_route:
+                if r_tg in seen_web_tgs:
+                    continue
+                seen_web_tgs.add(r_tg)
+                traffic_event = {
+                    "network": traffic.get("network", "Local DMR Master (62031)"),
+                    "src_id": src_id,
+                    "dst_tg": r_tg,
+                    "slot": r_slot,
+                    "callsign": callsign,
+                    "is_tx": False,
+                    "data_type": traffic.get("data_type", 1)
+                }
+                if decoded_pcm:
+                    traffic_event["payload"] = decoded_pcm
+                    # Forward direct PCM frames to Mumble
+                    for offset in range(0, len(decoded_pcm), 320):
+                        chunk_320 = decoded_pcm[offset:offset + 320]
+                        if len(chunk_320) == 320:
+                            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0) + chunk_320
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                try:
+                                    self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                                except Exception:
+                                    pass
+                asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_dmr_master_traffic note: {e}")
 
@@ -3036,7 +2954,8 @@ usrpAGC = -20,10,100
     def handle_peer_traffic(self, traffic: dict):
         """
         Handles incoming DMR traffic from upstream peer (e.g. BRIDI).
-        Suppresses loopback, applies TG Matrix translations, and broadcasts to local hotspots + MMDVM_Bridge (Web/DVSwitch/Mumble).
+        Suppresses loopback, applies TG Matrix translations, and broadcasts to local hotspots + MMDVM_Bridge (DVSwitch).
+        Decodes DMR -> PCM directly via DirectDmrEngine (libopendmr.so) for Web (/dashboard & /radio) and Mumble.
         """
         try:
             src_id = traffic.get("src_id", 0)
@@ -3081,7 +3000,8 @@ usrpAGC = -20,10,100
                 }
 
             # 3. Forward DMRD frame (and any TG Matrix translated frames) to our local DMR Master Server
-            # so all connected local hotspots and MMDVM_Bridge (Web Audio/DVSwitch/Mumble) hear it!
+            # so all connected local hotspots and MMDVM_Bridge (DVSwitch Mobile) hear it!
+            routed_tgs = [(dst_tg, slot)]
             if self.dmr_master_server and raw_packet:
                 self.dmr_master_server.broadcast_dmrd(raw_packet)
                 for mt in get_matrix_translated_targets(dst_tg, slot):
@@ -3096,34 +3016,48 @@ usrpAGC = -20,10,100
                             "time": now
                         }
                         self.dmr_master_server.broadcast_dmrd(translated_pkt)
+                        if (t_tg, t_slot) not in routed_tgs:
+                            routed_tgs.append((t_tg, t_slot))
 
-            # Single-Source Audio Invariant: Only decode via direct_dmr if Analog_Bridge/MMDVM_Bridge is not active.
-            ab_running = bool(
-                self.ab_proc and self.ab_proc.poll() is None and self.mmdvm_proc and self.mmdvm_proc.poll() is None
-            )
+            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio) and Mumble without Analog_Bridge
             decoded_pcm = b""
-            if not ab_running and traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
                     pass
 
-            if ab_running and traffic.get("data_type") == 1 and not decoded_pcm:
-                return
-
-            # 4. Last heard & live traffic event to backend
-            traffic_event = {
-                "network": f"Peer: {network_name}",
-                "src_id": src_id,
-                "dst_tg": dst_tg,
-                "slot": slot,
-                "callsign": callsign,
-                "is_tx": False,
-                "data_type": traffic.get("data_type", 1)
-            }
-            if decoded_pcm:
-                traffic_event["payload"] = decoded_pcm
-            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+            # 4. Last heard & live traffic event to backend (at most once per unique TG)
+            seen_web_tgs = set()
+            for r_tg, r_slot in routed_tgs:
+                if r_tg in seen_web_tgs:
+                    continue
+                seen_web_tgs.add(r_tg)
+                traffic_event = {
+                    "network": f"Peer: {network_name}",
+                    "src_id": src_id,
+                    "dst_tg": r_tg,
+                    "slot": r_slot,
+                    "callsign": callsign,
+                    "is_tx": False,
+                    "data_type": traffic.get("data_type", 1)
+                }
+                if decoded_pcm:
+                    traffic_event["payload"] = decoded_pcm
+                    # Forward direct PCM frames to Mumble
+                    for offset in range(0, len(decoded_pcm), 320):
+                        chunk_320 = decoded_pcm[offset:offset + 320]
+                        if len(chunk_320) == 320:
+                            self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                            mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0) + chunk_320
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                try:
+                                    self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                                except Exception:
+                                    pass
+                asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_peer_traffic note: {e}")
 
