@@ -6,7 +6,6 @@ import asyncio
 import psutil
 import time
 import os
-import re
 import logging
 
 logger = logging.getLogger("NinjaRadio-Endpoints")
@@ -723,15 +722,19 @@ CORE_USRP_HOST = os.getenv("CORE_HOST", "core")
 CORE_USRP_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 CORE_DIRECT_DMR_PORT = int(os.getenv("CORE_DIRECT_DMR_PORT", 32100))
 _core_resolved_ip = None
+_core_resolved_at = 0.0
 
 def _get_core_ip() -> str:
-    global _core_resolved_ip
-    if not _core_resolved_ip:
+    global _core_resolved_ip, _core_resolved_at
+    now = time.time()
+    if not _core_resolved_ip or (now - _core_resolved_at) > 3.0:
         import socket
         try:
             _core_resolved_ip = socket.gethostbyname(CORE_USRP_HOST)
+            _core_resolved_at = now
         except Exception:
-            _core_resolved_ip = CORE_USRP_HOST
+            if not _core_resolved_ip:
+                _core_resolved_ip = CORE_USRP_HOST
     return _core_resolved_ip
 _usrp_packet_seq = 0
 _tx_pcm_buffer = bytearray()
@@ -1064,9 +1067,7 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     stream_key = f"{src_id}_{dst_tg}_{slot}"
 
     # Resolve callsign from database or fallback to event/Radio ID
-    custom_call = (event.get("callsign") or "").strip()
-    if custom_call and not re.match(r"^[A-Za-z0-9 _/\-\.]{1,24}$", custom_call):
-        return {"status": "IGNORED", "reason": "Corrupted callsign metadata"}
+    custom_call = event.get("callsign")
     callsign = custom_call if custom_call else f"ID-{src_id}"
     name = f"DMR Operator {src_id}"
     category = "Amatir"

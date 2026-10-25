@@ -68,36 +68,27 @@ def parse_set_info_tlv(payload: bytes) -> Optional[Dict]:
     if len(payload) < 14 or payload[0] != TLV_TAG_SET_INFO:
         return None
     length = payload[1]
-    if len(payload) < 2 + length or length < 12 or length > 44:
+    if length < 12 or length > 64 or len(payload) < 2 + length:
         return None
-    # If the frame is padded (e.g. 320-byte USRP frame), bytes immediately following TLV body must be zero padding
-    if len(payload) > 2 + length:
-        tail_check = payload[2 + length : min(len(payload), 2 + length + 16)]
-        if any(b != 0 for b in tail_check):
-            return None
+    if len(payload) > 2 + length and any(payload[2 + length:]):
+        return None
     body = payload[2:2 + length]
-    raw_slot = body[10]
-    raw_cc = body[11]
-    # Strict DMR field validation: slot must be 0, 1, or 2; color code must be 0..15
-    if raw_slot not in (0, 1, 2) or raw_cc > 15:
-        return None
-    slot = raw_slot if raw_slot in (1, 2) else 2
-    raw_call_bytes = body[12:].split(b"\x00", 1)[0]
-    try:
-        callsign = raw_call_bytes.decode("ascii").strip()
-    except UnicodeDecodeError:
-        return None
-    if callsign and not re.match(r"^[A-Za-z0-9 _/\-\.]{1,24}$", callsign):
-        return None
     src = int.from_bytes(body[0:3], "big")
+    rpt = int.from_bytes(body[3:7], "big")
     tg = int.from_bytes(body[7:10], "big")
-    logger.info(f"🔍 [PARSE-SET-INFO] src={src}, tg={tg}, slot={slot}, call='{callsign}'")
+    if src > 9999999 or tg > 9999999:
+        return None
+    logger.info(f"🔍 [PARSE-SET-INFO] body len={len(body)}, hex={body.hex()}")
+    slot = body[10]
+    if slot not in (1, 2):
+        slot = 2
+    callsign = body[12:].split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
     return {
         "src": src,
-        "rpt": int.from_bytes(body[3:7], "big"),
+        "rpt": rpt,
         "tg": tg,
         "slot": slot,
-        "cc": raw_cc if raw_cc else 1,
+        "cc": body[11] if body[11] else 1,
         "callsign": callsign,
     }
 
@@ -1433,6 +1424,18 @@ usrpAGC = -20,10,100
                             self.broadcast_to_usrp_clients(usrp_mobile_pkt, tg=tg)
                         except Exception:
                             pass
+                        asyncio.create_task(self.dispatch_event_to_backend({
+                            "network": f"Analog_Bridge (Worker TG {tg})",
+                            "host": "127.0.0.1",
+                            "src_id": active_src,
+                            "dst_tg": tg,
+                            "slot": slot,
+                            "callsign": active_call,
+                            "is_tx": False,
+                            "is_transmitting": True,
+                            "data_type": 1,
+                            "payload": chunk_320
+                        }))
                     elif key_flag == 0 and w.get("rx_active"):
                         w["rx_active"] = False
                         try:
@@ -1440,6 +1443,17 @@ usrpAGC = -20,10,100
                             self.broadcast_to_usrp_clients(unkey_fwd, tg=tg)
                         except Exception:
                             pass
+                        asyncio.create_task(self.dispatch_event_to_backend({
+                            "network": f"Analog_Bridge (Worker TG {tg})",
+                            "host": "127.0.0.1",
+                            "src_id": active_src,
+                            "dst_tg": tg,
+                            "slot": slot,
+                            "callsign": active_call,
+                            "is_tx": False,
+                            "is_transmitting": False,
+                            "data_type": 2
+                        }))
                         w["rx_src"] = 0
                         w["rx_call"] = ""
             except asyncio.CancelledError:
@@ -1735,6 +1749,17 @@ usrpAGC = -20,10,100
                             if self.current_rx_active:
                                 self.current_rx_active = False
                                 logger.info(f"⏹️ MMDVM Call Ended: {self.current_rx_call} ({self.current_rx_src}) -> TG {self.current_rx_tg}")
+                                if self.current_rx_tg > 0 and self.current_rx_src > 0:
+                                    term_event = {
+                                        "network": f"DMR Master ({self.active_peer_host})",
+                                        "src_id": self.current_rx_src,
+                                        "dst_tg": self.current_rx_tg,
+                                        "slot": self.current_rx_slot,
+                                        "callsign": self.current_rx_call,
+                                        "data_type": 2,
+                                        "is_tx": False
+                                    }
+                                    asyncio.create_task(self.dispatch_event_to_backend(term_event))
                                 self.current_rx_tg = 0
                                 self.current_rx_src = 0
                                 self.current_rx_call = ""
@@ -1744,6 +1769,17 @@ usrpAGC = -20,10,100
                 if self.current_rx_active and (time.time() - self.current_rx_time > 2.0):
                     self.current_rx_active = False
                     logger.info(f"⏹️ DMR Call Timeout: ID {self.current_rx_src} -> TG {self.current_rx_tg}")
+                    if self.current_rx_tg > 0 and self.current_rx_src > 0:
+                        term_event = {
+                            "network": f"DMR Master ({self.active_peer_host})",
+                            "src_id": self.current_rx_src,
+                            "dst_tg": self.current_rx_tg,
+                            "slot": self.current_rx_slot,
+                            "callsign": self.current_rx_call,
+                            "data_type": 2,
+                            "is_tx": False
+                        }
+                        asyncio.create_task(self.dispatch_event_to_backend(term_event))
                     self.current_rx_tg = 0
                     self.current_rx_src = 0
                     self.current_rx_call = ""
@@ -1758,8 +1794,7 @@ usrpAGC = -20,10,100
     async def run_ab_pcm_rx_loop(self):
         """
         Receives pure, authentic 8kHz 16-bit PCM USRP frames decoded by Analog_Bridge + md380-emu.
-        Dispatches directly to Mumble VoIP and DVSwitch Mobile clients.
-        (Web Dashboard / and /radio use DirectDmrEngine libopendmr vocoder directly).
+        Dispatches directly to Web Audio, Mumble VoIP, and DVSwitch Mobile clients.
         """
         loop = asyncio.get_running_loop()
         logger.info("📻 Started DVSwitch PCM Audio Rx loop.")
@@ -1888,7 +1923,7 @@ usrpAGC = -20,10,100
                     self.current_rx_active = True
 
                     # Self-echo suppression: If this incoming frame on port 32001 is from our own active Web PTT transmission,
-                    # drop it so it does not loop back into DVSwitch Mobile!
+                    # drop it so it does not loop back into DVSwitch Mobile or the Web Audio Player!
                     is_local = self.is_transmitting or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(active_src))
                     if is_local and (active_src == self.current_tx_dmr_id or active_src == self.current_operator_dmr_id):
                         continue
@@ -1912,6 +1947,7 @@ usrpAGC = -20,10,100
                                     pass
 
                         # Forward standard voice frame to external USRP clients (DVSwitch Mobile)
+                        # If a dedicated on-demand worker is actively decoding this TG, let the worker handle USRP broadcast to prevent double packet flooding
                         has_active_worker = any(
                             w.get("tg") == active_tg and w.get("ab_proc") and w.get("ab_proc").poll() is None
                             for w in self.bridge_workers.values()
@@ -1923,8 +1959,22 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
 
-                    if key_flag == 0:
-                        # Voice Terminator for external DVSwitch Mobile clients
+                    # Dispatch event to backend API for Web Audio player
+                    if key_flag == 1 and len(pcm_payload) >= 320:
+                        for r_tg, r_slot in routed_tgs:
+                            traffic_event = {
+                                "network": f"DMR Master ({self.active_peer_host})",
+                                "src_id": active_src,
+                                "dst_tg": r_tg,
+                                "slot": r_slot,
+                                "callsign": active_call,
+                                "payload": pcm_payload[:320],
+                                "data_type": 1,
+                                "is_tx": False
+                            }
+                            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
+                    elif key_flag == 0:
+                        # Voice Terminator
                         has_active_worker = any(
                             w.get("tg") == active_tg and w.get("ab_proc") and w.get("ab_proc").poll() is None
                             for w in self.bridge_workers.values()
@@ -1935,6 +1985,17 @@ usrpAGC = -20,10,100
                                 self.broadcast_to_usrp_clients(unkey_fwd, tg=active_tg)
                             except Exception:
                                 pass
+                        for r_tg, r_slot in routed_tgs:
+                            traffic_event = {
+                                "network": f"DMR Master ({self.active_peer_host})",
+                                "src_id": active_src,
+                                "dst_tg": r_tg,
+                                "slot": r_slot,
+                                "callsign": active_call,
+                                "data_type": 2,
+                                "is_tx": False
+                            }
+                            asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
                         self.current_rx_active = False
                         self.current_rx_tg = 0
                         self.current_rx_src = 0
@@ -1977,7 +2038,7 @@ usrpAGC = -20,10,100
                     magic, seq, mem, key_flag, tg, dmr_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                     payload = data[32:]
                     packet_type = (dmr_id >> 24) & 0xFF
-                    is_control_pkt = packet_type in [USRP_TYPE_TEXT, 1, 3, 4]
+                    is_control_pkt = (key_flag == 0) or (packet_type in [USRP_TYPE_TEXT, 4, 3])
 
                     hdr_src = dmr_id & 0xFFFFFF
                     hdr_tg = tg if (0 < tg < 16777215) else 0
@@ -2154,13 +2215,12 @@ usrpAGC = -20,10,100
 
                     # Handle remote talkgroup tuning / commands from DVSwitch Mobile
                     cmd_str = ""
-                    if is_control_pkt and len(payload) >= 3 and payload[0] == 5:  # TLV_TAG_REMOTE_CMD
+                    if len(payload) >= 3 and payload[0] == 5:  # TLV_TAG_REMOTE_CMD
                         cmd_len = payload[1]
-                        if cmd_len <= 64 and len(payload) >= 2 + cmd_len:
-                            cmd_str = payload[2:2 + cmd_len].decode("ascii", errors="ignore").strip()
-                    elif is_control_pkt and len(payload) >= 5 and payload[0] == 3:  # TLV_TAG_TG_TUNE
+                        cmd_str = payload[2:2 + cmd_len].decode("ascii", errors="ignore").strip()
+                    elif len(payload) >= 5 and payload[0] == 3:  # TLV_TAG_TG_TUNE
                         tune_val = int.from_bytes(payload[2:2 + payload[1]], "big") if payload[1] <= 4 else 0
-                        if 0 < tune_val < 16777215:
+                        if tune_val > 0:
                             self.dvswitch_client_addrs.add(addr)
                             if addr not in self.client_metadata:
                                 self.client_metadata[addr] = {}
@@ -2878,13 +2938,21 @@ usrpAGC = -20,10,100
             if is_local_mmdvm:
                 return
 
-            # Decode DMR voice burst directly via DirectDmrEngine (libopendmr vocoder) for both Dashboard (/) and /radio
+            # Single-Source Audio Invariant: Only decode via direct_dmr if Analog_Bridge/MMDVM_Bridge is not active.
+            # When Analog_Bridge is running, ab_rx_loop streams continuous 20ms PCM; double-decoding causes buffer overlap/crackling.
+            ab_running = bool(
+                self.ab_proc and self.ab_proc.poll() is None and self.mmdvm_proc and self.mmdvm_proc.poll() is None
+            )
             decoded_pcm = b""
-            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            if not ab_running and traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
                     pass
+
+            # Dispatch traffic notification to backend (skip empty voice burst events when ab_rx_loop is already streaming PCM)
+            if ab_running and traffic.get("data_type") == 1 and not decoded_pcm:
+                return
 
             traffic_event = {
                 "network": traffic.get("network", "Local DMR Master (62031)"),
@@ -3024,13 +3092,19 @@ usrpAGC = -20,10,100
                         }
                         self.dmr_master_server.broadcast_dmrd(translated_pkt)
 
-            # Decode DMR voice burst directly via DirectDmrEngine (libopendmr vocoder) for both Dashboard (/) and /radio
+            # Single-Source Audio Invariant: Only decode via direct_dmr if Analog_Bridge/MMDVM_Bridge is not active.
+            ab_running = bool(
+                self.ab_proc and self.ab_proc.poll() is None and self.mmdvm_proc and self.mmdvm_proc.poll() is None
+            )
             decoded_pcm = b""
-            if traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
+            if not ab_running and traffic.get("data_type") == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:
                     pass
+
+            if ab_running and traffic.get("data_type") == 1 and not decoded_pcm:
+                return
 
             # 4. Last heard & live traffic event to backend
             traffic_event = {
