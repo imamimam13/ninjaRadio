@@ -6,6 +6,7 @@ import asyncio
 import psutil
 import time
 import os
+import re
 import logging
 
 logger = logging.getLogger("NinjaRadio-Endpoints")
@@ -1063,7 +1064,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     stream_key = f"{src_id}_{dst_tg}_{slot}"
 
     # Resolve callsign from database or fallback to event/Radio ID
-    custom_call = event.get("callsign")
+    custom_call = (event.get("callsign") or "").strip()
+    if custom_call and not re.match(r"^[A-Za-z0-9 _/\-\.]{1,24}$", custom_call):
+        return {"status": "IGNORED", "reason": "Corrupted callsign metadata"}
     callsign = custom_call if custom_call else f"ID-{src_id}"
     name = f"DMR Operator {src_id}"
     category = "Amatir"
