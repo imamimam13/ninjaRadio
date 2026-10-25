@@ -1453,14 +1453,11 @@ usrpAGC = -20,10,100
         except Exception as e:
             logger.error(f"Failed to initialize DirectDmrEngine: {e}")
 
-        # Start DVSwitch daemons (md380-emu, Analog_Bridge, MMDVM_Bridge) only if explicitly enabled in config
-        # (Kept 100% intact in codebase for future cross-mode / hardware bridge use)
-        if bool(self.config.get("enable_legacy_ab_daemons", False)):
+        # Start DVSwitch daemons (md380-emu, Analog_Bridge, MMDVM_Bridge, and Multi-Workers)
+        if bool(self.config.get("enable_legacy_ab_daemons", True)):
             self.start_daemons()
             asyncio.create_task(self.run_process_watchdog())
             asyncio.create_task(self.restore_configured_workers())
-        else:
-            logger.info("⚡ Direct Multi-TG C++ Vocoder Mode active (Web, DVSwitch Mobile, Mumble -> 100% Direct PCM<->DMR). Multi-Analog_Bridge workers standby.")
 
         # 1. Listen on UDP 32001 (where Analog_Bridge emits decoded 8kHz 16-bit PCM)
         try:
@@ -2456,7 +2453,7 @@ usrpAGC = -20,10,100
             self.dmr_master_server.server_dmr_id = int(self.config.get("server_dmr_id", 5109999))
             if "parrot_tgs" in self.config and isinstance(self.config["parrot_tgs"], list):
                 self.dmr_master_server.parrot_tgs = [int(x) for x in self.config["parrot_tgs"]]
-        if bool(self.config.get("enable_legacy_ab_daemons", False)):
+        if bool(self.config.get("enable_legacy_ab_daemons", True)):
             self.stop_bridge_daemons()
             self.generate_configs()
             time.sleep(0.3)
