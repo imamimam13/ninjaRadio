@@ -63,9 +63,13 @@ except ImportError:
         from core.dmr_bptc import bptc, const
         from bitarray import bitarray
     except ImportError:
-        bptc = None
-        const = None
-        bitarray = None
+        try:
+            from dmr_bptc import bptc, const
+            from bitarray import bitarray
+        except ImportError:
+            bptc = None
+            const = None
+            bitarray = None
 
 # ETSI TS 102 361-1 Table 9.1: Base Station (BS) Voice Sync (48 bits = 24 dibits: 0x755FD7DF75F7)
 VOICE_SYNC_BS_DIBITS = [

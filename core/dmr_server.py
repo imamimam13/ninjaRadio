@@ -764,8 +764,8 @@ class HomeBrewMasterServer:
                 continue
 
             client_dmr_id = client.get("dmr_id", 0)
-            if client_dmr_id and client_dmr_id == src_id and addr[0] != "127.0.0.1" and addr == exclude_addr:
-                # Do not echo a hotspot user's own transmission back to their own hotspot
+            if client_dmr_id and client_dmr_id == src_id and addr[0] != "127.0.0.1":
+                # Do not echo a user's own transmission back to their own hotspot/device
                 continue
 
             is_local_bridge = (addr[0] == "127.0.0.1")

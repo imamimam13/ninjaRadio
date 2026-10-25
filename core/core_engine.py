@@ -2062,8 +2062,10 @@ usrpAGC = -20,10,100
                             active_tg = self.current_tx_tg or tg or client_meta_unkey.get("tg") or default_fallback_tg
                             active_slot = self.current_tx_slot or slot or client_meta_unkey.get("slot") or 2
                             active_id = self.current_tx_dmr_id or client_meta_unkey.get("src") or dmr_id or self.last_dvswitch_identity.get("src") or self.current_operator_dmr_id or default_server_id
-                            active_call = getattr(self, "current_tx_callsign", "") or client_meta_unkey.get("callsign") or lookup_callbook_callsign(active_id) or self.last_dvswitch_identity.get("callsign") or self.current_operator_callsign or f"ID-{active_id}"
-                            self.stop_carrier_tx(active_tg, active_slot, active_id)
+                            self.is_transmitting = False
+                            self.tx_identity_sent = False
+                            self.active_tx_client_addr = None
+                            self.current_tx_tg = 0
                             if self.direct_dmr:
                                 self.direct_dmr.push_web_ptt_pcm(active_call, active_id, active_tg, active_slot, b"", is_tx=False)
                             asyncio.create_task(self.dispatch_event_to_backend({
