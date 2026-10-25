@@ -25,7 +25,7 @@ ifeq ($(UNAME_S),Darwin)
 else
     # Linux
     SHARED_EXT = so
-    SHARED_FLAGS = -shared -Wl,-soname,libopendmr.$(SHARED_EXT).1
+    SHARED_FLAGS = -shared -Wl,-Bsymbolic -Wl,-soname,libopendmr.$(SHARED_EXT).1
 endif
 
 # Output files
