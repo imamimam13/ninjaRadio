@@ -2444,10 +2444,12 @@ usrpAGC = -20,10,100
 
         # 2. Build list of (target_tg, target_slot, packet_bytes) including TG Matrix cross-TG mappings
         packets_to_route = [(p_dst, p_slot, pkt)]
+        seen_targets = {(p_dst, p_slot)}
         for mt in get_matrix_translated_targets(p_dst, p_slot):
             t_tg = mt["tg"]
             t_slot = mt["slot"]
-            if t_tg > 0 and (t_tg != p_dst or t_slot != p_slot):
+            if t_tg > 0 and (t_tg, t_slot) not in seen_targets:
+                seen_targets.add((t_tg, t_slot))
                 translated_pkt = rewrite_dmrd_tg_and_slot(pkt, t_tg, t_slot)
                 packets_to_route.append((t_tg, t_slot, translated_pkt))
                 # Also broadcast the translated TG to local hotspots on our DMR Master Server
@@ -2472,7 +2474,7 @@ usrpAGC = -20,10,100
                                     logger.info(f"🚀 [DIRECT-DMR-PEER] Web/PCM TG {p_dst}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {p_src})")
                                 sent = True
                                 break
-                    if not sent:
+                    elif not sub_tgs:
                         for r_tg, r_slot, r_pkt in packets_to_route:
                             if is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                 client.send_raw_dmrd(r_pkt)
@@ -2724,41 +2726,47 @@ usrpAGC = -20,10,100
             is_local_mmdvm = host_str.startswith("127.0.0.1")
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
-            if not is_local_mmdvm:
-                self.current_rx_src = src_id
-                self.current_rx_tg = dst_tg
-                self.current_rx_slot = slot
-                self.current_rx_call = callsign
-                self.current_rx_time = now
-                self.current_rx_active = True
-                self.last_rx_src = src_id
-                self.rx_packet_count += 1
+            # Loopback & Duplicate suppression:
+            # If packet originated from local MMDVM_Bridge (127.0.0.1) or is part of an active local Direct DMR TX session,
+            # NEVER forward it to upstream peer clients (Bridi) to prevent echo / double modulation!
+            if is_local_mmdvm or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id)):
+                return
 
-                if dst_tg > 0 and src_id > 0:
-                    self.active_talkers_by_tg[dst_tg] = {
-                        "src": src_id,
-                        "callsign": callsign,
-                        "slot": slot,
-                        "time": now
-                    }
+            self.current_rx_src = src_id
+            self.current_rx_tg = dst_tg
+            self.current_rx_slot = slot
+            self.current_rx_call = callsign
+            self.current_rx_time = now
+            self.current_rx_active = True
+            self.last_rx_src = src_id
+            self.rx_packet_count += 1
+
+            if dst_tg > 0 and src_id > 0:
+                self.active_talkers_by_tg[dst_tg] = {
+                    "src": src_id,
+                    "callsign": callsign,
+                    "slot": slot,
+                    "time": now
+                }
 
             raw_packet = traffic.get("raw_packet")
             # Build list of (target_tg, target_slot, packet_bytes) including manual TG Matrix cross-TG mappings
             packets_to_route = [(dst_tg, slot, raw_packet)]
+            seen_targets = {(dst_tg, slot)}
             if raw_packet:
                 for mt in get_matrix_translated_targets(dst_tg, slot):
                     t_tg = mt["tg"]
                     t_slot = mt["slot"]
-                    if t_tg > 0 and (t_tg != dst_tg or t_slot != slot):
+                    if t_tg > 0 and (t_tg, t_slot) not in seen_targets:
+                        seen_targets.add((t_tg, t_slot))
                         translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
                         packets_to_route.append((t_tg, t_slot, translated_pkt))
-                        if not is_local_mmdvm:
-                            self.active_talkers_by_tg[t_tg] = {
-                                "src": src_id,
-                                "callsign": callsign,
-                                "slot": t_slot,
-                                "time": now
-                            }
+                        self.active_talkers_by_tg[t_tg] = {
+                            "src": src_id,
+                            "callsign": callsign,
+                            "slot": t_slot,
+                            "time": now
+                        }
                         # Also broadcast the translated TG to local hotspots on our DMR Master Server
                         if self.dmr_master_server:
                             self.dmr_master_server.broadcast_dmrd(translated_pkt)
@@ -2777,17 +2785,13 @@ usrpAGC = -20,10,100
                                         logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
                                     sent = True
                                     break
-                        if not sent:
+                        elif not sub_tgs:
                             for r_tg, r_slot, r_pkt in packets_to_route:
                                 if is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                     client.send_raw_dmrd(r_pkt)
                                     if traffic.get("data_type") == 0:
                                         logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
                                     break
-
-            # If packet originated from local MMDVM_Bridge (127.0.0.1), USRP ingress already dispatched clean 20ms PCM to backend
-            if is_local_mmdvm:
-                return
 
             # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
             decoded_pcm = b""
@@ -3320,9 +3324,25 @@ async def ptt_transmit(payload: dict):
     is_tx = bool(payload.get("is_transmitting", True))
 
     try:
+        if dmr_id > 0:
+            engine_mgr.arm_operator_identity(dmr_id, callsign, allow_restart=False)
+
+        # Web PTT uses pure Direct DMR (PCM <> OpenDMR). Do not key or unkey Analog_Bridge!
+        if engine_mgr.direct_dmr:
+            if is_tx:
+                engine_mgr.is_transmitting = True
+                engine_mgr.current_tx_tg = tg
+                engine_mgr.current_tx_slot = slot
+                engine_mgr.current_tx_dmr_id = dmr_id
+                engine_mgr.current_operator_callsign = callsign
+                if engine_mgr.dmr_master_server:
+                    engine_mgr.dmr_master_server.mark_local_transmission(dmr_id, tg, slot)
+                return {"status": "TX_STARTED", "tg": tg, "slot": slot, "dmr_id": dmr_id, "callsign": callsign, "engine": "DirectDMR"}
+            else:
+                engine_mgr.is_transmitting = False
+                return {"status": "TX_STOPPED", "engine": "DirectDMR"}
+
         if is_tx:
-            if dmr_id > 0:
-                engine_mgr.arm_operator_identity(dmr_id, callsign, allow_restart=False)
             if engine_mgr.tx_task and not engine_mgr.tx_task.done():
                 engine_mgr.tx_task.cancel()
             engine_mgr.tx_task = asyncio.create_task(engine_mgr.start_carrier_tx(tg, slot, dmr_id, callsign))

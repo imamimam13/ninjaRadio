@@ -581,6 +581,35 @@ def build_dmrd_packet(
     )
 
 
+
+class BiquadFilter:
+    """Direct Form II Transposed Biquad Filter for real-time 8kHz audio processing."""
+    def __init__(self, b: list, a: list):
+        self.b0, self.b1, self.b2 = b
+        self.a1, self.a2 = a[1], a[2]
+        self.z1 = 0.0
+        self.z2 = 0.0
+
+    def process(self, x: float) -> float:
+        out = self.b0 * x + self.z1
+        self.z1 = self.b1 * x - self.a1 * out + self.z2
+        self.z2 = self.b2 * x - self.a2 * out
+        return out
+
+    def reset(self):
+        self.z1 = 0.0
+        self.z2 = 0.0
+
+
+# 300Hz High-pass filter (2nd order Butterworth, fs=8000Hz) - eliminates room rumble, plosives & boomy mud
+HPF_300HZ_B = [0.846458104, -1.692916208, 0.846458104]
+HPF_300HZ_A = [1.0, -1.669200875, 0.716631541]
+
+# 3200Hz Low-pass filter (2nd order Butterworth, fs=8000Hz) - eliminates harsh high-freq aliasing & sibilance
+LPF_3200HZ_B = [0.638943726, 1.277887452, 0.638943726]
+LPF_3200HZ_A = [1.0, 1.142977284, 0.412797620]
+
+
 class DirectDmrEngine:
     """
     Direct Z3DMR-Style Engine for WebRTC / Web PTT:
@@ -596,6 +625,10 @@ class DirectDmrEngine:
         self.vocoder = DirectOpenDmrVocoder()
         self.broadcast_fn = dmr_master_broadcast_fn
         self.rpt_id = rpt_id
+
+        # Real-time Telecom Audio Conditioning (300Hz - 3200Hz bandpass)
+        self.hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
+        self.lpf = BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
 
         # TX State Tracking
         self.in_tx = False
@@ -721,6 +754,8 @@ class DirectDmrEngine:
             self.current_src_id = dmr_id
             self.current_callsign = callsign
             self.tx_pcm_buffer.clear()
+            self.hpf.reset()
+            self.lpf.reset()
             self.current_emblc = build_dmr_emblc_fragments(self.current_src_id, self.current_tg)
             self.current_hdr_burst = build_dmr_header_burst(self.current_src_id, self.current_tg, self.current_slot)
             self.current_term_burst = build_dmr_terminator_burst(self.current_src_id, self.current_tg, self.current_slot)
@@ -756,13 +791,25 @@ class DirectDmrEngine:
                 burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
                 del self.tx_pcm_buffer[:BURST_PCM_BYTES]
 
-                # Preserve natural human speech envelope; apply gentle soft-limiter only if peak exceeds 14000
-                samples = list(struct.unpack("<480h", burst_pcm))
-                peak = max(abs(s) for s in samples)
-                if peak > 14000:
-                    scale = 14000.0 / peak
-                    limited = [int(s * scale) for s in samples]
-                    burst_pcm = struct.pack("<480h", *limited)
+                # Professional Broadcast Telecom DSP:
+                # 1. 300Hz HPF: eliminates mic thumps, room rumble, and boomy bass resonance ("membulat")
+                # 2. 3200Hz LPF: eliminates aliasing foldback, piercing sibilance, and harsh noise ("menyelekit")
+                # 3. Sample-by-sample smooth soft-knee limiter: prevents digital clipping without frame gain pumping
+                import math
+                raw_samples = struct.unpack("<480h", burst_pcm)
+                processed = []
+                for s in raw_samples:
+                    f_val = self.lpf.process(self.hpf.process(float(s)))
+                    sign = 1.0 if f_val >= 0 else -1.0
+                    x = abs(f_val)
+                    if x <= 12000.0:
+                        y = x
+                    else:
+                        y = 12000.0 + 3800.0 * math.tanh((x - 12000.0) / 6000.0)
+                    processed.append(int(sign * y))
+
+                burst_pcm = struct.pack("<480h", *processed)
+                peak = max(abs(p) for p in processed)
 
                 burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                 if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
