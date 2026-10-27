@@ -856,7 +856,7 @@ export default function RadioPocketMode() {
         // Accumulate samples and dispatch ONLY exact 160-sample (20ms / 320-byte) frames
         txAccumulatorRef.current.push(...newSamples);
 
-        const MIC_BOOST = isCableGatewayActive ? 2.5 * cableGain : 2.5; // Optimal speech deviation pre-amp for DMR vocoder
+        const MIC_BOOST = isCableGatewayActive ? cableGain : 1.25; // Clean natural speech pre-amp without digital clipping
         while (txAccumulatorRef.current.length >= 160) {
           const frame = txAccumulatorRef.current.splice(0, 160);
           const pcm16 = new Int16Array(160);

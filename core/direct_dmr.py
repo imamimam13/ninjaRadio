@@ -321,10 +321,10 @@ class DirectOpenDmrVocoder:
                 self._enc = self.lib.opendmr_encoder_create()
                 if self._enc and hasattr(self.lib, "opendmr_encoder_set_gain"):
                     try:
-                        self.lib.opendmr_encoder_set_gain(self._enc, 6)
+                        self.lib.opendmr_encoder_set_gain(self._enc, 0)
                     except Exception:
                         pass
-                logger.info(f"✓ OpenDMR vocoder initialized (+6dB gain, version: {self.version()})")
+                logger.info(f"✓ OpenDMR vocoder initialized (0dB unity gain, version: {self.version()})")
             except Exception as e:
                 logger.warning(f"Could not create OpenDMR codec instances: {e}")
 
@@ -756,13 +756,13 @@ class DirectDmrEngine:
                 burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
                 del self.tx_pcm_buffer[:BURST_PCM_BYTES]
 
-                # Check amplitude & apply adaptive speech normalizer if mic level is quiet
+                # Preserve natural human speech envelope; apply gentle soft-limiter only if peak exceeds 14000
                 samples = list(struct.unpack("<480h", burst_pcm))
                 peak = max(abs(s) for s in samples)
-                if 20 < peak < 10000:
-                    scale = min(3.5, 16000.0 / max(peak, 500))
-                    boosted = [max(-32767, min(32767, int(s * scale))) for s in samples]
-                    burst_pcm = struct.pack("<480h", *boosted)
+                if peak > 14000:
+                    scale = 14000.0 / peak
+                    limited = [int(s * scale) for s in samples]
+                    burst_pcm = struct.pack("<480h", *limited)
 
                 burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                 if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
