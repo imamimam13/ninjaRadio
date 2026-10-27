@@ -525,7 +525,7 @@ def build_dmrd_packet(
     call_type: str = "group"
 ) -> bytes:
     """
-    Constructs a valid standard 53-byte HomeBrew DMRD packet.
+    Constructs a valid standard 55-byte HomeBrew DMRD packet (20B header + 33B payload + 2B BER/RSSI).
     Byte 15 (bits) follows the official MMDVMHost / HBlink3 / Z3DMR specification:
       - Bit 7 (0x80): Slot (0 = TS1, 1 = TS2)
       - Bit 6 (0x40): Call Type (0 = Group, 1 = Unit/Private)
@@ -577,6 +577,7 @@ def build_dmrd_packet(
         + struct.pack("B", bits)
         + struct.pack(">I", stream_id)
         + safe_payload
+        + b"\x00\x00"  # 2 trailing telemetry bytes: BER (0%) & RSSI (0 dBm) for 55-byte HomeBrew standard
     )
 
 

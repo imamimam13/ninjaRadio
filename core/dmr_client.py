@@ -492,7 +492,7 @@ class HomeBrewClient:
         if not payload or len(payload) != 33:
             payload = (payload[:33] if payload else b"").ljust(33, b"\x00")
 
-        frame = DMRD + seq_byte + src_bytes + dst_bytes + repeater_bytes + bits_byte + stream_id_bytes + payload
+        frame = DMRD + seq_byte + src_bytes + dst_bytes + repeater_bytes + bits_byte + stream_id_bytes + payload + b"\x00\x00"
         try:
             self.sock.sendto(frame, self.target_addr)
             self.packets_tx += 1
@@ -520,6 +520,12 @@ class HomeBrewClient:
                 tx_pkt = raw_data[:11] + struct.pack(">I", self.dmr_id) + raw_data[15:]
             else:
                 tx_pkt = raw_data
+
+            # Standard HomeBrew repeater frame length is 55 bytes (20B header + 33B payload + 2B BER/RSSI).
+            # If 53 bytes, append 2 telemetry bytes (0% BER, 0 RSSI) so HBlink / MMDVM never drops the stream.
+            if len(tx_pkt) == 53:
+                tx_pkt += b"\x00\x00"
+
             self.sock.sendto(tx_pkt, self.target_addr)
             self.packets_tx += 1
             return True

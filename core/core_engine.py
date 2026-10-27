@@ -398,19 +398,20 @@ def rewrite_dmrd_tg_and_slot(raw_packet: bytes, new_tg: int, new_slot: int) -> b
     new_header = raw_packet[:8] + tg_bytes + raw_packet[11:15] + bytes([new_bits]) + raw_packet[16:20]
 
     ft_dt = orig_bits & 0x3F
+    trailing = raw_packet[53:] if len(raw_packet) >= 55 else b"\x00\x00"
     if len(raw_packet) >= 53:
         src_id = int.from_bytes(raw_packet[5:8], "big")
         call_type = "unit" if (orig_bits & 0x40) else "group"
         if ft_dt == 0x21:  # Voice Header
             try:
                 new_payload = build_dmr_header_burst(src_id, new_tg, new_slot, call_type)
-                return new_header + new_payload
+                return new_header + new_payload + trailing
             except Exception:
                 pass
         elif ft_dt == 0x22:  # Voice Terminator
             try:
                 new_payload = build_dmr_terminator_burst(src_id, new_tg, new_slot, call_type)
-                return new_header + new_payload
+                return new_header + new_payload + trailing
             except Exception:
                 pass
     return new_header + raw_packet[20:]
