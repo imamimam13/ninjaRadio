@@ -369,14 +369,14 @@ def get_matrix_translated_targets(tg: int, slot: int = 2, source_mode: str = "DM
         t_tg = int(t_tg or 0)
         s_slot = int(s_slot or 2)
         t_slot = int(t_slot or 2)
-        if s_tg == tg and t_tg > 0 and t_tg != tg:
+        if s_tg == tg and t_tg > 0 and (t_tg != tg or t_slot != slot):
             targets.append({
                 "rule_name": r_name,
                 "mode": str(t_mode or "DMR").upper(),
                 "tg": t_tg,
                 "slot": t_slot
             })
-        elif bidir and t_tg == tg and s_tg > 0 and s_tg != tg:
+        elif bidir and t_tg == tg and s_tg > 0 and (s_tg != tg or s_slot != slot):
             targets.append({
                 "rule_name": r_name,
                 "mode": str(s_mode or "DMR").upper(),
@@ -2446,7 +2446,7 @@ usrpAGC = -20,10,100
         for mt in get_matrix_translated_targets(p_dst, p_slot):
             t_tg = mt["tg"]
             t_slot = mt["slot"]
-            if t_tg > 0 and t_tg != p_dst:
+            if t_tg > 0 and (t_tg != p_dst or t_slot != p_slot):
                 translated_pkt = rewrite_dmrd_tg_and_slot(pkt, t_tg, t_slot)
                 packets_to_route.append((t_tg, t_slot, translated_pkt))
                 # Also broadcast the translated TG to local hotspots on our DMR Master Server
@@ -2471,7 +2471,7 @@ usrpAGC = -20,10,100
                                     logger.info(f"🚀 [DIRECT-DMR-PEER] Web/PCM TG {p_dst}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {p_src})")
                                 sent = True
                                 break
-                    if not sent and not sub_tgs:
+                    if not sent:
                         for r_tg, r_slot, r_pkt in packets_to_route:
                             if is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                 client.send_raw_dmrd(r_pkt)
@@ -2748,7 +2748,7 @@ usrpAGC = -20,10,100
                 for mt in get_matrix_translated_targets(dst_tg, slot):
                     t_tg = mt["tg"]
                     t_slot = mt["slot"]
-                    if t_tg > 0 and t_tg != dst_tg:
+                    if t_tg > 0 and (t_tg != dst_tg or t_slot != slot):
                         translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
                         packets_to_route.append((t_tg, t_slot, translated_pkt))
                         if not is_local_mmdvm:
@@ -2776,7 +2776,7 @@ usrpAGC = -20,10,100
                                         logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
                                     sent = True
                                     break
-                        if not sent and not sub_tgs:
+                        if not sent:
                             for r_tg, r_slot, r_pkt in packets_to_route:
                                 if is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                     client.send_raw_dmrd(r_pkt)
