@@ -94,33 +94,63 @@ export default function RadioPocketMode() {
     }
   };
 
+  // Real-time Screen Dimensions & Responsive Viewport Metrics
+  const [screenMetrics, setScreenMetrics] = useState({
+    width: 400,
+    height: 800,
+    isLandscape: false,
+    isCompactHeight: false, // h < 720px
+    isUltraCompactHeight: false, // h < 620px
+    isCompactWidth: false, // w < 380px
+    isTabletOrDesktop: false, // w >= 768px
+  });
+
   // Auto-detect device dimensions on mount and resize if not manually set
   useEffect(() => {
     if (typeof window !== "undefined") {
       const savedSkin = localStorage.getItem("ninjaradio_device_skin");
       if (savedSkin === "standard" || savedSkin === "poc18") {
         setDeviceSkin(savedSkin);
-        return;
       }
     }
 
     const handleScreenSize = () => {
-      if (typeof window !== "undefined") {
-        const savedSkin = localStorage.getItem("ninjaradio_device_skin");
-        if (savedSkin) return;
+      if (typeof window === "undefined") return;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const isLandscape = w > h && w >= 640;
+      const isCompactHeight = h < 720;
+      const isUltraCompactHeight = h < 620;
+      const isCompactWidth = w < 380;
+      const isTabletOrDesktop = w >= 768;
 
-        // Specialized micro-screen hardware radios have tiny viewports (<= 240x320)
-        // Standard smartphones (even 5-6" screens) have CSS pixel width of 360px - 430px
-        if (window.innerWidth <= 240 && window.innerHeight <= 320) {
+      setScreenMetrics({
+        width: w,
+        height: h,
+        isLandscape,
+        isCompactHeight,
+        isUltraCompactHeight,
+        isCompactWidth,
+        isTabletOrDesktop,
+      });
+
+      const savedSkin = localStorage.getItem("ninjaradio_device_skin");
+      if (!savedSkin) {
+        if (w <= 280 && h <= 360) {
           setDeviceSkin("poc18");
         } else {
           setDeviceSkin("standard");
         }
       }
     };
+
     handleScreenSize();
     window.addEventListener("resize", handleScreenSize);
-    return () => window.removeEventListener("resize", handleScreenSize);
+    window.addEventListener("orientationchange", handleScreenSize);
+    return () => {
+      window.removeEventListener("resize", handleScreenSize);
+      window.removeEventListener("orientationchange", handleScreenSize);
+    };
   }, []);
 
   // PTT Physical Key & Trigger Settings Modal State
@@ -1412,28 +1442,28 @@ export default function RadioPocketMode() {
   };
 
   return (
-    <div className="min-h-screen bg-[#05070c] text-slate-100 flex flex-col justify-between select-none p-2 sm:p-4 max-w-lg mx-auto">
+    <div className={`h-[100dvh] max-h-[100dvh] w-full bg-[#05070c] text-slate-100 flex flex-col justify-between overflow-hidden select-none px-2 sm:px-4 pt-[max(0.35rem,env(safe-area-inset-top))] pb-[max(0.35rem,env(safe-area-inset-bottom))] ${screenMetrics.isLandscape ? "max-w-5xl" : "max-w-md"} mx-auto`}>
       
       {/* Top Device Header */}
-      <div className="flex items-center justify-between border-b border-cyan-900/40 pb-2">
+      <div className="flex items-center justify-between border-b border-cyan-900/40 pb-1.5 flex-shrink-0 gap-1">
         <Link
           href="/"
-          className="flex items-center gap-1 text-[11px] font-mono font-bold text-slate-400 hover:text-cyan-400 transition-colors"
+          className="flex items-center gap-1 text-[11px] font-mono font-bold text-slate-400 hover:text-cyan-400 transition-colors flex-shrink-0"
         >
-          <ChevronLeft className="w-4 h-4 text-cyan-400" />
-          <span>NOC DASHBOARD</span>
+          <ChevronLeft className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+          <span>{screenMetrics.isCompactWidth ? "NOC" : "NOC DASHBOARD"}</span>
         </Link>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1 flex-shrink-0 overflow-x-auto no-scrollbar">
           {/* PWA Install Button (Displays when install prompt is available or user wants to install) */}
           {deferredInstallPrompt && !isPwaInstalled && (
             <button
               onClick={handleInstallPwa}
-              className="px-2 py-1 rounded-lg text-[10px] font-mono font-black bg-cyan-400 hover:bg-cyan-300 text-slate-950 flex items-center gap-1 shadow transition-all animate-pulse"
+              className="px-1.5 py-0.5 rounded-lg text-[9px] font-mono font-black bg-cyan-400 hover:bg-cyan-300 text-slate-950 flex items-center gap-1 shadow transition-all animate-pulse"
               title="Pasang NinjaRadio PWA ke Layar Utama Hape"
             >
               <Smartphone className="w-3 h-3" />
-              <span>Install PWA</span>
+              <span className="hidden sm:inline">PWA</span>
             </button>
           )}
 
@@ -1444,26 +1474,27 @@ export default function RadioPocketMode() {
               setTempRxFreq(radioRxFreq);
               setShowFreqModal(true);
             }}
-            className="px-2 py-1 rounded-lg text-[10px] font-mono font-black border border-cyan-900/50 bg-[#0b121e] text-cyan-300 hover:border-cyan-400 flex items-center gap-1 transition-all"
+            className="px-1.5 py-0.5 rounded-lg text-[10px] font-mono font-black border border-cyan-900/50 bg-[#0b121e] text-cyan-300 hover:border-cyan-400 flex items-center gap-1 transition-all"
             title="Pengaturan Frekuensi TX/RX & Tuner VFO"
           >
-            <Radio className="w-3 h-3 text-cyan-400" />
-            <span>{radioTxFreq} MHz</span>
+            <Radio className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+            <span>{screenMetrics.isCompactWidth ? radioTxFreq.slice(0, 5) : `${radioTxFreq} MHz`}</span>
           </button>
 
           {/* Quick PTT Mode & Key Setting Button */}
           <button
             onClick={() => setShowPttSettingsModal(true)}
-            className="px-2 py-1 rounded-lg text-[10px] font-mono font-black border border-cyan-900/50 bg-[#0b121e] text-cyan-300 hover:border-cyan-400 flex items-center gap-1 transition-all"
+            className="px-1.5 py-0.5 rounded-lg text-[10px] font-mono font-black border border-cyan-900/50 bg-[#0b121e] text-cyan-300 hover:border-cyan-400 flex items-center gap-1 transition-all"
             title="Pengaturan Tombol Fisik PTT (Volume Hape / Spasi / Headset)"
           >
-            <SlidersVertical className="w-3 h-3 text-cyan-400" />
-            <span>PTT: {pttMode === "hold" ? "HOLD" : "TOGGLE"}</span>
+            <SlidersVertical className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+            <span>{pttMode === "hold" ? "HOLD" : "TOGGLE"}</span>
           </button>
+
           {/* Audio Cable Gateway Toggle */}
           <button
             onClick={() => setShowCableModal(true)}
-            className={`px-2 py-1 rounded-lg text-[10px] font-mono font-black border transition-all flex items-center gap-1 ${
+            className={`px-1.5 py-0.5 rounded-lg text-[10px] font-mono font-black border transition-all flex items-center gap-1 ${
               isCableGatewayActive
                 ? isCableRxActive
                   ? "bg-amber-400 text-slate-950 border-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.6)] animate-pulse"
@@ -1472,8 +1503,8 @@ export default function RadioPocketMode() {
             }`}
             title="Kabel Audio Radio Gateway (TRRS Line-In / USB Soundcard)"
           >
-            <Cable className="w-3 h-3" />
-            <span>KABEL {isCableGatewayActive ? (isCableRxActive ? "RX" : "ON") : "OFF"}</span>
+            <Cable className="w-3 h-3 flex-shrink-0" />
+            <span>{screenMetrics.isCompactWidth ? "KBL" : `KBL ${isCableGatewayActive ? (isCableRxActive ? "RX" : "ON") : "OFF"}`}</span>
           </button>
 
           {/* VOX Quick Toggle Pill */}
@@ -1487,14 +1518,14 @@ export default function RadioPocketMode() {
                 beepPlayer?.playRogerBeep();
               }
             }}
-            className={`px-2 py-1 rounded-lg text-[10px] font-mono font-black border transition-all flex items-center gap-1 ${
+            className={`px-1.5 py-0.5 rounded-lg text-[10px] font-mono font-black border transition-all flex items-center gap-1 ${
               isVoxEnabled
                 ? "bg-emerald-500 text-slate-950 border-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.5)] animate-pulse"
                 : "bg-[#0b121e] border-cyan-900/40 text-slate-400 hover:text-cyan-400"
             }`}
             title="Aktivasi Suara Otomatis (Hands-Free VOX)"
           >
-            <Headphones className="w-3 h-3" />
+            <Headphones className="w-3 h-3 flex-shrink-0" />
             <span>VOX</span>
           </button>
 
@@ -1503,7 +1534,7 @@ export default function RadioPocketMode() {
               ensureAudioUnlocked();
               setIsMuted(!isMuted);
             }}
-            className="p-1.5 rounded-lg bg-[#0b121e] border border-cyan-900/40 text-slate-300 hover:text-white"
+            className="p-1 rounded-lg bg-[#0b121e] border border-cyan-900/40 text-slate-300 hover:text-white flex-shrink-0"
           >
             {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-cyan-400" />}
           </button>
@@ -1842,366 +1873,376 @@ export default function RadioPocketMode() {
         /* ======================================================== */
         /* STANDARD 2.4" - 2.8" TOUCHSCREEN HT MODE                 */
         /* ======================================================== */
-        <div className="my-1 flex-1 flex flex-col justify-between space-y-2">
+        <div className={`my-0.5 sm:my-1 flex-1 min-h-0 ${screenMetrics.isLandscape ? "grid grid-cols-2 gap-3 items-stretch" : "flex flex-col justify-between space-y-1 sm:space-y-1.5"}`}>
           
-          {/* Cyberdeck Phosphor LCD Radio Screen */}
-          <div className="bg-[#08120e] border-2 border-emerald-500/60 rounded-2xl p-3 shadow-inner shadow-black font-lcd relative overflow-hidden">
-            <div className="absolute inset-0 bg-scanlines pointer-events-none opacity-25" />
+          {/* Deck 1: LCD Screen & Channel Controls */}
+          <div className={`flex flex-col justify-between min-h-0 ${screenMetrics.isLandscape ? "space-y-2 h-full" : "space-y-1 sm:space-y-1.5"}`}>
+            {/* Cyberdeck Phosphor LCD Radio Screen */}
+            <div className={`bg-[#08120e] border-2 border-emerald-500/60 rounded-2xl ${screenMetrics.isCompactHeight ? "p-2" : "p-2.5 sm:p-3"} shadow-inner shadow-black font-lcd relative overflow-hidden flex-1 flex flex-col justify-between min-h-0`}>
+              <div className="absolute inset-0 bg-scanlines pointer-events-none opacity-25" />
 
-            {/* LCD Header */}
-            <div className="flex items-center justify-between border-b border-emerald-900/60 pb-1 text-xs text-emerald-400 font-bold">
-              <div className="flex items-center gap-1.5">
-                <Radio className="w-3.5 h-3.5" />
-                <span>NINJA-DMR CORE</span>
-                {isCableGatewayActive && (
-                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-black ${
-                    isCableRxActive ? "bg-amber-400 text-slate-950 animate-pulse" : "bg-cyan-900 text-cyan-300"
-                  }`}>
-                    CABLE {isCableRxActive ? "RX" : "STBY"}
-                  </span>
-                )}
-                {isVoxEnabled && (
-                  <span className="px-1.5 py-0.2 rounded bg-emerald-500 text-slate-950 text-[9px] font-black animate-pulse">
-                    VOX
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5 font-mono text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTempTxFreq(radioTxFreq);
-                    setTempRxFreq(radioRxFreq);
-                    setShowFreqModal(true);
-                  }}
-                  className="px-2 py-0.5 rounded font-mono font-black text-[11px] bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-700/60 transition-all cursor-pointer shadow-sm"
-                  title="Klik untuk membuka Tuner Frekuensi VFO"
-                >
-                  📡 {radioTxFreq} MHz ✎
-                </button>
-                <button
-                  type="button"
-                  onClick={toggleTimeSlot}
-                  className={`px-2 py-0.5 rounded font-mono font-black text-[11px] transition-all flex items-center gap-1 cursor-pointer active:scale-95 border ${
-                    currentTimeSlot === 1
-                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/60 hover:bg-emerald-500/30 shadow-sm"
-                      : "bg-cyan-500/20 text-cyan-300 border-cyan-500/60 hover:bg-cyan-500/30 shadow-sm"
-                  }`}
-                  title="Klik untuk ganti TimeSlot (TS1 ↔ TS2)"
-                >
-                  <span>TS{currentTimeSlot}</span>
-                  <span className="text-[9px] opacity-80">⇄</span>
-                </button>
-                <span className="px-1.5 py-0.2 bg-emerald-950 rounded text-emerald-300">{currentTg.mode}</span>
-              </div>
-            </div>
-
-            {/* LCD Body: Active Signal / Callsign / Talkgroup */}
-            <div className="py-2.5 text-center">
-              {isTransmitting ? (
-                <div className="animate-pulse">
-                  <div className="inline-block px-2.5 py-0.5 bg-rose-600 text-white font-black text-xs rounded tracking-widest uppercase mb-1">
-                    🔴 TX {isVoxEnabled ? "VOX ON AIR" : "TRANSMITTING"}
-                  </div>
-                  <div className="text-3xl font-black text-rose-400 tracking-wider">
-                    {activeProfile.callsign}
-                  </div>
-                  <div className="text-xs text-rose-300 font-mono mt-0.5">
-                    {callType === "private" ? `DIRECT PRIVATE CALL: ID ${privateId}` : `TALKGROUP: TG ${currentTg.id}`}
-                  </div>
-                </div>
-              ) : isCableRxActive ? (
-                <div className="animate-pulse">
-                  <div className="inline-block px-2.5 py-0.5 bg-amber-400 text-slate-950 font-black text-xs rounded tracking-widest uppercase mb-1">
-                    📻 CABLE INGEST (AUDIO RADIO MASUK)
-                  </div>
-                  <div className="text-3xl font-black text-amber-300 tracking-wider">
-                    ANALOG / DMR RF
-                  </div>
-                  <div className="text-xs text-amber-400 font-mono mt-0.5">
-                    Meneruskan audio kabel ke TG {currentTg.id} ({currentMicDb} dB)
-                  </div>
-                </div>
-              ) : isEchoPlaying ? (
-                <div className="animate-pulse">
-                  <div className="inline-block px-2.5 py-0.5 bg-emerald-500 text-slate-950 font-black text-xs rounded tracking-widest uppercase mb-1">
-                    🟢 RX ECHO PARROT PLAYBACK
-                  </div>
-                  <div className="text-3xl font-black text-emerald-300 tracking-wider">
-                    {activeProfile.callsign}
-                  </div>
-                  <div className="text-xs text-emerald-400 font-mono mt-0.5">
-                    TG 9990 • Memutar Ulang Rekaman Suara Anda
-                  </div>
-                </div>
-              ) : relevantActiveTx ? (
-                <div>
-                  <div className="inline-block px-2.5 py-0.5 bg-emerald-500 text-slate-950 font-black text-xs rounded tracking-widest uppercase mb-1">
-                    🟢 RX RECEIVING
-                  </div>
-                  <div className="text-3xl font-black text-emerald-300 tracking-wider">
-                    {relevantActiveTx.callsign}
-                  </div>
-                  <div className="text-xs text-emerald-400 font-medium truncate mt-0.5">
-                    {relevantActiveTx.name} (TG {relevantActiveTx.talkgroup} • {relevantActiveTx.tg_name})
-                  </div>
-                </div>
-              ) : (
-                <div
-                  onClick={() => setShowDialer(true)}
-                  className="cursor-pointer group hover:bg-emerald-950/40 p-1.5 rounded-xl transition-all"
-                  title="Klik untuk ganti atau dial TalkGroup tujuan"
-                >
-                  <div className="text-[10px] text-emerald-600 group-hover:text-cyan-400 uppercase font-bold tracking-widest mb-0.5 flex items-center justify-center gap-1.5">
-                    <span>{callType === "private" ? "DIRECT PRIVATE TARGET" : `CURRENT CHANNEL [${activeProfile.category.toUpperCase()}]`}</span>
-                    <span className="text-[9px] bg-emerald-900/60 group-hover:bg-cyan-900/80 px-1.5 py-0.2 rounded text-emerald-300 group-hover:text-cyan-300 font-mono">
-                      Ganti TG ✎
+              {/* LCD Header */}
+              <div className="flex items-center justify-between border-b border-emerald-900/60 pb-1 text-[11px] sm:text-xs text-emerald-400 font-bold flex-shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <Radio className="w-3.5 h-3.5" />
+                  <span>NINJA-DMR CORE</span>
+                  {isCableGatewayActive && (
+                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-black ${
+                      isCableRxActive ? "bg-amber-400 text-slate-950 animate-pulse" : "bg-cyan-900 text-cyan-300"
+                    }`}>
+                      CABLE {isCableRxActive ? "RX" : "STBY"}
                     </span>
-                  </div>
-                  <div className="text-3xl font-black text-emerald-400 group-hover:text-cyan-300 tracking-wider">
-                    {callType === "private" ? `ID ${privateId}` : `TG ${currentTg.id}`}
-                  </div>
-                  <div className="text-xs text-emerald-500 group-hover:text-cyan-400 font-bold mt-0.5">
-                    {callType === "private" ? "Direct Peer-to-Peer DMR Call" : currentTg.name}
-                  </div>
+                  )}
+                  {isVoxEnabled && (
+                    <span className="px-1.5 py-0.2 rounded bg-emerald-500 text-slate-950 text-[9px] font-black animate-pulse">
+                      VOX
+                    </span>
+                  )}
                 </div>
-              )}
-            </div>
-
-            {/* LCD Scope & S-Meter */}
-            <div className="mt-1 pt-1.5 border-t border-emerald-900/60 flex items-center justify-between text-xs text-emerald-400 font-mono">
-              <div>
-                S-METER: <span className="font-bold text-emerald-300">{isCableRxActive ? "RF CABLE" : "S9+20dB"}</span>
-              </div>
-              <AudioVisualizer 
-                isActive={isTransmitting || !!relevantActiveTx || isCableRxActive || isEchoPlaying} 
-                mode="oscilloscope" 
-                color={isTransmitting ? "bg-rose-500" : isCableRxActive ? "bg-amber-400" : "bg-emerald-400"} 
-                barsCount={10} 
-              />
-            </div>
-          </div>
-
-          {/* 3-Column Control Row: CH PREV | QUICK SMS | CH NEXT */}
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              onClick={prevChannel}
-              className="flex items-center justify-center gap-1 py-2.5 bg-[#0b121e] border border-cyan-900/50 hover:border-cyan-400 active:bg-slate-800 rounded-xl text-xs font-mono font-bold text-slate-200 transition-all"
-            >
-              <ChevronLeft className="w-4 h-4 text-cyan-400" />
-              <span>CH PREV</span>
-            </button>
-            <button
-              onClick={() => setShowSmsModal(true)}
-              className="flex items-center justify-center gap-1.5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 active:scale-95 text-white text-xs font-heading font-black rounded-xl shadow-lg shadow-purple-600/30 transition-all"
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>SMS</span>
-            </button>
-            <button
-              onClick={nextChannel}
-              className="flex items-center justify-center gap-1 py-2.5 bg-[#0b121e] border border-cyan-900/50 hover:border-cyan-400 active:bg-slate-800 rounded-xl text-xs font-mono font-bold text-slate-200 transition-all"
-            >
-              <span>CH NEXT</span>
-              <ChevronRight className="w-4 h-4 text-cyan-400" />
-            </button>
-          </div>
-
-          {/* Quick Setup Bar: Keypad | Cable Setup | VOX */}
-          <div className="flex justify-center items-center gap-2 flex-wrap">
-            <button
-              onClick={() => setShowDialer(!showDialer)}
-              className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 py-1 px-2.5 rounded-lg bg-[#0b121e] border border-cyan-900/30"
-            >
-              <PhoneCall className="w-3.5 h-3.5" />
-              <span>{showDialer ? "Tutup Keypad" : "Dial Keypad"}</span>
-            </button>
-
-            <button
-              onClick={() => setShowCableModal(true)}
-              className="text-[11px] font-mono text-amber-400 hover:text-amber-300 flex items-center gap-1 py-1 px-2.5 rounded-lg bg-[#0b121e] border border-amber-900/40"
-            >
-              <Cable className="w-3.5 h-3.5" />
-              <span>Setup Kabel Radio</span>
-            </button>
-
-            <button
-              onClick={() => setShowVoxModal(true)}
-              className="text-[11px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center gap-1 py-1 px-2.5 rounded-lg bg-[#0b121e] border border-cyan-900/30"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span>Sensitivitas VOX</span>
-            </button>
-          </div>
-
-          {/* Direct Number Dialer Form */}
-          {showDialer && (
-            <div className="bg-[#0b121e] border-2 border-cyan-700/60 rounded-2xl p-3 space-y-2.5 shadow-xl">
-              <div className="flex items-center justify-between text-xs border-b border-cyan-900/50 pb-1.5">
-                <span className="font-bold text-cyan-300 flex items-center gap-1">
-                  <PhoneCall className="w-3.5 h-3.5 text-cyan-400" />
-                  {callType === "private" ? "Dial Private DMR ID" : "Pilih atau Masukkan TalkGroup Tujuan"}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowDialer(false)}
-                  className="text-slate-400 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded"
-                >
-                  ✕ Tutup
-                </button>
-              </div>
-
-              {callType === "group" && (
-                <div>
-                  <div className="text-[10px] text-slate-400 font-semibold mb-1">Preset TalkGroup Populer (Klik untuk Lock):</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      { id: 510, label: "510 (Nasional)" },
-                      { id: 5101, label: "5101 (Jabar)" },
-                      { id: 5102, label: "5102 (Jateng)" },
-                      { id: 5103, label: "5103 (Jatim)" },
-                      { id: 5109, label: "5109 (RAPI)" },
-                      { id: 5108, label: "5108 (CB 11M)" },
-                      { id: 5100, label: "5100 (SAR)" },
-                      { id: 9990, label: "9990 (Echo Test)" },
-                      { id: 91, label: "91 (WorldWide)" },
-                    ].map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => handleQuickDial(preset.id)}
-                        className={`text-[10px] font-mono font-bold px-2 py-1 rounded-lg border transition-all ${
-                          currentTg.id === preset.id
-                            ? "bg-cyan-400 text-slate-950 border-cyan-300 shadow-sm"
-                            : "bg-slate-900 border-slate-700 text-slate-300 hover:border-cyan-400 hover:text-cyan-300"
-                        }`}
-                      >
-                        TG {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <form onSubmit={handleApplyDial} className="space-y-2">
-                <div className="text-[10px] text-slate-400 font-semibold">
-                  {callType === "private" ? "Ketik DMR ID Tujuan:" : "Atau Masukkan Nomor TG Manual:"}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    autoFocus
-                    placeholder={callType === "private" ? "Contoh: 5101002" : "Contoh: 5105, 510, 91, 5104"}
-                    value={dialInput}
-                    onChange={(e) => setDialInput(e.target.value)}
-                    className="flex-1 px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-xs text-cyan-300 font-mono font-bold focus:border-cyan-400 outline-none"
-                  />
+                <div className="flex items-center gap-1.5 font-mono text-[10px] sm:text-[11px]">
                   <button
-                    type="submit"
-                    className="px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black text-xs rounded-xl shadow-md transition-colors"
+                    type="button"
+                    onClick={() => {
+                      setTempTxFreq(radioTxFreq);
+                      setTempRxFreq(radioRxFreq);
+                      setShowFreqModal(true);
+                    }}
+                    className="px-1.5 sm:px-2 py-0.5 rounded font-mono font-black bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-700/60 transition-all cursor-pointer shadow-sm"
+                    title="Klik untuk membuka Tuner Frekuensi VFO"
                   >
-                    Set & Kunci TG
+                    📡 {radioTxFreq} MHz ✎
                   </button>
+                  <button
+                    type="button"
+                    onClick={toggleTimeSlot}
+                    className={`px-1.5 sm:px-2 py-0.5 rounded font-mono font-black transition-all flex items-center gap-0.5 sm:gap-1 cursor-pointer active:scale-95 border ${
+                      currentTimeSlot === 1
+                        ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/60 hover:bg-emerald-500/30 shadow-sm"
+                        : "bg-cyan-500/20 text-cyan-300 border-cyan-500/60 hover:bg-cyan-500/30 shadow-sm"
+                    }`}
+                    title="Klik untuk ganti TimeSlot (TS1 ↔ TS2)"
+                  >
+                    <span>TS{currentTimeSlot}</span>
+                    <span className="text-[9px] opacity-80">⇄</span>
+                  </button>
+                  <span className="px-1.5 py-0.2 bg-emerald-950 rounded text-emerald-300">{currentTg.mode}</span>
                 </div>
-              </form>
-            </div>
-          )}
+              </div>
 
-          {/* Quick PTT Trigger Mode & Hardware Keybar */}
-          <div className="flex items-center justify-between w-full max-w-[320px] px-2 text-[10px] font-mono text-slate-400">
-            <div className="flex items-center gap-1.5">
-              <span>Mode:</span>
+              {/* LCD Body: Active Signal / Callsign / Talkgroup */}
+              <div className={`${screenMetrics.isCompactHeight ? "py-1 sm:py-1.5" : "py-1.5 sm:py-2.5"} text-center`}>
+                {isTransmitting ? (
+                  <div className="animate-pulse">
+                    <div className="inline-block px-2.5 py-0.5 bg-rose-600 text-white font-black text-[10px] sm:text-xs rounded tracking-widest uppercase mb-1">
+                      🔴 TX {isVoxEnabled ? "VOX ON AIR" : "TRANSMITTING"}
+                    </div>
+                    <div className="text-2xl sm:text-3xl font-black text-rose-400 tracking-wider">
+                      {activeProfile.callsign}
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-rose-300 font-mono mt-0.5">
+                      {callType === "private" ? `DIRECT PRIVATE CALL: ID ${privateId}` : `TALKGROUP: TG ${currentTg.id}`}
+                    </div>
+                  </div>
+                ) : isCableRxActive ? (
+                  <div className="animate-pulse">
+                    <div className="inline-block px-2.5 py-0.5 bg-amber-400 text-slate-950 font-black text-[10px] sm:text-xs rounded tracking-widest uppercase mb-1">
+                      📻 CABLE INGEST (AUDIO RADIO MASUK)
+                    </div>
+                    <div className="text-2xl sm:text-3xl font-black text-amber-300 tracking-wider">
+                      ANALOG / DMR RF
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-amber-400 font-mono mt-0.5">
+                      Meneruskan audio kabel ke TG {currentTg.id} ({currentMicDb} dB)
+                    </div>
+                  </div>
+                ) : isEchoPlaying ? (
+                  <div className="animate-pulse">
+                    <div className="inline-block px-2.5 py-0.5 bg-emerald-500 text-slate-950 font-black text-[10px] sm:text-xs rounded tracking-widest uppercase mb-1">
+                      🟢 RX ECHO PARROT PLAYBACK
+                    </div>
+                    <div className="text-2xl sm:text-3xl font-black text-emerald-300 tracking-wider">
+                      {activeProfile.callsign}
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-emerald-400 font-mono mt-0.5">
+                      TG 9990 • Memutar Ulang Rekaman Suara Anda
+                    </div>
+                  </div>
+                ) : relevantActiveTx ? (
+                  <div>
+                    <div className="inline-block px-2.5 py-0.5 bg-emerald-500 text-slate-950 font-black text-[10px] sm:text-xs rounded tracking-widest uppercase mb-1">
+                      🟢 RX RECEIVING
+                    </div>
+                    <div className="text-2xl sm:text-3xl font-black text-emerald-300 tracking-wider">
+                      {relevantActiveTx.callsign}
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-emerald-400 font-medium truncate mt-0.5">
+                      {relevantActiveTx.name} (TG {relevantActiveTx.talkgroup} • {relevantActiveTx.tg_name})
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => setShowDialer(true)}
+                    className="cursor-pointer group hover:bg-emerald-950/40 p-1 sm:p-1.5 rounded-xl transition-all"
+                    title="Klik untuk ganti atau dial TalkGroup tujuan"
+                  >
+                    <div className="text-[9px] sm:text-[10px] text-emerald-600 group-hover:text-cyan-400 uppercase font-bold tracking-widest mb-0.5 flex items-center justify-center gap-1.5">
+                      <span>{callType === "private" ? "DIRECT PRIVATE TARGET" : `CURRENT CHANNEL [${activeProfile.category.toUpperCase()}]`}</span>
+                      <span className="text-[8px] sm:text-[9px] bg-emerald-900/60 group-hover:bg-cyan-900/80 px-1.5 py-0.2 rounded text-emerald-300 group-hover:text-cyan-300 font-mono">
+                        Ganti TG ✎
+                      </span>
+                    </div>
+                    <div className="text-2xl sm:text-3xl font-black text-emerald-400 group-hover:text-cyan-300 tracking-wider">
+                      {callType === "private" ? `ID ${privateId}` : `TG ${currentTg.id}`}
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-emerald-500 group-hover:text-cyan-400 font-bold mt-0.5">
+                      {callType === "private" ? "Direct Peer-to-Peer DMR Call" : currentTg.name}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* LCD Scope & S-Meter */}
+              <div className="mt-1 pt-1 sm:pt-1.5 border-t border-emerald-900/60 flex items-center justify-between text-[11px] sm:text-xs text-emerald-400 font-mono flex-shrink-0">
+                <div>
+                  S-METER: <span className="font-bold text-emerald-300">{isCableRxActive ? "RF CABLE" : "S9+20dB"}</span>
+                </div>
+                <AudioVisualizer 
+                  isActive={isTransmitting || !!relevantActiveTx || isCableRxActive || isEchoPlaying} 
+                  mode="oscilloscope" 
+                  color={isTransmitting ? "bg-rose-500" : isCableRxActive ? "bg-amber-400" : "bg-emerald-400"} 
+                  barsCount={10} 
+                />
+              </div>
+            </div>
+
+            {/* 3-Column Control Row: CH PREV | QUICK SMS | CH NEXT */}
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 flex-shrink-0">
               <button
-                type="button"
-                onClick={() => savePttMode(pttMode === "hold" ? "toggle" : "hold")}
-                className={`px-2 py-0.5 rounded-lg font-bold border transition-all ${
-                  pttMode === "toggle"
-                    ? "bg-amber-400 text-slate-950 border-amber-300 shadow-sm"
-                    : "bg-slate-900 text-cyan-300 border-slate-700"
-                }`}
-                title="Ganti mode PTT: Tekan-Tahan vs Tekan-Sekali (Lock)"
+                onClick={prevChannel}
+                className="flex items-center justify-center gap-1 py-1.5 sm:py-2 bg-[#0b121e] border border-cyan-900/50 hover:border-cyan-400 active:bg-slate-800 rounded-xl text-xs font-mono font-bold text-slate-200 transition-all"
               >
-                {pttMode === "toggle" ? "🔒 KLIK SEKALI (TOGGLE)" : "🖐️ TEKAN TAHAN (HOLD)"}
+                <ChevronLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-400" />
+                <span>CH PREV</span>
+              </button>
+              <button
+                onClick={() => setShowSmsModal(true)}
+                className="flex items-center justify-center gap-1.5 py-1.5 sm:py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 active:scale-95 text-white text-xs font-heading font-black rounded-xl shadow-lg shadow-purple-600/30 transition-all"
+              >
+                <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span>SMS</span>
+              </button>
+              <button
+                onClick={nextChannel}
+                className="flex items-center justify-center gap-1 py-1.5 sm:py-2 bg-[#0b121e] border border-cyan-900/50 hover:border-cyan-400 active:bg-slate-800 rounded-xl text-xs font-mono font-bold text-slate-200 transition-all"
+              >
+                <span>CH NEXT</span>
+                <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-400" />
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowPttSettingsModal(true)}
-              className="hover:text-cyan-300 flex items-center gap-1 font-bold bg-slate-900/60 px-2 py-0.5 rounded-lg border border-slate-800"
-            >
-              <span>⚙️ {pttKey === "AUTO" ? "Volume / Spasi" : pttKey}</span>
-            </button>
-          </div>
 
-          {/* Massive Thumb PTT Button */}
-          <div className="my-1 flex-1 flex flex-col justify-center items-center">
-            <button
-              onClick={pttMode === "toggle" ? toggleTx : undefined}
-              onMouseDown={pttMode === "hold" ? startTx : undefined}
-              onMouseUp={pttMode === "hold" ? stopTx : undefined}
-              onMouseLeave={pttMode === "hold" ? stopTx : undefined}
-              onTouchStart={pttMode === "hold" ? (e) => { e.preventDefault(); startTx(); } : undefined}
-              onTouchEnd={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
-              onTouchCancel={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
-              onContextMenu={(e) => e.preventDefault()}
-              className={`w-full max-w-[320px] h-36 rounded-3xl font-heading font-black text-xl flex flex-col items-center justify-center gap-2 shadow-2xl transition-all cursor-pointer select-none touch-none active:scale-95 ${
-                isTransmitting
-                  ? "bg-gradient-to-b from-rose-500 to-red-700 text-white shadow-[0_0_30px_rgba(244,63,94,0.6)] border-4 border-rose-300 ring-8 ring-rose-900/40"
-                  : isCableRxActive
-                  ? "bg-gradient-to-b from-amber-600 to-amber-900 text-white border-2 border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.3)]"
-                  : isVoxEnabled
-                  ? "bg-gradient-to-b from-emerald-950 to-[#0b121e] text-emerald-400 border-2 border-emerald-500/80 shadow-[0_0_20px_rgba(52,211,153,0.2)]"
-                  : activeProfile.isMonitorOnly
-                  ? "bg-slate-900 border-2 border-amber-500/60 hover:border-amber-400 text-amber-300 shadow-[0_0_25px_rgba(245,158,11,0.15)]"
-                  : "bg-gradient-to-b from-[#111827] to-[#0b121e] text-cyan-400 border-2 border-cyan-900/60 hover:border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
-              }`}
-            >
-              {activeProfile.isMonitorOnly ? (
-                <>
-                  <div className="w-11 h-11 rounded-full bg-amber-500/20 border border-amber-500 flex items-center justify-center text-amber-400 text-xl font-bold">
-                    🔒
-                  </div>
-                  <span className="text-amber-300 text-base">PTT TERKUNCI (MONITOR)</span>
-                  <span className="text-[11px] font-mono text-slate-400 text-center px-4">
-                    Klik untuk Buka Kunci dengan PIN atau Callsign
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Mic className={`w-9 h-9 ${isTransmitting ? "animate-bounce text-white" : isCableRxActive ? "text-amber-300" : isVoxEnabled ? "text-emerald-400 glow-emerald" : "text-cyan-400 glow-cyan"}`} />
-                  <span>
-                    {isTransmitting 
-                      ? pttMode === "toggle" ? "🔴 ON AIR (TAP STOP)" : "TRANSMITTING..." 
-                      : isCableRxActive 
-                      ? "CABLE RF RX (INGEST AUDIO)" 
-                      : isVoxEnabled 
-                      ? "VOX ACTIVE (BERBICARA UNTUK TX)" 
-                      : pttMode === "toggle" ? "🎙️ TAP TO TALK (KLIK ON/OFF)" : "PRESS & HOLD PTT"}
-                  </span>
-                  <span className="text-[11px] font-mono text-slate-400">
-                    {isTransmitting 
-                      ? `TX as ${activeProfile.callsign}` 
-                      : isCableGatewayActive 
-                      ? `Kabel: ${currentMicDb} dB (Squelch: ${cableNoiseGate} dB)` 
-                      : isVoxEnabled 
-                      ? `VOX Level: ${currentMicDb} dB` 
-                      : `Tombol Hape: Volume Down / [ ${pttKey === "AUTO" ? "VOL/SPASI" : pttKey} ]`}
-                  </span>
-                </>
-              )}
-            </button>
-          </div>
+            {/* Quick Setup Bar: Keypad | Cable Setup | VOX */}
+            <div className="flex justify-center items-center gap-1.5 sm:gap-2 flex-wrap flex-shrink-0">
+              <button
+                onClick={() => setShowDialer(!showDialer)}
+                className="text-[10px] sm:text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 py-0.5 sm:py-1 px-2 sm:px-2.5 rounded-lg bg-[#0b121e] border border-cyan-900/30"
+              >
+                <PhoneCall className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                <span>{showDialer ? "Tutup" : "Dial Keypad"}</span>
+              </button>
 
-          {/* Network Guard Info */}
-          <div className="bg-[#0b121e] border border-cyan-900/40 rounded-xl p-2.5 text-xs text-slate-400 flex items-center justify-between font-mono">
-            <div className="flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span className="text-slate-300">Net Firewall:</span>
+              <button
+                onClick={() => setShowCableModal(true)}
+                className="text-[10px] sm:text-[11px] font-mono text-amber-400 hover:text-amber-300 flex items-center gap-1 py-0.5 sm:py-1 px-2 sm:px-2.5 rounded-lg bg-[#0b121e] border border-amber-900/40"
+              >
+                <Cable className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                <span>Kabel Radio</span>
+              </button>
+
+              <button
+                onClick={() => setShowVoxModal(true)}
+                className="text-[10px] sm:text-[11px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center gap-1 py-0.5 sm:py-1 px-2 sm:px-2.5 rounded-lg bg-[#0b121e] border border-cyan-900/30"
+              >
+                <SlidersHorizontal className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                <span>VOX</span>
+              </button>
             </div>
-            <span className="text-emerald-400 font-bold truncate max-w-[220px]">
-              {activeProfile.networkTag}
-            </span>
           </div>
+
+          {/* Section 2: PTT Transmitter & Telemetry Deck */}
+          <div className={`flex flex-col justify-between min-h-0 ${screenMetrics.isLandscape ? "space-y-2 h-full" : "space-y-1 sm:space-y-1.5 flex-1"}`}>
+            {/* Quick PTT Trigger Mode & Hardware Keybar */}
+            <div className={`flex items-center justify-between w-full ${screenMetrics.isLandscape ? "max-w-none px-1" : "max-w-[340px] px-2 mx-auto"} text-[10px] font-mono text-slate-400 flex-shrink-0`}>
+              <div className="flex items-center gap-1.5">
+                <span>Mode:</span>
+                <button
+                  type="button"
+                  onClick={() => savePttMode(pttMode === "hold" ? "toggle" : "hold")}
+                  className={`px-2 py-0.5 rounded-lg font-bold border transition-all ${
+                    pttMode === "toggle"
+                      ? "bg-amber-400 text-slate-950 border-amber-300 shadow-sm"
+                      : "bg-slate-900 text-cyan-300 border-slate-700"
+                  }`}
+                  title="Ganti mode PTT: Tekan-Tahan vs Tekan-Sekali (Lock)"
+                >
+                  {pttMode === "toggle" ? "🔒 KLIK (TOGGLE)" : "🖐️ TAHAN (HOLD)"}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPttSettingsModal(true)}
+                className="hover:text-cyan-300 flex items-center gap-1 font-bold bg-slate-900/60 px-2 py-0.5 rounded-lg border border-slate-800"
+              >
+                <span>⚙️ {pttKey === "AUTO" ? "Vol / Spasi" : pttKey}</span>
+              </button>
+            </div>
+
+            {/* Responsive Tactile PTT Button */}
+            <div className={`my-0.5 sm:my-1 flex-1 w-full flex flex-col justify-center items-center min-h-0 ${screenMetrics.isLandscape ? "h-full min-h-[120px]" : "min-h-[75px] max-h-[175px]"}`}>
+              <button
+                onClick={pttMode === "toggle" ? toggleTx : undefined}
+                onMouseDown={pttMode === "hold" ? startTx : undefined}
+                onMouseUp={pttMode === "hold" ? stopTx : undefined}
+                onMouseLeave={pttMode === "hold" ? stopTx : undefined}
+                onTouchStart={pttMode === "hold" ? (e) => { e.preventDefault(); startTx(); } : undefined}
+                onTouchEnd={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
+                onTouchCancel={pttMode === "hold" ? (e) => { e.preventDefault(); stopTx(); } : undefined}
+                onContextMenu={(e) => e.preventDefault()}
+                className={`w-full ${screenMetrics.isLandscape ? "max-w-none h-full min-h-[120px]" : "max-w-[340px] h-full min-h-[75px] max-h-[170px]"} rounded-2xl sm:rounded-3xl font-heading font-black text-lg sm:text-xl flex flex-col items-center justify-center gap-1 sm:gap-2 shadow-2xl transition-all cursor-pointer select-none touch-none active:scale-95 ${
+                  isTransmitting
+                    ? "bg-gradient-to-b from-rose-500 to-red-700 text-white shadow-[0_0_30px_rgba(244,63,94,0.6)] border-4 border-rose-300 ring-8 ring-rose-900/40"
+                    : isCableRxActive
+                    ? "bg-gradient-to-b from-amber-600 to-amber-900 text-white border-2 border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.3)]"
+                    : isVoxEnabled
+                    ? "bg-gradient-to-b from-emerald-950 to-[#0b121e] text-emerald-400 border-2 border-emerald-500/80 shadow-[0_0_20px_rgba(52,211,153,0.2)]"
+                    : activeProfile.isMonitorOnly
+                    ? "bg-slate-900 border-2 border-amber-500/60 hover:border-amber-400 text-amber-300 shadow-[0_0_25px_rgba(245,158,11,0.15)]"
+                    : "bg-gradient-to-b from-[#111827] to-[#0b121e] text-cyan-400 border-2 border-cyan-900/60 hover:border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
+                }`}
+              >
+                {activeProfile.isMonitorOnly ? (
+                  <>
+                    <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-amber-500/20 border border-amber-500 flex items-center justify-center text-amber-400 text-lg sm:text-xl font-bold">
+                      🔒
+                    </div>
+                    <span className="text-amber-300 text-sm sm:text-base">PTT TERKUNCI (MONITOR)</span>
+                    <span className="text-[10px] sm:text-[11px] font-mono text-slate-400 text-center px-4">
+                      Klik untuk Buka Kunci dengan PIN atau Callsign
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Mic className={`w-7 h-7 sm:w-9 sm:h-9 ${isTransmitting ? "animate-bounce text-white" : isCableRxActive ? "text-amber-300" : isVoxEnabled ? "text-emerald-400 glow-emerald" : "text-cyan-400 glow-cyan"}`} />
+                    <span className="text-base sm:text-xl">
+                      {isTransmitting 
+                        ? pttMode === "toggle" ? "🔴 ON AIR (TAP STOP)" : "TRANSMITTING..." 
+                        : isCableRxActive 
+                        ? "CABLE RF RX (INGEST AUDIO)" 
+                        : isVoxEnabled 
+                        ? "VOX ACTIVE (BERBICARA UNTUK TX)" 
+                        : pttMode === "toggle" ? "🎙️ TAP TO TALK" : "PRESS & HOLD PTT"}
+                    </span>
+                    <span className="text-[10px] sm:text-[11px] font-mono text-slate-400">
+                      {isTransmitting 
+                        ? `TX as ${activeProfile.callsign}` 
+                        : isCableGatewayActive 
+                        ? `Kabel: ${currentMicDb} dB` 
+                        : isVoxEnabled 
+                        ? `VOX Level: ${currentMicDb} dB` 
+                        : `Tombol Hape: [ ${pttKey === "AUTO" ? "VOL/SPASI" : pttKey} ]`}
+                    </span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Network Guard Info */}
+            {!screenMetrics.isUltraCompactHeight && (
+              <div className="bg-[#0b121e] border border-cyan-900/40 rounded-xl px-2.5 py-1.5 sm:py-2 text-[10px] sm:text-xs text-slate-400 flex items-center justify-between font-mono flex-shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
+                  <span className="text-slate-300">Net Firewall:</span>
+                </div>
+                <span className="text-emerald-400 font-bold truncate max-w-[200px] sm:max-w-[240px]">
+                  {activeProfile.networkTag}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Direct Number Dialer Modal Overlay */}
+          {showDialer && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 animate-in fade-in duration-150">
+              <div className="bg-[#0b121e] border-2 border-cyan-500/80 rounded-3xl max-w-sm w-full p-4 space-y-3 shadow-2xl max-h-[85dvh] overflow-y-auto">
+                <div className="flex items-center justify-between text-xs border-b border-cyan-900/50 pb-1.5">
+                  <span className="font-bold text-cyan-300 flex items-center gap-1">
+                    <PhoneCall className="w-3.5 h-3.5 text-cyan-400" />
+                    {callType === "private" ? "Dial Private DMR ID" : "Pilih / Masukkan TalkGroup"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowDialer(false)}
+                    className="text-slate-400 hover:text-white text-xs font-bold px-2 py-0.5 rounded bg-slate-800"
+                  >
+                    ✕ Tutup
+                  </button>
+                </div>
+
+                {callType === "group" && (
+                  <div>
+                    <div className="text-[10px] text-slate-400 font-semibold mb-1">Preset TalkGroup Populer (Klik untuk Lock):</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { id: 510, label: "510 (Nasional)" },
+                        { id: 5101, label: "5101 (Jabar)" },
+                        { id: 5102, label: "5102 (Jateng)" },
+                        { id: 5103, label: "5103 (Jatim)" },
+                        { id: 5109, label: "5109 (RAPI)" },
+                        { id: 5108, label: "5108 (CB 11M)" },
+                        { id: 5100, label: "5100 (SAR)" },
+                        { id: 9990, label: "9990 (Echo Test)" },
+                        { id: 91, label: "91 (WorldWide)" },
+                      ].map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => handleQuickDial(preset.id)}
+                          className={`text-[10px] font-mono font-bold px-2 py-1 rounded-lg border transition-all ${
+                            currentTg.id === preset.id
+                              ? "bg-cyan-400 text-slate-950 border-cyan-300 shadow-sm"
+                              : "bg-slate-900 border-slate-700 text-slate-300 hover:border-cyan-400 hover:text-cyan-300"
+                          }`}
+                        >
+                          TG {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <form onSubmit={handleApplyDial} className="space-y-2">
+                  <div className="text-[10px] text-slate-400 font-semibold">
+                    {callType === "private" ? "Ketik DMR ID Tujuan:" : "Atau Masukkan Nomor TG Manual:"}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      autoFocus
+                      placeholder={callType === "private" ? "Contoh: 5101002" : "Contoh: 5105, 510, 91, 5104"}
+                      value={dialInput}
+                      onChange={(e) => setDialInput(e.target.value)}
+                      className="flex-1 px-3 py-2 bg-[#05080f] border border-cyan-900/80 rounded-xl text-xs text-cyan-300 font-mono font-bold focus:border-cyan-400 outline-none"
+                    />
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black text-xs rounded-xl shadow-md transition-colors"
+                    >
+                      Set & Kunci
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
 
         </div>
       )}
@@ -2211,7 +2252,7 @@ export default function RadioPocketMode() {
       {/* ======================================================== */}
       {showCableModal && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3">
-          <div className="bg-[#0e1422] border-2 border-amber-500/70 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+          <div className="bg-[#0e1422] border-2 border-amber-500/70 rounded-3xl max-w-sm w-full p-4 sm:p-5 space-y-3.5 shadow-2xl max-h-[88dvh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-amber-900/60 pb-2">
               <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
                 <Cable className="w-4 h-4 text-amber-400" />
@@ -2342,7 +2383,7 @@ export default function RadioPocketMode() {
       {/* ======================================================== */}
       {showVoxModal && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3">
-          <div className="bg-[#0e1422] border-2 border-emerald-500/70 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+          <div className="bg-[#0e1422] border-2 border-emerald-500/70 rounded-3xl max-w-sm w-full p-4 sm:p-5 space-y-3.5 shadow-2xl max-h-[88dvh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-emerald-900/60 pb-2">
               <h3 className="font-heading font-black text-sm text-white flex items-center gap-1.5">
                 <Headphones className="w-4 h-4 text-emerald-400" />
@@ -2441,7 +2482,7 @@ export default function RadioPocketMode() {
       {/* ======================================================== */}
       {showSmsModal && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3">
-          <div className="bg-[#0e1422] border-2 border-purple-500/70 rounded-3xl max-w-sm w-full p-4 space-y-3 shadow-2xl">
+          <div className="bg-[#0e1422] border-2 border-purple-500/70 rounded-3xl max-w-sm w-full p-4 space-y-3 shadow-2xl max-h-[88dvh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-purple-900/60 pb-2">
               <h3 className="font-heading font-black text-sm text-white flex items-center gap-1.5">
                 <MessageSquare className="w-4 h-4 text-purple-400" />
@@ -2604,8 +2645,8 @@ export default function RadioPocketMode() {
       {/* ANTI-ABUSE PTT AUTHENTICATION & PROFILE CREATION MODAL   */}
       {/* ======================================================== */}
       {showAuthModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0b121e] border-2 border-amber-500/80 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b121e] border-2 border-amber-500/80 rounded-3xl max-w-md w-full p-4 sm:p-6 space-y-4 shadow-2xl max-h-[88dvh] overflow-y-auto">
             
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
@@ -2915,8 +2956,8 @@ export default function RadioPocketMode() {
 
       {/* MODAL: PTT PHYSICAL BUTTON & TRIGGER MODE SETTINGS */}
       {showPttSettingsModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0b121e] border-2 border-cyan-500/70 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b121e] border-2 border-cyan-500/70 rounded-3xl max-w-sm w-full p-4 sm:p-5 space-y-3.5 shadow-2xl max-h-[88dvh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <div className="flex items-center gap-2">
                 <SlidersVertical className="w-5 h-5 text-cyan-400" />
@@ -3070,7 +3111,7 @@ export default function RadioPocketMode() {
       {/* ======================================================== */}
       {showFreqModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 z-50 animate-in fade-in duration-150">
-          <div className="bg-[#0b121e] border-2 border-cyan-500/80 rounded-2xl p-4 max-w-sm w-full space-y-4 shadow-2xl relative font-mono">
+          <div className="bg-[#0b121e] border-2 border-cyan-500/80 rounded-2xl p-4 max-w-sm w-full space-y-3.5 shadow-2xl relative font-mono max-h-[88dvh] overflow-y-auto">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-cyan-900/60 pb-2">
               <div className="flex items-center gap-2">
