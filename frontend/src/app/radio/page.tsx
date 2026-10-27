@@ -816,10 +816,10 @@ export default function RadioPocketMode() {
       const source = ctx.createMediaStreamSource(stream);
       txSourceNodeRef.current = source;
 
-      // 1. High-pass filter (200 Hz / 300 Hz for Cable): Eliminates microphone plosives, CTCSS tones, and DC bias
+      // 1. High-pass filter (300 Hz): Eliminates microphone plosives, room rumble, CTCSS tones, and DC bias
       const hpf = ctx.createBiquadFilter();
       hpf.type = "highpass";
-      hpf.frequency.value = isCableGatewayActive && enableBandpassFilter ? 300 : 200;
+      hpf.frequency.value = 300;
       hpf.Q.value = 0.707;
 
       // 2. Low-pass anti-aliasing filter (3400 Hz): Cuts frequencies above Nyquist before 8kHz downsampling
