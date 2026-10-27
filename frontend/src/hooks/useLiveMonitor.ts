@@ -68,7 +68,6 @@ export function useLiveMonitor() {
   const [activeTx, setActiveTx] = useState<ActiveTransmission | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const [incomingAudio, setIncomingAudio] = useState<AudioRxData | null>(null);
 
   const sendJson = (data: any): boolean => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -119,12 +118,14 @@ export function useLiveMonitor() {
               setLastHeard((prev) => [message.data, ...prev.slice(0, 49)]);
             } else if (message.type === "AUDIO_RX") {
               const data = (message.data || message) as AudioRxData;
+              // Direct Audio Pipeline: Dispatch directly to registered Web Audio listeners
+              // WITHOUT triggering React setState. Calling setState on 20ms audio frames (50Hz)
+              // causes catastrophic main-thread re-renders, starving Web Audio and ScriptProcessor nodes.
               getAudioListeners().forEach((listener) => {
                 try {
                   listener(data);
                 } catch {}
               });
-              setIncomingAudio(data);
             } else if (message.type === "TX_REJECTED") {
               if (typeof window !== "undefined") {
                 window.dispatchEvent(new CustomEvent("ninja_tx_rejected", { detail: message }));
@@ -186,7 +187,7 @@ export function useLiveMonitor() {
   return {
     lastHeard,
     activeTx,
-    incomingAudio,
+    incomingAudio: null as AudioRxData | null,
     sendJson,
     isConnected,
   };

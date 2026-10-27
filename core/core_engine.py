@@ -2726,11 +2726,7 @@ usrpAGC = -20,10,100
             is_local_mmdvm = host_str.startswith("127.0.0.1")
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
-            # Loopback & Duplicate suppression:
-            # If packet originated from local MMDVM_Bridge (127.0.0.1) or is part of an active local Direct DMR TX session,
-            # NEVER forward it to upstream peer clients (Bridi) to prevent echo / double modulation!
-            if is_local_mmdvm or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id)):
-                return
+            is_local_origin = is_local_mmdvm or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id))
 
             self.current_rx_src = src_id
             self.current_rx_tg = dst_tg
@@ -2772,7 +2768,8 @@ usrpAGC = -20,10,100
                             self.dmr_master_server.broadcast_dmrd(translated_pkt)
 
             # Forward DMRD packet(s) to matching connected upstream peer clients
-            if raw_packet and self.peer_clients:
+            # Suppress forwarding if packet originated from local MMDVM_Bridge (127.0.0.1) or active local Web TX
+            if raw_packet and self.peer_clients and not is_local_origin:
                 for peer_key, client in list(self.peer_clients.items()):
                     if client.state == "CONNECTED":
                         sub_tgs = getattr(client, "subscribed_tgs", [])
@@ -2794,9 +2791,11 @@ usrpAGC = -20,10,100
                                     break
 
             # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
+            # Only decode if packet did not originate from local USRP MMDVM_Bridge (which dispatches PCM via USRP 32001)
+            # and is not our own active local Web TX (self-echo suppression)
             decoded_pcm = b""
             data_type = traffic.get("data_type", 1)
-            if data_type == 1 and traffic.get("payload") and self.direct_dmr:
+            if not is_local_origin and data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
                 except Exception:

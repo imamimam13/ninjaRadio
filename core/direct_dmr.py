@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import math
 import struct
 import ctypes
 import logging
@@ -795,7 +796,6 @@ class DirectDmrEngine:
                 # 1. 300Hz HPF: eliminates mic thumps, room rumble, and boomy bass resonance ("membulat")
                 # 2. 3200Hz LPF: eliminates aliasing foldback, piercing sibilance, and harsh noise ("menyelekit")
                 # 3. Sample-by-sample smooth soft-knee limiter: prevents digital clipping without frame gain pumping
-                import math
                 raw_samples = struct.unpack("<480h", burst_pcm)
                 processed = []
                 for s in raw_samples:

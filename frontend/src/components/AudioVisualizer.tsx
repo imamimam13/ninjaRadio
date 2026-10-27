@@ -10,7 +10,7 @@ interface AudioVisualizerProps {
   rssiValue?: string;
 }
 
-export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
+export const AudioVisualizer: React.FC<AudioVisualizerProps> = React.memo(({
   isActive,
   color = "bg-cyan-400",
   barsCount = 14,
@@ -69,12 +69,16 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       }
 
       ctx.stroke();
-      phase += isActive ? 0.15 : 0.02;
-      animationFrameId = requestAnimationFrame(render);
+      if (isActive) {
+        phase += 0.15;
+        animationFrameId = requestAnimationFrame(render);
+      }
     };
 
     render();
-    return () => cancelAnimationFrame(animationFrameId);
+    return () => {
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    };
   }, [isActive, mode]);
 
   // Bars Animation
@@ -165,4 +169,4 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       ))}
     </div>
   );
-};
+});
