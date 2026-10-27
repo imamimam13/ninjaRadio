@@ -268,6 +268,68 @@ Jadikan smartphone Android Anda sebagai server radio portable di tengah hutan / 
 
 ---
 
+## 📚 Komponen & Library yang Diintegrasikan (Upstream Attribution & Modifications)
+
+NinjaRadio dibangun dengan mengintegrasikan sejumlah modul open-source radio komunikasi terbaik. Untuk transparansi, integritas lisensi, dan mempermudah pemeliharaan, berikut adalah daftar repositori/library asli yang diintegrasikan (tanpa tombol fork GitHub) beserta catatan modifikasi yang dilakukan:
+
+### 1. OpenDMR Vocoder (`core/opendmr/` & `app-android/third_party/OpenDMR/`)
+* **Upstream Sources**:
+  * **Decoder**: [`mbelib`](https://github.com/szechyjs/mbelib) (Copyright © 2010 Pavel Yazev) & [`mbelib-neo`](https://github.com/arancormonk/mbelib-neo) (Copyright © 2023 arancormonk).
+  * **Encoder**: [`OP25 MBEEncoder`](https://github.com/osmocom/op25) (Copyright © 2013-2019 Max H. Parke KA1RBI).
+  * **FFT Engine**: [`PFFFT`](https://bitbucket.org/jpommier/pffft) (Copyright © 2013 Julien Pommier) berbasis FFTPACK.
+* **Lisensi**: GNU General Public License v2.0 (GPL-2.0).
+* **Fungsi di NinjaRadio**: Software AMBE+2 vocoder bi-directional mandiri (PCM $\leftrightarrow$ AMBE) tanpa memerlukan chip keras DVSI atau emulator md380-emu.
+* **Modifikasi di NinjaRadio**:
+  1. **DMR-Only Streamlining**: Menghapus seluruh mode non-DMR (P25 Phase 1 / IMBE, D-STAR, ProVoice) untuk menghasilkan library C/C++ (`libopendmr.so` / `libopendmr.dylib`) yang sangat ringan dan cepat.
+  2. **ETSI AMBE 49-Bit Packing**: Mengganti linear bit packing dengan pemetaan parameter standar ETSI TS 102 361-1 (`encode_49bit`) agar pitch ($b_0$), voicing ($b_1$), dan gain ($b_2$) terpetakan dengan benar ke Golay FEC dan slot bit unprotected.
+  3. **Direct 33-Byte Burst Codec**: Menambahkan fungsi `opendmr_encode_burst` dan `opendmr_decode_burst` dengan penyisipan dibit sinkronisasi (BS Voice Sync / Embedded LC) untuk ritme TDMA DMR 60ms langsung dari WebRTC.
+
+---
+
+### 2. DMR BPTC & Link Control Codec (`core/dmr_bptc/`)
+* **Upstream Source**: [`dmr_utils3`](https://github.com/n0mjs710/dmr_utils3) (Copyright © 2016-2018 Cortney T. Buffington N0MJS & Jonathan Naylor G4KLX).
+* **Lisensi**: GNU General Public License v3.0 (GPL-3.0).
+* **Fungsi di NinjaRadio**: Enkoding & dekoding FEC lapisan kontrol DMR: BPTC(196,96) untuk Voice Header (`0x21`) & Terminator (`0x22`), Golay(20,8) untuk Embedded Signalling (EMB), Hamming(15,11,3) / Hamming(13,9,3) untuk Full Link Control (LC), QR(16,7,6), RS(12,9), dan CRC-CCITT (CRC16/CRC32).
+* **Modifikasi di NinjaRadio**:
+  1. **Vendored Module**: Diintegrasikan langsung sebagai modul internal `core/dmr_bptc` agar NinjaRadio tidak bergantung pada instalasi paket pip eksternal `dmr_utils3`.
+  2. **Pure-Python Bitarray Fallback**: Menambahkan modul `_bitarray` murni di `core/dmr_bptc/__init__.py` sehingga dapat berjalan mulus di lingkungan Android (Termux) atau kontainer minimalis tanpa kompilator C untuk ekstensi `bitarray`.
+  3. **Direct Z3DMR Integration**: Dihubungkan langsung dengan `DirectDmrEngine` untuk pembuatan paket DMRD yang valid sesuai standar ETSI.
+
+---
+
+### 3. DVSwitch Suite Integration (`Analog_Bridge`, `MMDVM_Bridge`, `md380-emu`)
+* **Upstream Source**: [DVSwitch Project](https://dvswitch.org) (Copyright © Mike N4IRR & Steve N4IRS).
+* **Lisensi**: GNU General Public License v2.0 (GPL-2.0).
+* **Fungsi di NinjaRadio**: Gateway legacy untuk menghubungkan klien aplikasi Android DVSwitch Mobile (UDP 32345) dan konversi USRP PCM.
+* **Modifikasi di NinjaRadio**:
+  1. **md380-emu QEMU 5.2 Patch**: Di `core/Dockerfile`, memasang paket khusus `qemu-user-static 5.2` untuk mengatasi bug fatal SIGSEGV (Signal 11) pada kernel Debian Bookworm / Trixie modern.
+  2. **Dynamic Multi-Worker Zero-Restart**: Menerapkan arsitektur multi-worker dinamis (Metode B). Worker sekunder dapat di-spawn tanpa merestart daemon utama, mencegah putusnya sesi RX (Signal 15) dan hilangnya registrasi master DMR.
+  3. **Dual-Path Audio Isolation**: Mengisolasi stack DVSwitch murni untuk DVSwitch Mobile, sementara jalur WebRTC (`/radio`) dan Mumble ditenagai 100% oleh Direct DMR Vocoder.
+
+---
+
+### 4. HomeBrew DMR Master & Peer Client (`core/dmr_server.py`, `core/dmr_client.py`)
+* **Upstream Source**: Konsep arsitektur protokol HomeBrew dari [HBlink](https://github.com/n0mjs710/HBlink) dan [MMDVMHost](https://github.com/g4klx/MMDVMHost) (Jonathan Naylor G4KLX).
+* **Lisensi**: GNU General Public License v2.0 / v3.0.
+* **Fungsi di NinjaRadio**: Server DMR Master mandiri (port 62031) untuk hotspot fisik (Pi-Star, OpenGD77, WPSD, Z3DMR) dan IPSC / OpenBridge peering client (port 62030).
+* **Modifikasi di NinjaRadio**:
+  1. **Pure Asynchronous Architecture**: Ditulis ulang berbasis Python `asyncio` murni tanpa locking thread rumit.
+  2. **Built-in Voice Parrot**: Menambahkan perekam dan pemutar gema otomatis bawaan (TG 9990) langsung di dalam master server.
+  3. **Dynamic Slot & TG Retargeting**: Otomasi konversi Timeslot untuk hotspot simplex (`slots_mode 1, 2, atau 4`) dan perutean Talkgroup dinamis.
+  4. **Non-Blocking Operator Hotspot Delivery**: Penyempurnaan filter anti-loopback agar transmisi Web PTT dari operator tidak di-drop saat didengarkan melalui hotspot pribadi di shack.
+
+---
+
+### 5. Mumble VoIP Audio Bridge (`bridge-mumble/bridge_mumble.py`)
+* **Upstream Source**: Konsep bot mumble bridge berbasis [pymumble](https://github.com/azlux/pymumble).
+* **Lisensi**: GNU General Public License / MIT.
+* **Fungsi di NinjaRadio**: Menjembatani audio suara dari server Mumble (Murmur 64738) ke jaringan DMR.
+* **Modifikasi di NinjaRadio**:
+  1. **Direct NPTT Protocol**: Bot berkomunikasi langsung dengan `DirectDmrEngine` melalui port UDP 32100 (`NPTT`) tanpa melalui Analog_Bridge, menghilangkan jeda latensi dan distorsi transcoding ganda.
+  2. **Multi-Talkgroup Dynamic Switcher**: Dukungan pergantian kanal/Talkgroup secara dinamis melalui antarmuka web NinjaRadio.
+
+---
+
 ## 🤝 Kontribusi & Lisensi
 
 Proyek ini bersifat open-source dan didedikasikan untuk:

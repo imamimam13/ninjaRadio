@@ -2524,8 +2524,8 @@ usrpAGC = -20,10,100
                     logger.info("⏹️ PTT Heartbeat timed out (>5.0s). Auto-releasing carrier.")
                     break
 
-                # 3. Inter-burst fill: Send comfort silence only during genuine speech pauses (> 180ms after first audio arrives)
-                if (now - start_time > 0.35) and (now - self.last_audio_tx_time > 0.18):
+                # 3. Inter-burst fill: Send comfort silence only during genuine speech pauses if DirectDmrEngine is not handling TX
+                if not getattr(self, "direct_dmr", None) and (now - start_time > 0.35) and (now - self.last_audio_tx_time > 0.18):
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                     pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, b"\x00" * 320)
                     try:
