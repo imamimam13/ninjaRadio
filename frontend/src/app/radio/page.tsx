@@ -124,14 +124,27 @@ export default function RadioPocketMode() {
       const isCompactWidth = w < 380;
       const isTabletOrDesktop = w >= 768;
 
-      setScreenMetrics({
-        width: w,
-        height: h,
-        isLandscape,
-        isCompactHeight,
-        isUltraCompactHeight,
-        isCompactWidth,
-        isTabletOrDesktop,
+      setScreenMetrics((prev) => {
+        if (
+          prev.width === w &&
+          prev.height === h &&
+          prev.isLandscape === isLandscape &&
+          prev.isCompactHeight === isCompactHeight &&
+          prev.isUltraCompactHeight === isUltraCompactHeight &&
+          prev.isCompactWidth === isCompactWidth &&
+          prev.isTabletOrDesktop === isTabletOrDesktop
+        ) {
+          return prev;
+        }
+        return {
+          width: w,
+          height: h,
+          isLandscape,
+          isCompactHeight,
+          isUltraCompactHeight,
+          isCompactWidth,
+          isTabletOrDesktop,
+        };
       });
 
       const savedSkin = localStorage.getItem("ninjaradio_device_skin");
