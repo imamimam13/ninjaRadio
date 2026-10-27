@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useLiveMonitor, registerAudioRxListener, AudioRxData } from "@/hooks/useLiveMonitor";
 import { usePhysicalPTT } from "@/hooks/usePhysicalPTT";
 import { useMediaSession } from "@/hooks/useMediaSession";
@@ -448,6 +448,35 @@ export default function RadioPocketMode() {
   const [showDialer, setShowDialer] = useState(false);
   const [dialInput, setDialInput] = useState("");
 
+  // Filter incoming active transmission to only match the tuned Talkgroup & profile constraints
+  const relevantActiveTx = useMemo(() => {
+    if (!activeTx) return null;
+
+    // Parrot echo (TG 9990) is always allowed and relevant if dialed/active
+    if (activeTx.talkgroup === 9990 || activeTx.callsign === "PARROT") {
+      return activeTx;
+    }
+
+    const currentChannelTg = callType === "private" ? Number(privateId) : currentTg.id;
+
+    // Condition 1: Must match the currently selected / tuned Talkgroup
+    if (Number(activeTx.talkgroup) !== currentChannelTg) {
+      return null;
+    }
+
+    // Condition 2: Must be within profile's allowed talkgroups constraint (if profile has constraints)
+    if (
+      !activeProfile.isMonitorOnly &&
+      Array.isArray(activeProfile.allowedTalkgroups) &&
+      activeProfile.allowedTalkgroups.length > 0 &&
+      !activeProfile.allowedTalkgroups.includes(Number(activeTx.talkgroup))
+    ) {
+      return null;
+    }
+
+    return activeTx;
+  }, [activeTx, currentTg.id, callType, privateId, activeProfile]);
+
   // SMS Modal State
   const [showSmsModal, setShowSmsModal] = useState(false);
   const [smsType, setSmsType] = useState<"group" | "private">("group");
@@ -666,9 +695,19 @@ export default function RadioPocketMode() {
     if (isMutedRef.current || isTxRef.current) return;
 
     // Talkgroup Filter (Physical HT + MMDVM Experience):
-    // In normal operator mode, un-mute speaker only for the tuned channel talkgroup or Parrot echo (TG 9990)
-    if (!activeProfileRef.current?.isMonitorOnly && audioChunk.tg && currentTgRef.current?.id) {
+    // Un-mute speaker only for the tuned channel talkgroup or Parrot echo (TG 9990),
+    // and respect profile talkgroup constraints if defined.
+    if (audioChunk.tg && currentTgRef.current?.id) {
       if (audioChunk.tg !== currentTgRef.current.id && audioChunk.tg !== 9990) {
+        return;
+      }
+      if (
+        !activeProfileRef.current?.isMonitorOnly &&
+        Array.isArray(activeProfileRef.current?.allowedTalkgroups) &&
+        activeProfileRef.current.allowedTalkgroups.length > 0 &&
+        !activeProfileRef.current.allowedTalkgroups.includes(audioChunk.tg) &&
+        audioChunk.tg !== 9990
+      ) {
         return;
       }
     }
@@ -1027,8 +1066,8 @@ export default function RadioPocketMode() {
     title: `TG ${currentTg.id} • ${currentTg.name}`,
     artist: isTransmitting
       ? `TX: ${activeProfile.callsign}`
-      : activeTx?.callsign
-      ? `RX: ${activeTx.callsign}`
+      : relevantActiveTx?.callsign
+      ? `RX: ${relevantActiveTx.callsign}`
       : isMuted
       ? "Muted"
       : "Standby",
@@ -1040,10 +1079,10 @@ export default function RadioPocketMode() {
 
 
   useEffect(() => {
-    if (activeTx?.callsign === "PARROT" && !isEchoPlaying) {
+    if (relevantActiveTx?.callsign === "PARROT" && !isEchoPlaying) {
       beepPlayer?.playTalkGrant();
     }
-  }, [activeTx?.callsign, isEchoPlaying]);
+  }, [relevantActiveTx?.callsign, isEchoPlaying]);
 
   // Enumerate Audio Devices (Line-In, External TRRS, USB Soundcard)
   useEffect(() => {
@@ -1674,16 +1713,16 @@ export default function RadioPocketMode() {
                     Echo Parrot Audio Playback
                   </div>
                 </div>
-              ) : activeTx ? (
+              ) : relevantActiveTx ? (
                 <div>
                   <div className="bg-emerald-500 text-slate-950 text-[9px] font-black uppercase rounded py-0.5 mb-1">
                     🟢 RX ACTIVE
                   </div>
                   <div className="text-xl font-black text-emerald-300 tracking-wider">
-                    {activeTx.callsign}
+                    {relevantActiveTx.callsign}
                   </div>
                   <div className="text-[10px] text-emerald-400 truncate">
-                    TG {activeTx.talkgroup} ({activeTx.tg_name})
+                    TG {relevantActiveTx.talkgroup} ({relevantActiveTx.tg_name})
                   </div>
                 </div>
               ) : (
@@ -1710,7 +1749,7 @@ export default function RadioPocketMode() {
             <div className="border-t border-emerald-900/60 pt-1 flex items-center justify-between text-[9px] text-emerald-400 font-bold">
               <span>{isCableRxActive ? "CABLE RX" : "S9+20dB"}</span>
               <AudioVisualizer 
-                isActive={isTransmitting || !!activeTx || isCableRxActive || isEchoPlaying} 
+                isActive={isTransmitting || !!relevantActiveTx || isCableRxActive || isEchoPlaying} 
                 mode="bars" 
                 color={isTransmitting ? "bg-rose-500" : isCableRxActive ? "bg-amber-400" : "bg-emerald-400"} 
                 barsCount={8} 
@@ -1895,16 +1934,16 @@ export default function RadioPocketMode() {
                     TG 9990 • Memutar Ulang Rekaman Suara Anda
                   </div>
                 </div>
-              ) : activeTx ? (
+              ) : relevantActiveTx ? (
                 <div>
                   <div className="inline-block px-2.5 py-0.5 bg-emerald-500 text-slate-950 font-black text-xs rounded tracking-widest uppercase mb-1">
                     🟢 RX RECEIVING
                   </div>
                   <div className="text-3xl font-black text-emerald-300 tracking-wider">
-                    {activeTx.callsign}
+                    {relevantActiveTx.callsign}
                   </div>
                   <div className="text-xs text-emerald-400 font-medium truncate mt-0.5">
-                    {activeTx.name} (TG {activeTx.talkgroup} • {activeTx.tg_name})
+                    {relevantActiveTx.name} (TG {relevantActiveTx.talkgroup} • {relevantActiveTx.tg_name})
                   </div>
                 </div>
               ) : (
@@ -1935,7 +1974,7 @@ export default function RadioPocketMode() {
                 S-METER: <span className="font-bold text-emerald-300">{isCableRxActive ? "RF CABLE" : "S9+20dB"}</span>
               </div>
               <AudioVisualizer 
-                isActive={isTransmitting || !!activeTx || isCableRxActive || isEchoPlaying} 
+                isActive={isTransmitting || !!relevantActiveTx || isCableRxActive || isEchoPlaying} 
                 mode="oscilloscope" 
                 color={isTransmitting ? "bg-rose-500" : isCableRxActive ? "bg-amber-400" : "bg-emerald-400"} 
                 barsCount={10} 
