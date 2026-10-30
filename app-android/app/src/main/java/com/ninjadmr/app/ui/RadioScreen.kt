@@ -1503,20 +1503,20 @@ fun RadioScreen(
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         HoloAction(
-                            label = "CARAKA PTT 1 (290)",
+                            label = "SIDE PTT 1 / POC (290)",
                             accent = if (detectedCode == 290) Holo.green else Holo.textDim,
                             onClick = {
                                 detectedCode = 290
-                                detectedName = "CARAKA PTT 1 (PoC / Video App 2)"
+                                detectedName = com.ninjadmr.app.ptt.PttKeyMap.formatKeyName(290)
                             },
                             modifier = Modifier.weight(1f),
                         )
                         HoloAction(
-                            label = "CARAKA PTT 2 (291)",
+                            label = "SIDE PTT 2 / DMR (291)",
                             accent = if (detectedCode == 291) Holo.green else Holo.textDim,
                             onClick = {
                                 detectedCode = 291
-                                detectedName = "CARAKA PTT 2 (DMR / Video App 3)"
+                                detectedName = com.ninjadmr.app.ptt.PttKeyMap.formatKeyName(291)
                             },
                             modifier = Modifier.weight(1f),
                         )
