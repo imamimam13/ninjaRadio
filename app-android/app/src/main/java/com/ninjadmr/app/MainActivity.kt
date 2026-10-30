@@ -10,7 +10,9 @@ import android.content.ComponentName
 
 import android.content.Context
 
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 
 import android.content.ServiceConnection
 
@@ -110,6 +112,59 @@ class MainActivity : ComponentActivity() {
     private var usbUartManager: UsbUartManager? = null
 
     private var hotspotBridge: MmdvmHotspotBridge? = null
+    private var pttBroadcastReceiver: BroadcastReceiver? = null
+
+    private fun registerPttBroadcastReceiver() {
+        if (pttBroadcastReceiver != null) return
+        val filter = IntentFilter().apply {
+            com.ninjadmr.app.ptt.PttKeyMap.PTT_DOWN_ACTIONS.forEach { addAction(it) }
+            com.ninjadmr.app.ptt.PttKeyMap.PTT_UP_ACTIONS.forEach { addAction(it) }
+            addAction("android.intent.action.PTT_BUTTON")
+            addAction("com.android.ptt.key")
+            addAction("android.intent.action.PTT")
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val action = intent?.action ?: return
+                val (isDown, isUp, keyCode) = com.ninjadmr.app.ptt.PttKeyMap.parsePttBroadcast(intent)
+                val keyName = com.ninjadmr.app.ptt.PttKeyMap.formatKeyName(keyCode)
+
+                val capturer = onKeyCaptured
+                if (capturer != null) {
+                    if (isDown) {
+                        capturer.invoke(keyCode, keyName)
+                    }
+                    return
+                }
+
+                val configured = settingsStore.hardwarePttKeyCode
+                val matches = com.ninjadmr.app.ptt.PttKeyMap.matchesConfigured(keyCode, configured)
+                if (matches) {
+                    val svc = service
+                    if (svc != null) {
+                        if (isDown) svc.setPtt(true)
+                        else if (isUp) svc.setPtt(false)
+                    }
+                }
+            }
+        }
+        pttBroadcastReceiver = receiver
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(receiver, filter)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun unregisterPttBroadcastReceiver() {
+        val receiver = pttBroadcastReceiver ?: return
+        pttBroadcastReceiver = null
+        try {
+            unregisterReceiver(receiver)
+        } catch (_: Exception) {}
+    }
 
 
 
