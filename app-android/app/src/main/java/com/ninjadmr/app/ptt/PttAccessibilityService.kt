@@ -31,27 +31,7 @@ class PttAccessibilityService : AccessibilityService() {
         val isPttKey = if (configured > 0) {
             event.keyCode == configured
         } else {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_VOLUME_UP,
-                KeyEvent.KEYCODE_VOLUME_DOWN,
-                KeyEvent.KEYCODE_STEM_PRIMARY,
-                KeyEvent.KEYCODE_HEADSETHOOK,
-                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                KeyEvent.KEYCODE_MEDIA_RECORD,
-                KeyEvent.KEYCODE_F1,
-                KeyEvent.KEYCODE_F2,
-                KEYCODE_PTT,
-                KeyEvent.KEYCODE_BUTTON_1,
-                KeyEvent.KEYCODE_BUTTON_2,
-                KeyEvent.KEYCODE_BUTTON_3,
-                KeyEvent.KEYCODE_BUTTON_4,
-                261,
-                268,
-                269,
-                284, 285, 286, 287, 288,
-                289, 290, 291, 292, 300 -> true
-                else -> false
-            }
+            PttKeyMap.isUniversalPttKey(event.keyCode)
         }
 
         if (isPttKey) {

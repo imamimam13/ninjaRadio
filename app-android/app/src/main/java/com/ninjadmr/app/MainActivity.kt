@@ -1215,15 +1215,7 @@ callbookStore.importFromUrl(url) { count, err ->
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val capturer = onKeyCaptured
         if (capturer != null) {
-            val keyName = when (keyCode) {
-                290 -> "CARAKA PTT 1 (PoC / Video App 2)"
-                291 -> "CARAKA PTT 2 (DMR / Video App 3)"
-                289 -> "CARAKA SOS (Video App 1)"
-                292 -> "CARAKA SQ (Video App 4)"
-                300 -> "CARAKA POC 2 (Featured App 4)"
-                228 -> "DEDICATED PTT (228)"
-                else -> KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_")
-            }
+            val keyName = com.ninjadmr.app.ptt.PttKeyMap.formatKeyName(keyCode)
             capturer.invoke(keyCode, keyName)
             return true
         }
@@ -1256,27 +1248,7 @@ callbookStore.importFromUrl(url) { count, err ->
         if (configured > 0) {
             return keyCode == configured
         }
-        return when (keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP,
-            KeyEvent.KEYCODE_VOLUME_DOWN,
-            KeyEvent.KEYCODE_STEM_PRIMARY,
-            KeyEvent.KEYCODE_HEADSETHOOK,
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-            KeyEvent.KEYCODE_MEDIA_RECORD,
-            KeyEvent.KEYCODE_F1,
-            KeyEvent.KEYCODE_F2,
-            KeyEvent.KEYCODE_BUTTON_1,
-            KeyEvent.KEYCODE_BUTTON_2,
-            KeyEvent.KEYCODE_BUTTON_3,
-            KeyEvent.KEYCODE_BUTTON_4,
-            228,
-            261,
-            268,
-            269,
-            284, 285, 286, 287, 288,
-            289, 290, 291, 292, 300 -> true
-            else -> false
-        }
+        return com.ninjadmr.app.ptt.PttKeyMap.isUniversalPttKey(keyCode)
     }
 
 
