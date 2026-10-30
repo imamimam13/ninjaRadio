@@ -1071,12 +1071,14 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     name = f"DMR Operator {src_id}"
     category = "Amatir"
 
+    lookup_id = src_id // 100 if src_id > 9999999 else src_id
     cb_entry = None
-    if src_id in _CALLBOOK_CACHE:
-        cb_entry = _CALLBOOK_CACHE[src_id]
-    elif src_id > 0:
-        cb_entry = await CallbookService.get_by_dmr_id(session, src_id)
+    if lookup_id in _CALLBOOK_CACHE:
+        cb_entry = _CALLBOOK_CACHE[lookup_id]
+    elif lookup_id > 0:
+        cb_entry = await CallbookService.get_by_dmr_id(session, lookup_id)
         if cb_entry:
+            _CALLBOOK_CACHE[lookup_id] = cb_entry
             _CALLBOOK_CACHE[src_id] = cb_entry
 
     if not cb_entry and custom_call:

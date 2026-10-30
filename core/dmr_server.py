@@ -51,6 +51,12 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
     if dmr_id in _CALLSIGN_MEM_CACHE:
         return _CALLSIGN_MEM_CACHE[dmr_id]
 
+    # Resolve base 7-digit DMR ID if dmr_id contains ESSID (e.g. 510205701 -> 5102057)
+    lookup_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+    if lookup_id in _CALLSIGN_MEM_CACHE:
+        _CALLSIGN_MEM_CACHE[dmr_id] = _CALLSIGN_MEM_CACHE[lookup_id]
+        return _CALLSIGN_MEM_CACHE[dmr_id]
+
     # 1. Check SQLite Callbook table
     db_path = get_db_path()
     if db_path:
@@ -58,10 +64,11 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
             import sqlite3
             with sqlite3.connect(db_path, timeout=1.0) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (dmr_id,))
+                cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (lookup_id,))
                 row = cursor.fetchone()
                 if row and row[0]:
                     call = str(row[0]).strip().upper()
+                    _CALLSIGN_MEM_CACHE[lookup_id] = call
                     _CALLSIGN_MEM_CACHE[dmr_id] = call
                     return call
         except Exception:
@@ -75,8 +82,10 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
                     for line in f:
                         parts = line.strip().split(",")
                         if len(parts) >= 2 and parts[0].strip().isdigit():
-                            if int(parts[0].strip()) == dmr_id:
+                            pid = int(parts[0].strip())
+                            if pid == lookup_id or pid == dmr_id:
                                 call = parts[1].strip().upper()
+                                _CALLSIGN_MEM_CACHE[lookup_id] = call
                                 _CALLSIGN_MEM_CACHE[dmr_id] = call
                                 return call
             except Exception:
@@ -239,14 +248,20 @@ class HomeBrewMasterServer:
             self.clients[addr]["last_seen"] = now
             if not self.clients[addr].get("dmr_id"):
                 self.clients[addr]["dmr_id"] = dmr_id
+                if dmr_id > 9999999:
+                    self.clients[addr]["base_id"] = dmr_id // 100
+                    self.clients[addr]["essid"] = dmr_id % 100
         else:
-            # Check if this DMR ID was registered under a different address/port
+            # Check if this DMR ID was registered under a different address/port (match exact compound ID or base DMR ID)
+            base_dmr_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
             for old_addr, client in list(self.clients.items()):
-                if client.get("dmr_id") == dmr_id:
+                c_id = client.get("dmr_id", 0)
+                c_base = client.get("base_id", c_id // 100 if c_id > 9999999 else c_id)
+                if c_id == dmr_id or (c_base > 0 and c_base == base_dmr_id and addr[0] == old_addr[0]):
                     client["last_seen"] = now
                     self.clients[addr] = client
                     if old_addr != addr:
-                        logger.info(f"[DMR-Master] 🔄 Shifted address for {client.get('callsign')} ({dmr_id}): {old_addr} -> {addr}")
+                        logger.info(f"[DMR-Master] 🔄 Shifted address for {client.get('callsign')} ({c_id}): {old_addr} -> {addr}")
                         self.clients.pop(old_addr, None)
                     return
 
@@ -299,9 +314,14 @@ class HomeBrewMasterServer:
             # Accept if hash matches OR if password is blank
             if client_hash == expected_hash or not self.password:
                 now = time.time()
+                base_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+                essid = dmr_id % 100 if dmr_id > 9999999 else None
+                resolved_call = lookup_callbook_callsign(base_id) or "HOTSPOT"
                 self.clients[addr] = {
                     "dmr_id": dmr_id,
-                    "callsign": "HOTSPOT",
+                    "base_id": base_id,
+                    "essid": essid,
+                    "callsign": resolved_call,
                     "software": "MMDVMHost",
                     "state": "AUTHENTICATED",
                     "connected_at": now,
@@ -319,7 +339,8 @@ class HomeBrewMasterServer:
                 }
                 self.pending_challenges.pop(addr, None)
                 self.sock.sendto(RPTACK, addr)
-                logger.info(f"[DMR-Master] ✓ Client authenticated from {addr} (DMR ID: {dmr_id})")
+                essid_log = f" (SSID {essid:02d})" if essid is not None else ""
+                logger.info(f"[DMR-Master] ✓ Client authenticated from {addr} (DMR ID: {dmr_id}{essid_log}, Callsign: {resolved_call})")
             else:
                 logger.warning(f"[DMR-Master] ❌ Auth failed from {addr} (DMR ID: {dmr_id}) - Invalid password")
                 self.sock.sendto(MSTNAK, addr)
@@ -382,7 +403,9 @@ class HomeBrewMasterServer:
                 self._update_client_seen(dmr_id, addr)
 
             if addr in self.clients:
-                self.clients[addr]["callsign"] = callsign or self.clients[addr].get("callsign", "HOTSPOT")
+                resolved = lookup_callbook_callsign(dmr_id)
+                final_call = callsign if (callsign and callsign not in ["HOTSPOT", "DVSWITCH"]) else (resolved or self.clients[addr].get("callsign", "HOTSPOT"))
+                self.clients[addr]["callsign"] = final_call
                 self.clients[addr]["software"] = software_str
                 self.clients[addr]["slots_mode"] = slots_mode
                 self.clients[addr]["state"] = "CONNECTED"
@@ -478,9 +501,30 @@ class HomeBrewMasterServer:
         # 6. DMRD: Inbound DMR Voice / Data Burst from Hotspot
         elif data.startswith(DMRD) and len(data) >= 20:
             seq = data[4]
-            src_id = int.from_bytes(data[5:8], "big")
+            raw_src_id = int.from_bytes(data[5:8], "big")
             dst_tg = int.from_bytes(data[8:11], "big")
             rpt_id = struct.unpack(">I", data[11:15])[0]
+
+            # ESSID & 24-bit Truncation Recovery:
+            # ETSI DMR frame only carries 24-bit (3-byte) src_id (max 16,777,215).
+            # If client transmitted with a 9-digit ESSID (e.g. 510205701), the top byte is truncated
+            # leaving a random-looking 24-bit number (510205701 & 0xFFFFFF = 6889221).
+            # We recover the true 7-digit base ID by matching against rpt_id or registered client dmr_id.
+            src_id = raw_src_id
+            cl_candidate = self.clients.get(addr)
+            cl_id = cl_candidate.get("dmr_id", 0) if cl_candidate else 0
+
+            for cand_id in (rpt_id, cl_id):
+                if cand_id > 9999999:  # 9-digit ESSID (e.g. 510205701)
+                    if (cand_id & 0xFFFFFF) == raw_src_id:
+                        src_id = cand_id // 100
+                        # Rewrite data[5:8] so subsequent repeaters & peers receive clean 24-bit base ID
+                        data = data[:5] + struct.pack(">I", src_id)[1:] + data[8:]
+                        break
+                    elif (cand_id // 100) == raw_src_id:
+                        src_id = raw_src_id
+                        break
+
             bits = data[15]
             slot = 2 if (bits & 0x80) else 1
             call_type = "unit" if (bits & 0x40) else "group"
@@ -586,7 +630,9 @@ class HomeBrewMasterServer:
             sender_call = lookup_callbook_callsign(src_id)
             if not sender_call:
                 for c_addr, c in self.clients.items():
-                    if c_addr[0] != "127.0.0.1" and str(c.get("dmr_id", "")).startswith(str(src_id)) and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
+                    c_id = c.get("dmr_id", 0)
+                    c_base = c.get("base_id", c_id // 100 if c_id > 9999999 else c_id)
+                    if c_addr[0] != "127.0.0.1" and (c_base == src_id or str(c_id).startswith(str(src_id))) and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
                         sender_call = c.get("callsign")
                         break
             if not sender_call and addr in self.clients and addr[0] != "127.0.0.1":
@@ -974,10 +1020,16 @@ class HomeBrewMasterServer:
             up_m, up_s = divmod(up_rem, 60)
             uptime_str = f"{up_h}h {up_m}m {up_s}s" if up_h > 0 else f"{up_m}m {up_s}s"
 
+            dmr_id = c.get("dmr_id", 0)
+            base_id = c.get("base_id", dmr_id // 100 if dmr_id > 9999999 else dmr_id)
+            essid = c.get("essid", dmr_id % 100 if dmr_id > 9999999 else None)
+
             hotspots_list.append({
                 "ip": addr[0],
                 "port": addr[1],
-                "dmr_id": c.get("dmr_id", 0),
+                "dmr_id": dmr_id,
+                "base_id": base_id,
+                "essid": essid,
                 "callsign": c.get("callsign", "HOTSPOT"),
                 "software": c.get("software", "MMDVMHost"),
                 "state": c.get("state", "CONNECTED"),

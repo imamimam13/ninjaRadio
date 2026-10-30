@@ -19,6 +19,7 @@
 [![Web Audio DSP](https://img.shields.io/badge/Web_Audio-300Hz--3.4kHz_DSP-amber.svg)](frontend/)
 [![Architecture](https://img.shields.io/badge/Platform-VPS_%7C_Android_Non--Root-purple.svg)](deploy.sh)
 [![PWA Ready](https://img.shields.io/badge/PWA-1.8%22_%7C_2.4%22_%7C_Desktop-blue.svg)](frontend/)
+[![Android APK](https://img.shields.io/badge/Android_App-Download_APK-brightgreen.svg?logo=android)](https://github.com/imamimam13/ninjaRadio/releases)
 
 ---
 
@@ -241,6 +242,29 @@ Jadikan smartphone Android Anda sebagai server radio portable di tengah hutan / 
 3. Pilih port input: *Headset TRRS* atau *USB Audio Device*.
 4. Geser ambang batas squelch (misal: `-32 dB`) dan nyalakan tombol **ON**.
 5. Radio HT Anda kini otomatis ter-bridge ke seluruh jaringan digital!
+
+### 5. 🤖 NinjaRadio Android Native App (APK Standalone)
+Aplikasi Android Native mandiri berkinerja tinggi (Kotlin + C++ OpenDMR Vocoder + Chaquopy Python) untuk mengubah smartphone biasa atau perangkat PoC Radio menjadi transceiver digital voice DMR portabel tanpa memerlukan browser:
+
+* **⬇️ Unduh APK Langsung**:
+  * **[Daftar Rilis & Versi Terbaru (GitHub Releases)](https://github.com/imamimam13/ninjaRadio/releases)**
+  * **[Unduh Nightly Build APK Langsung](https://github.com/imamimam13/ninjaRadio/releases/download/nightly/app-debug.apk)** *(selalu diperbarui otomatis tiap kali ada commit baru ke branch `main`)*
+* **Fitur Unggulan**:
+  * **100% On-Device OpenDMR Vocoder (C++ JNI)**: Konversi suara mikrofon PCM ke frame AMBE+2 DMR dilakukan langsung di hardware HP tanpa ketergantungan server transcoding luar.
+  * **Background DMR Service**: Koneksi radio tetap standby menerima (RX) dan memancar (TX) meskipun layar smartphone mati atau aplikasi sedang berada di latar belakang.
+  * **Hardware & Wireless PTT**: Mendukung tombol PTT fisik radio PoC (`KeyCode 138/226`, tombol Volume Up/Down, Bluetooth BLE PTT button, serta tombol headset kabel).
+  * **UART & PoC Radio Peripheral**: Kompatibel dengan kontrol port serial hardware internal pada radio Android PoC (Inrico, Boxchip, Talkpod, dll).
+  * **Audio DSP & Visualizer**: Dilengkapi Automatic Gain Control (AGC), Jitter Buffer adaptif 150ms anti-stutter, serta visualisasi spektrum audio realtime.
+  * **Offline Callbook & Multi-Profile**: Pencarian data stasiun/callsign lokal langsung dari memori internal dan kemampuan menyimpan multi-profil operator (Callsign & DMR ID).
+* **Cara Membangun (Build) dari Source Code**:
+  ```bash
+  cd app-android
+  # Build APK Debug:
+  ./gradlew assembleDebug
+  # Build APK Release:
+  ./gradlew assembleRelease
+  ```
+  File APK hasil kompilasi akan berada di folder `app-android/app/build/outputs/apk/`.
 
 ---
 

@@ -49,9 +49,10 @@ def build_usrp_frame(seq: int, keyup: int, usrp_type: int = USRP_TYPE_VOICE, pay
 
 
 def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, callsign: str, pad_320: bool = False) -> bytes:
-    call = (callsign or str(src_id)).encode("ascii", errors="ignore")[:24]
+    clean_src = src_id // 100 if src_id > 9999999 else src_id
+    call = (callsign or str(clean_src)).encode("ascii", errors="ignore")[:24]
     body = (
-        (src_id & 0xFFFFFF).to_bytes(3, "big")
+        (clean_src & 0xFFFFFF).to_bytes(3, "big")
         + (rpt_id & 0xFFFFFFFF).to_bytes(4, "big")
         + (tg & 0xFFFFFF).to_bytes(3, "big")
         + bytes([slot & 0xFF, cc & 0xFF])
@@ -117,8 +118,11 @@ def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optiona
     if not dmr_id or dmr_id <= 0:
         return None
     
-    if not include_name and dmr_id in _CALLSIGN_MEM_CACHE:
-        return _CALLSIGN_MEM_CACHE[dmr_id]
+    # Resolve base 7-digit DMR ID if dmr_id contains ESSID (e.g. 510205701 -> 5102057)
+    lookup_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+
+    if not include_name and lookup_id in _CALLSIGN_MEM_CACHE:
+        return _CALLSIGN_MEM_CACHE[lookup_id]
 
     # 1. Check SQLite Callbook table
     db_path = get_db_path()
@@ -127,11 +131,12 @@ def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optiona
             import sqlite3
             with sqlite3.connect(db_path, timeout=1.0) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ?", (dmr_id,))
+                cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ?", (lookup_id,))
                 row = cursor.fetchone()
                 if row and row[0]:
                     call = str(row[0]).strip().upper()
                     name = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
+                    _CALLSIGN_MEM_CACHE[lookup_id] = call
                     _CALLSIGN_MEM_CACHE[dmr_id] = call
                     if include_name and name and name.upper() != call:
                         return f"{call} {name}"[:24]
@@ -147,9 +152,11 @@ def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optiona
                     for line in f:
                         parts = line.strip().split(",")
                         if len(parts) >= 2 and parts[0].strip().isdigit():
-                            if int(parts[0].strip()) == dmr_id:
+                            pid = int(parts[0].strip())
+                            if pid == lookup_id or pid == dmr_id:
                                 call = parts[1].strip().upper()
                                 name = parts[2].strip() if len(parts) > 2 else ""
+                                _CALLSIGN_MEM_CACHE[lookup_id] = call
                                 _CALLSIGN_MEM_CACHE[dmr_id] = call
                                 if include_name and name and name.upper() != call:
                                     return f"{call} {name}"[:24]
@@ -2719,6 +2726,8 @@ usrpAGC = -20,10,100
         """Callback from HomeBrewMasterServer when an external hotspot or MMDVM_Bridge transmits."""
         try:
             src_id = traffic.get("src_id", 0)
+            if src_id > 9999999:
+                src_id = src_id // 100
             dst_tg = traffic.get("dst_tg", 0)
             slot = traffic.get("slot", 2)
             now = time.time()

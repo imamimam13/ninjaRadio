@@ -12,7 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 object AppLog {
     private const val TAG = "NinjaDMR-Log"
-    private const val MAX_ENTRIES = 300
+    private const val MAX_ENTRIES = 50
 
     data class Entry(val ts: Long, val text: String)
 

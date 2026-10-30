@@ -94,10 +94,12 @@ def build_dmr_header_burst(src_id: int, dst_tg: int, slot: int, call_type: str =
     Constructs a standard ETSI TS 102 361-1 compliant 33-byte Voice Header burst (data_type = 0).
     Applies BPTC(196,96) error correction, RS(12,9,3) parity, and interleaves with BS Data Sync.
     """
+    clean_src = src_id // 100 if src_id > 9999999 else (src_id & 0xFFFFFF)
+    clean_tg = dst_tg & 0xFFFFFF
     if bptc and const:
         try:
             flco = b"\x03" if call_type == "unit" else b"\x00"
-            lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
+            lc_bytes = flco + b"\x00\x00" + clean_tg.to_bytes(3, "big") + clean_src.to_bytes(3, "big")
             h_lc = bptc.encode_header_lc(lc_bytes)
             slot_head = const.SLOT_TYPE["VOICE_LC_HEAD"]
             sync_data = const.SYNC["BS_DATA"]
@@ -113,10 +115,12 @@ def build_dmr_terminator_burst(src_id: int, dst_tg: int, slot: int, call_type: s
     """
     Constructs a standard ETSI TS 102 361-1 compliant 33-byte Voice Terminator burst (data_type = 2).
     """
+    clean_src = src_id // 100 if src_id > 9999999 else (src_id & 0xFFFFFF)
+    clean_tg = dst_tg & 0xFFFFFF
     if bptc and const:
         try:
             flco = b"\x03" if call_type == "unit" else b"\x00"
-            lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
+            lc_bytes = flco + b"\x00\x00" + clean_tg.to_bytes(3, "big") + clean_src.to_bytes(3, "big")
             t_lc = bptc.encode_terminator_lc(lc_bytes)
             slot_term = const.SLOT_TYPE["VOICE_LC_TERM"]
             sync_data = const.SYNC["BS_DATA"]
@@ -133,10 +137,12 @@ def build_dmr_emblc_fragments(src_id: int, dst_tg: int, call_type: str = "group"
     Precomputes the 4 Embedded Link Control (EMB_LC) fragments for bursts B, C, D, E
     using standard 5-bit CRC and Hamming error correction per ETSI TS 102 361-1.
     """
+    clean_src = src_id // 100 if src_id > 9999999 else (src_id & 0xFFFFFF)
+    clean_tg = dst_tg & 0xFFFFFF
     if bptc:
         try:
             flco = b"\x03" if call_type == "unit" else b"\x00"
-            lc_bytes = flco + b"\x00\x00" + dst_tg.to_bytes(3, "big") + src_id.to_bytes(3, "big")
+            lc_bytes = flco + b"\x00\x00" + clean_tg.to_bytes(3, "big") + clean_src.to_bytes(3, "big")
             return bptc.encode_emblc(lc_bytes)
         except Exception as e:
             logger.debug(f"build_dmr_emblc_fragments error: {e}")
@@ -745,14 +751,15 @@ class DirectDmrEngine:
             return out_packets
 
         # PTT Active (Keyed)
-        if not self.in_tx or self.current_tg != tg or self.current_src_id != dmr_id:
+        clean_dmr_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+        if not self.in_tx or self.current_tg != tg or self.current_src_id != clean_dmr_id:
             # Start new transmission session: send DMRD Voice Header (0x21)
             self.in_tx = True
             self.current_stream_id = int(now * 1000) & 0xFFFFFFFF
             self.current_burst_seq = 0
             self.current_tg = tg
             self.current_slot = slot if slot in (1, 2) else 2
-            self.current_src_id = dmr_id
+            self.current_src_id = clean_dmr_id
             self.current_callsign = callsign
             self.tx_pcm_buffer.clear()
             self.hpf.reset()

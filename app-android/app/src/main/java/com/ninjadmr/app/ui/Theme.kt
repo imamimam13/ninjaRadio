@@ -15,34 +15,34 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-/** Neon Holo-gear palette: brass hardware over a dark HUD field, cyan/magenta neon. */
+/** Tactical Ninja Stealth palette matching NinjaRadio DV Platform. */
 object Holo {
-    val bgDeep = Color(0xFF04070E)
-    val bgGrid = Color(0xFF0A1322)
-    val panel = Color(0xFF0B1220)
-    val panelRaised = Color(0xFF101A2C)
-    val panelEdge = Color(0xFF1D2B45)
+    val bgDeep = Color(0xFF090D16)
+    val bgGrid = Color(0xFF101726)
+    val panel = Color(0xCC111A2E)
+    val panelRaised = Color(0xE618243E)
+    val panelEdge = Color(0x387098D0)
 
-    val brass = Color(0xFFC9973F)
-    val brassBright = Color(0xFFE8C36A)
-    val brassDim = Color(0xFF6E5526)
-    val copper = Color(0xFFB87343)
+    val brass = Color(0xFF38BDF8)
+    val brassBright = Color(0xFF34D399)
+    val brassDim = Color(0xFF059669)
+    val copper = Color(0xFFFBBF24)
 
-    val cyan = Color(0xFF22E6FF)
-    val cyanDim = Color(0xFF0E7A8C)
-    val magenta = Color(0xFFFF2FD0)
-    val magentaDim = Color(0xFF8A1A73)
+    val cyan = Color(0xFF38BDF8)
+    val cyanDim = Color(0xFF0284C7)
+    val magenta = Color(0xFFF43F5E)
+    val magentaDim = Color(0xFFBE123C)
 
-    val green = Color(0xFF3DFF9E)
-    val amber = Color(0xFFFFB020)
-    val red = Color(0xFFFF4D6D)
-    val violet = Color(0xFF9B7BFF)
+    val green = Color(0xFF34D399)
+    val amber = Color(0xFFFBBF24)
+    val red = Color(0xFFF43F5E)
+    val violet = Color(0xFFA78BFA)
 
-    val textPrimary = Color(0xFFE6F2FF)
-    val textDim = Color(0xFF8FA3C0)
-    val textFaint = Color(0xFF566884)
+    val textPrimary = Color(0xFFF8FAFC)
+    val textDim = Color(0xFF94A3B8)
+    val textFaint = Color(0xFF64748B)
 
-    val onNeon = Color(0xFF04070E)
+    val onNeon = Color(0xFF080C14)
 }
 
 private val HoloColors = darkColorScheme(
