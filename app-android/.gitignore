@@ -15,3 +15,7 @@ app/src/main/jniLibs/
 __pycache__/
 *.pyc
 *.pyo
+
+# IDE
+.idea/
+*.iml

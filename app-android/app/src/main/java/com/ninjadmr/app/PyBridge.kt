@@ -154,8 +154,12 @@ object PyBridge {
     }
 
     fun start(context: Context): Map<String, String> {
-        val result = runtime(context).callAttr("start")
-        return result.asMap().map { (k, v) -> k.toString() to (v?.toString() ?: "") }.toMap()
+        val result = runtime(context).callAttr("start") ?: return emptyMap()
+        return try {
+            result.asMap().map { (k, v) -> k.toString() to (v?.toString() ?: "") }.toMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
     }
 
     fun stop(context: Context) {
@@ -163,31 +167,88 @@ object PyBridge {
     }
 
     fun feedTx(context: Context, pcm: ByteArray): Boolean {
-        val result = runtime(context).callAttr("feed_tx", pcm)
-        return result.toJava(Boolean::class.javaObjectType) ?: false
+        val result = runtime(context).callAttr("feed_tx", pcm) ?: return false
+        return try {
+            result.toJava(Boolean::class.javaObjectType) ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun startCall(context: Context): Boolean {
+        val result = runtime(context).callAttr("start_call") ?: return false
+        return try {
+            result.toJava(Boolean::class.javaObjectType) ?: false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun endCall(context: Context) {
         runtime(context).callAttr("end_call")
     }
 
-    fun setTalkgroup(context: Context, talkgroup: Int) {
-        runtime(context).callAttr("set_talkgroup", talkgroup)
+    fun setTalkgroup(context: Context, talkgroup: Int, slot: Int? = null) {
+        if (slot != null) {
+            runtime(context).callAttr("set_talkgroup", talkgroup, slot)
+        } else {
+            runtime(context).callAttr("set_talkgroup", talkgroup)
+        }
     }
 
+    fun sendSms(context: Context, dstId: Int, text: String): Boolean {
+        val result = runtime(context).callAttr("send_sms", dstId, text) ?: return false
+        return try {
+            result.toJava(Boolean::class.javaObjectType) ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
     fun sendLocation(context: Context, lat: Double, lon: Double): Boolean {
-        val result = runtime(context).callAttr("send_location", lat, lon)
-        return result.toJava(Boolean::class.javaObjectType) ?: false
+        val result = runtime(context).callAttr("send_location", lat, lon) ?: return false
+        return try {
+            result.toJava(Boolean::class.javaObjectType) ?: false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /** Returns the next decoded PCM buffer (960 bytes), or null when idle. */
     fun pollRx(context: Context): ByteArray? {
-        val result = runtime(context).callAttr("poll_rx")
-        return result.toJava(ByteArray::class.java)
+        val result = runtime(context).callAttr("poll_rx") ?: return null
+        return try {
+            result.toJava(ByteArray::class.java)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun drainTraffic(context: Context): List<Map<String, Any>> {
+        ensureStarted(context)
+        val pyList = runtime(context).callAttr("drain_traffic") ?: return emptyList()
+        return try {
+            val list = pyList.asList()
+            list.mapNotNull { item ->
+                try {
+                    val map = item.asMap()
+                    map.entries.associate { (k, v) ->
+                        k.toString() to (v?.toString() ?: "")
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     fun status(context: Context): Map<String, String> {
-        val result = runtime(context).callAttr("status")
-        return result.asMap().map { (k, v) -> k.toString() to (v?.toString() ?: "") }.toMap()
+        val result = runtime(context).callAttr("status") ?: return emptyMap()
+        return try {
+            result.asMap().map { (k, v) -> k.toString() to (v?.toString() ?: "") }.toMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
     }
 }

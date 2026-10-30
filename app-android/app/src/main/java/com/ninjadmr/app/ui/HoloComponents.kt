@@ -9,8 +9,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,7 +23,13 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,48 +49,80 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** HUD field: dark base with a slow cyan scanline over a faint grid. */
+/** Ethereal ambient background: deep obsidian base with soft atmospheric aurora glow. */
 @Composable
 fun HoloHudBackground(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "holo")
-    val scan by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(3200, easing = LinearEasing), RepeatMode.Restart),
-        label = "scan",
-    )
     Canvas(modifier.fillMaxSize()) {
-        val step = 26.dp.toPx()
-        val grid = Holo.cyan.copy(alpha = 0.045f)
+        // Deep midnight canvas
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFF080C14),
+                    Color(0xFF0D1424),
+                    Color(0xFF090E1A),
+                )
+            )
+        )
+
+        // Subtle ambient atmospheric glow (top-right cyan/indigo bloom)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFF38BDF8).copy(alpha = 0.07f),
+                    Color.Transparent,
+                ),
+                center = Offset(size.width * 0.85f, size.height * 0.12f),
+                radius = size.width * 0.8f,
+            ),
+            center = Offset(size.width * 0.85f, size.height * 0.12f),
+            radius = size.width * 0.8f,
+        )
+
+        // Subtle ambient atmospheric glow (center-left soft violet bloom)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFA78BFA).copy(alpha = 0.045f),
+                    Color.Transparent,
+                ),
+                center = Offset(size.width * 0.10f, size.height * 0.50f),
+                radius = size.width * 0.7f,
+            ),
+            center = Offset(size.width * 0.10f, size.height * 0.50f),
+            radius = size.width * 0.7f,
+        )
+
+        // Subtle ambient atmospheric glow (bottom-right mint/teal bloom)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFF34D399).copy(alpha = 0.05f),
+                    Color.Transparent,
+                ),
+                center = Offset(size.width * 0.80f, size.height * 0.85f),
+                radius = size.width * 0.75f,
+            ),
+            center = Offset(size.width * 0.80f, size.height * 0.85f),
+            radius = size.width * 0.75f,
+        )
+
+        // Ultra-faint calm aesthetic grid (barely visible texture, zero eye fatigue)
+        val step = 32.dp.toPx()
+        val gridColor = Color(0xFF38BDF8).copy(alpha = 0.016f)
         var x = 0f
         while (x < size.width) {
-            drawLine(grid, Offset(x, 0f), Offset(x, size.height), 1f)
+            drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), 1f)
             x += step
         }
         var y = 0f
         while (y < size.height) {
-            drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f)
+            drawLine(gridColor, Offset(0f, y), Offset(size.width, y), 1f)
             y += step
         }
-        val band = 44.dp.toPx()
-        val top = size.height * scan - band
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(
-                    Holo.cyan.copy(alpha = 0f),
-                    Holo.cyan.copy(alpha = 0.10f),
-                    Holo.cyan.copy(alpha = 0f),
-                ),
-                startY = top,
-                endY = top + band * 2,
-            ),
-            topLeft = Offset(0f, top),
-            size = Size(size.width, band * 2),
-        )
     }
 }
 
-/** Brass-edged panel with corner rivets. */
+/** Frosted glassmorphism panel with soft ambient gradient edge. */
 @Composable
 fun HoloPanel(
     modifier: Modifier = Modifier,
@@ -92,34 +130,54 @@ fun HoloPanel(
     contentPadding: PaddingValues = PaddingValues(14.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(14.dp)
     Box(modifier = modifier) {
+        // Frosted glass background with subtle top-to-bottom depth
         Box(
             Modifier
                 .matchParentSize()
                 .clip(shape)
-                .background(Brush.verticalGradient(listOf(Holo.panelRaised, Holo.panel)))
-                .border(1.dp, accent.copy(alpha = 0.55f), shape),
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xE6141D2E),
+                            Color(0xCC0E1624),
+                        )
+                    )
+                )
+                .border(
+                    width = 1.dp,
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.18f),
+                            accent.copy(alpha = 0.40f),
+                            Holo.panelEdge.copy(alpha = 0.30f),
+                        )
+                    ),
+                    shape = shape,
+                ),
         )
+        // Subtle top specular highlight shimmer
         Canvas(Modifier.matchParentSize()) {
-            val inset = 8.dp.toPx()
-            val dot = 3.2.dp.toPx()
-            listOf(
-                Offset(inset, inset),
-                Offset(size.width - inset, inset),
-                Offset(inset, size.height - inset),
-                Offset(size.width - inset, size.height - inset),
-            ).forEach { p ->
-                drawCircle(Holo.brassBright.copy(alpha = 0.85f), radius = dot, center = p)
-                drawCircle(Holo.brassDim, radius = dot * 0.45f, center = p)
-            }
+            drawLine(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.02f),
+                        Color.White.copy(alpha = 0.16f),
+                        Color.White.copy(alpha = 0.02f),
+                    )
+                ),
+                start = Offset(16.dp.toPx(), 1.dp.toPx()),
+                end = Offset(size.width - 16.dp.toPx(), 1.dp.toPx()),
+                strokeWidth = 1.2f,
+            )
         }
         Column(Modifier.padding(contentPadding), content = content)
     }
 }
 
 @Composable
-fun HoloSectionTitle(text: String, accent: Color = Holo.brassBright, modifier: Modifier = Modifier) {
+fun HoloSectionTitle(text: String, modifier: Modifier = Modifier, accent: Color = Holo.brassBright) {
     Text(
         text = text.uppercase(),
         color = accent,
@@ -131,12 +189,12 @@ fun HoloSectionTitle(text: String, accent: Color = Holo.brassBright, modifier: M
 
 @Composable
 fun HoloBadge(text: String, color: Color, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(4.dp)
+    val shape = RoundedCornerShape(6.dp)
     Box(
         modifier
             .clip(shape)
-            .background(color.copy(alpha = 0.14f))
-            .border(1.dp, color, shape)
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.45f), shape)
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(
@@ -213,6 +271,7 @@ fun HoloField(
         onValueChange = onValueChange,
         label = { Text(label.uppercase()) },
         singleLine = true,
+        shape = RoundedCornerShape(10.dp),
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         colors = OutlinedTextFieldDefaults.colors(
@@ -223,8 +282,8 @@ fun HoloField(
             focusedLabelColor = Holo.cyan,
             unfocusedLabelColor = Holo.textDim,
             cursorColor = Holo.cyan,
-            focusedContainerColor = Holo.panelRaised,
-            unfocusedContainerColor = Holo.panel,
+            focusedContainerColor = Holo.panelRaised.copy(alpha = 0.75f),
+            unfocusedContainerColor = Holo.panel.copy(alpha = 0.55f),
         ),
         textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
         modifier = modifier,
@@ -233,11 +292,17 @@ fun HoloField(
 
 @Composable
 fun HoloTerminal(text: String, modifier: Modifier = Modifier, color: Color = Holo.cyan) {
+    val scrollState = rememberScrollState()
+    LaunchedEffect(text) {
+        scrollState.scrollTo(scrollState.maxValue)
+    }
     Box(
         modifier
             .clip(RoundedCornerShape(6.dp))
             .background(Holo.bgDeep)
             .border(1.dp, Holo.panelEdge, RoundedCornerShape(6.dp))
+            .height(160.dp)
+            .verticalScroll(scrollState)
             .padding(10.dp),
     ) {
         Text(
@@ -254,7 +319,7 @@ fun HoloTerminal(text: String, modifier: Modifier = Modifier, color: Color = Hol
 
 @Composable
 fun HoloStatusRow(label: String, value: String, modifier: Modifier = Modifier, accent: Color = Holo.textPrimary) {
-    androidx.compose.foundation.layout.Row(
+    Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {

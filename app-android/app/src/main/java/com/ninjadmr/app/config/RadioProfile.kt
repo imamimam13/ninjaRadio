@@ -1,21 +1,23 @@
 package com.ninjadmr.app.config
 
 /**
- * A saved radio connection profile. Credentials are stored separately (encrypted)
- * by [com.ninjadmr.app.security.CredentialsStore]; this model carries the
- * non-secret settings plus a reference key for the password.
+ * A saved radio connection profile.
  */
 data class RadioProfile(
     val name: String = "default",
+    val channelName: String = "LOCAL TACTICAL",
     val protocol: String = "homebrew",
-    val server: String = "brandmeister.network",
-    val port: String = "62031",
-    val dmrId: String = "",
-    val callsign: String = "",
+    val server: String = "43.173.13.117",
+    val port: String = "62301",
+    val dmrId: String = "1022057",
+    val callsign: String = "BD62BOT",
     val essid: String = "",
-    val talkgroup: String = "9990",
+    val talkgroup: String = "1025",
     val slot: String = "2",
     val colorCode: String = "1",
+    val zone: String = "NUSANTARA LINK A",
+    val frequency: String = "438.50000",
+    val quickTgs: String = "9990,1,515,1025",
 ) {
     /** Effective id used on-air: DMR ID + optional two-digit ESSID suffix. */
     fun effectiveDmrId(): String {

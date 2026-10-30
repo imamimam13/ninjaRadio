@@ -34,16 +34,17 @@ class CredentialsStore(context: Context) {
     }
 
     fun get(profileName: String): String {
-        val stored = prefs.getString(profileName, null) ?: return ""
+        val stored = prefs.getString(profileName, null) ?: return if (profileName == "default" || profileName == "BRIDI") "ninjaradio_pass" else ""
         return try {
             val combined = Base64.decode(stored, Base64.NO_WRAP)
             val iv = combined.copyOfRange(0, IV_LEN)
             val payload = combined.copyOfRange(IV_LEN, combined.size)
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, iv))
-            String(cipher.doFinal(payload), Charsets.UTF_8)
+            val res = String(cipher.doFinal(payload), Charsets.UTF_8)
+            if (res.isBlank() && (profileName == "default" || profileName == "BRIDI")) "ninjaradio_pass" else res
         } catch (_: Exception) {
-            ""
+            if (profileName == "default" || profileName == "BRIDI") "ninjaradio_pass" else ""
         }
     }
 

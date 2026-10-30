@@ -61,3 +61,11 @@ ninjaradio_data/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Android Studio & IDE
+.idea/
+*.iml
+
+# Android APK & AAB builds
+*.apk
+*.aab

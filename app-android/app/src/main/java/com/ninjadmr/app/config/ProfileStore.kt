@@ -6,7 +6,7 @@ import org.json.JSONObject
 
 /**
  * Persists the list of [RadioProfile]s (and the selected index) in
- * SharedPreferences as JSON. Secrets are handled elsewhere.
+ * SharedPreferences as JSON.
  */
 class ProfileStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -49,6 +49,7 @@ class ProfileStore(context: Context) {
 
         private fun toJson(p: RadioProfile): JSONObject = JSONObject().apply {
             put("name", p.name)
+            put("channelName", p.channelName)
             put("protocol", p.protocol)
             put("server", p.server)
             put("port", p.port)
@@ -58,19 +59,28 @@ class ProfileStore(context: Context) {
             put("talkgroup", p.talkgroup)
             put("slot", p.slot)
             put("colorCode", p.colorCode)
+            put("zone", p.zone)
+            put("frequency", p.frequency)
+            put("quickTgs", p.quickTgs)
         }
 
         private fun fromJson(o: JSONObject): RadioProfile = RadioProfile(
             name = o.optString("name", "default"),
+            channelName = o.optString("channelName", "LOCAL TACTICAL"),
             protocol = o.optString("protocol", "homebrew"),
-            server = o.optString("server", "brandmeister.network"),
-            port = o.optString("port", "62031"),
-            dmrId = o.optString("dmrId", ""),
-            callsign = o.optString("callsign", ""),
+            server = o.optString("server", "43.173.13.117").let {
+                if (it.contains("sslip.io")) "43.173.13.117" else it
+            },
+            port = o.optString("port", "62301"),
+            dmrId = o.optString("dmrId", "1022057"),
+            callsign = o.optString("callsign", "BD62BOT"),
             essid = o.optString("essid", ""),
-            talkgroup = o.optString("talkgroup", "9990"),
+            talkgroup = o.optString("talkgroup", "1025"),
             slot = o.optString("slot", "2"),
             colorCode = o.optString("colorCode", "1"),
+            zone = o.optString("zone", "NUSANTARA LINK A"),
+            frequency = o.optString("frequency", "438.50000"),
+            quickTgs = o.optString("quickTgs", "9990,1,515,1025"),
         )
     }
 }

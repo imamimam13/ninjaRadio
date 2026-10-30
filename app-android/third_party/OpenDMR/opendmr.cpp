@@ -379,20 +379,69 @@ void opendmr_encoder_set_gain(opendmr_encoder_t *enc, int gain_db)
     }
 }
 
+/*
+ * Encode voice parameters to standard 49-bit DMR format (ETSI TS 102 361-1).
+ */
+static void encode_49bit(char outp[49], const int b[9])
+{
+    outp[0] = (b[0] >> 6) & 1;
+    outp[1] = (b[0] >> 5) & 1;
+    outp[2] = (b[0] >> 4) & 1;
+    outp[3] = (b[0] >> 3) & 1;
+    outp[4] = (b[1] >> 4) & 1;
+    outp[5] = (b[1] >> 3) & 1;
+    outp[6] = (b[1] >> 2) & 1;
+    outp[7] = (b[1] >> 1) & 1;
+    outp[8] = (b[2] >> 4) & 1;
+    outp[9] = (b[2] >> 3) & 1;
+    outp[10] = (b[2] >> 2) & 1;
+    outp[11] = (b[2] >> 1) & 1;
+    outp[12] = (b[3] >> 8) & 1;
+    outp[13] = (b[3] >> 7) & 1;
+    outp[14] = (b[3] >> 6) & 1;
+    outp[15] = (b[3] >> 5) & 1;
+    outp[16] = (b[3] >> 4) & 1;
+    outp[17] = (b[3] >> 3) & 1;
+    outp[18] = (b[3] >> 2) & 1;
+    outp[19] = (b[3] >> 1) & 1;
+    outp[20] = (b[4] >> 6) & 1;
+    outp[21] = (b[4] >> 5) & 1;
+    outp[22] = (b[4] >> 4) & 1;
+    outp[23] = (b[4] >> 3) & 1;
+    outp[24] = (b[5] >> 4) & 1;
+    outp[25] = (b[5] >> 3) & 1;
+    outp[26] = (b[5] >> 2) & 1;
+    outp[27] = (b[5] >> 1) & 1;
+    outp[28] = (b[6] >> 3) & 1;
+    outp[29] = (b[6] >> 2) & 1;
+    outp[30] = (b[6] >> 1) & 1;
+    outp[31] = (b[7] >> 3) & 1;
+    outp[32] = (b[7] >> 2) & 1;
+    outp[33] = (b[7] >> 1) & 1;
+    outp[34] = (b[8] >> 2) & 1;
+    outp[35] = b[1] & 1;
+    outp[36] = b[2] & 1;
+    outp[37] = (b[0] >> 2) & 1;
+    outp[38] = (b[0] >> 1) & 1;
+    outp[39] = b[0] & 1;
+    outp[40] = b[3] & 1;
+    outp[41] = (b[4] >> 2) & 1;
+    outp[42] = (b[4] >> 1) & 1;
+    outp[43] = b[4] & 1;
+    outp[44] = b[5] & 1;
+    outp[45] = b[6] & 1;
+    outp[46] = b[7] & 1;
+    outp[47] = (b[8] >> 1) & 1;
+    outp[48] = b[8] & 1;
+}
+
 static void encode_single_pcm_to_fr(opendmr_encoder_t *enc, const int16_t pcm[160], char ambe_fr[4][24])
 {
     int b[9] = {0};
     enc->enc->encode_dmr_params(pcm, b);
 
-    static const int b_lengths[9] = {7, 5, 5, 9, 7, 5, 4, 4, 3};
     char ambe_d[49];
-    int pos = 0;
-    for (int i = 0; i < 9; i++) {
-        int val = b[i];
-        for (int j = b_lengths[i] - 1; j >= 0; j--) {
-            ambe_d[pos++] = (val >> j) & 1;
-        }
-    }
+    encode_49bit(ambe_d, b);
 
     encode_ambe_fr(ambe_d, ambe_fr);
 }

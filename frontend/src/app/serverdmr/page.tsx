@@ -366,7 +366,18 @@ export default function ServerDmrPage() {
                         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                         <span className="text-cyan-300 font-black text-sm">{hs.callsign}</span>
                       </td>
-                      <td className="p-3 text-slate-300 font-bold">{hs.dmr_id}</td>
+                      <td className="p-3 text-slate-300 font-bold">
+                        {hs.dmr_id > 9999999 ? (
+                          <div className="flex items-center gap-1.5">
+                            <span>{Math.floor(hs.dmr_id / 100)}</span>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-cyan-950 text-cyan-400 border border-cyan-800" title={`Compound ID: ${hs.dmr_id}`}>
+                              SSID {String(hs.dmr_id % 100).padStart(2, "0")}
+                            </span>
+                          </div>
+                        ) : (
+                          hs.dmr_id
+                        )}
+                      </td>
                       <td className="p-3 text-slate-400">{hs.ip}:{hs.port}</td>
                       <td className="p-3 text-slate-400">{hs.software}</td>
                       <td className="p-3">

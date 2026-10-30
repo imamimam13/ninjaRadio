@@ -8,16 +8,18 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.util.Log
 import com.ninjadmr.app.dsp.Agc
-import com.ninjadmr.app.dsp.AudioDsp
+import com.ninjadmr.app.dsp.Biquad
 import com.ninjadmr.app.dsp.Envelope
 import com.ninjadmr.app.dsp.JitterBuffer
 
 /**
  * 8 kHz mono PCM capture/playback for the DMR vocoder path.
  *
- * * Capture: frames are accumulated into 60 ms (480 sample) bursts, AGC'd and
- *   handed to [onMicFrame].
- * * Playback: decoded bursts are pushed through a [JitterBuffer], band-limited
+ * * Capture: frames are accumulated into 60 ms (480 sample) bursts, high-pass
+ *   filtered (to strip DC offset and handling rumble before the AMBE vocoder),
+ *   smoothly leveled, and handed to [onMicFrame].
+ * * Playback: decoded bursts are buffered via [JitterBuffer] (3 bursts / 180 ms cushion)
+ *   to eliminate underrun pops, gently leveled, smooth onset envelope applied,
  *   and written to the output track by a dedicated thread.
  */
 class AudioEngine(
@@ -38,12 +40,18 @@ class AudioEngine(
 
     @Volatile private var running = false
 
-    private val txAgc = Agc()
-    private val rxAgc = Agc()
-    private val rxDsp = AudioDsp(sampleRate.toDouble())
-    private val jitter = JitterBuffer(BURST_SAMPLES)
+    // TX AGC: targets 6000 RMS, bounded gain [0.5, 2.5] with per-sample interpolation
+    private val txAgc = Agc(targetRms = 6000.0, maxGain = 2.5, minGain = 0.5)
+    // RX AGC: gentle speech leveling (AMBE output is already synthesized and bounded)
+    private val rxAgc = Agc(targetRms = 6500.0, maxGain = 1.5, minGain = 0.7)
+    // High-pass filter at 160 Hz for microphone capture (eliminates DC offset and sub-audible puff/rumble)
+    private val txHp = Biquad().highPass(sampleRate.toDouble(), 160.0)
+    // Jitter buffer with 3 frames (180 ms) cushion to absorb internet packet jitter without clicks
+    private val jitter = JitterBuffer(BURST_SAMPLES, cushionFrames = 3)
     private val micAccum = ShortArray(BURST_SAMPLES)
     private var micPos = 0
+    @Volatile private var lastMicRms = 0
+    fun micRms(): Int = if (running && isCapturing()) lastMicRms else 0
 
     @SuppressLint("MissingPermission")
     fun startCapture() {
@@ -60,15 +68,25 @@ class AudioEngine(
         val bufSize = maxOf(minBuf, FRAME_SAMPLES * 2 * 8)
         val rec = try {
             AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                MediaRecorder.AudioSource.MIC,
                 sampleRate,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
                 bufSize,
             )
-        } catch (exc: Exception) {
-            onError("AudioRecord init failed: ${exc.message}")
-            return
+        } catch (_: Exception) {
+            try {
+                AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize,
+                )
+            } catch (exc: Exception) {
+                onError("AudioRecord init failed: ${exc.message}")
+                return
+            }
         }
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
             rec.release()
@@ -80,6 +98,8 @@ class AudioEngine(
         running = true
         captureThread = Thread({ captureLoop(rec) }, "dmr-capture").apply { start() }
     }
+
+    fun isCapturing(): Boolean = record?.recordingState == AudioRecord.RECORDSTATE_RECORDING
 
     private fun captureLoop(rec: AudioRecord) {
         val frame = ShortArray(FRAME_SAMPLES)
@@ -102,7 +122,17 @@ class AudioEngine(
                 offset += n
                 if (micPos == BURST_SAMPLES) {
                     val burst = micAccum.copyOf()
+                    // 1. High-pass filter to clean up DC offset & low rumble before vocoder
+                    for (i in burst.indices) {
+                        val hp = txHp.process(burst[i].toDouble())
+                        burst[i] = hp.coerceIn(-32768.0, 32767.0).toInt().toShort()
+                    }
+                    // 2. Smooth AGC
                     txAgc.process(burst)
+                    var sum = 0L
+                    for (s in burst) sum += (s.toLong() * s.toLong())
+                    lastMicRms = kotlin.math.sqrt((sum / burst.size).toDouble()).toInt()
+                    AudioVisualizer.feed(burst, tx = true)
                     onMicFrame(burst)
                     micPos = 0
                 }
@@ -117,11 +147,11 @@ class AudioEngine(
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        val bufSize = maxOf(minBuf, BURST_SAMPLES * 2 * 4)
+        val bufSize = maxOf(minBuf, BURST_SAMPLES * 2 * 6)
         val t = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build(),
             )
@@ -151,16 +181,19 @@ class AudioEngine(
         while (running) {
             val frame = jitter.poll()
             if (frame == null) {
-                Thread.sleep(5)
+                try {
+                    Thread.sleep(5)
+                } catch (_: InterruptedException) {
+                    break
+                }
                 continue
             }
-            rxDsp.processRx(frame)
             rxAgc.process(frame)
+            AudioVisualizer.feed(frame, tx = false)
             val now = System.currentTimeMillis()
-            // Only ramp in when a new burst starts (after a gap), never on the
-            // first samples of every frame - that would click every 60 ms.
-            if (lastWriteMs == 0L || now - lastWriteMs > 150) {
-                Envelope.fadeIn(frame, 4)
+            // Fade in only at the start of a new talkspurt (gap > 180 ms)
+            if (lastWriteMs == 0L || now - lastWriteMs > 180) {
+                Envelope.fadeIn(frame, 40)
             }
             lastWriteMs = now
             track?.write(frame, 0, frame.size, AudioTrack.WRITE_BLOCKING)
@@ -172,8 +205,10 @@ class AudioEngine(
     @Synchronized
     fun stop() {
         running = false
+        playbackThread?.interrupt()
         playbackThread?.join(500)
         playbackThread = null
+        captureThread?.interrupt()
         captureThread?.join(500)
         captureThread = null
         record?.let {
@@ -193,7 +228,7 @@ class AudioEngine(
         }
         track = null
         jitter.reset()
-        rxDsp.reset()
+        txHp.reset()
         txAgc.reset()
         rxAgc.reset()
         micPos = 0
