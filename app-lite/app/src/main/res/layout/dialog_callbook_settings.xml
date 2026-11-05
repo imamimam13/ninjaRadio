@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/card_lcd"
+    android:padding="4dp">
+
+    <!-- Title -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="CALLBOOK MANAGER"
+        android:textColor="@color/ninja_amber"
+        android:textSize="14sp"
+        android:fontFamily="sans-serif-medium"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="2dp" />
+
+    <!-- Current Count Status -->
+    <TextView
+        android:id="@+id/tvCbStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Database: 0 stasiun"
+        android:textColor="@color/ninja_cyan"
+        android:textSize="12sp"
+        android:fontFamily="sans-serif-condensed"
+        android:gravity="center"
+        android:layout_marginBottom="3dp" />
+
+    <!-- URL Input -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Link Callbook (CSV / JSON):"
+        android:textColor="@color/ninja_text_dim"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <EditText
+        android:id="@+id/etCbUrl"
+        android:layout_width="match_parent"
+        android:layout_height="28dp"
+        android:background="@drawable/edit_text_bg"
+        android:textColor="@color/white"
+        android:textSize="12sp"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:singleLine="true"
+        android:hint="https://database.radioid.net/static/users.csv"
+        android:textColorHint="@color/ninja_text_faint"
+        android:layout_marginBottom="4dp" />
+
+    <!-- Action Buttons Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="28dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="2dp">
+
+        <Button
+            android:id="@+id/btnCbSync"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.2"
+            android:text="SYNC / UNDUH"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_green"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginEnd="2dp" />
+
+        <Button
+            android:id="@+id/btnCbClear"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.8"
+            android:text="HAPUS"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_red"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginStart="1dp"
+            android:layout_marginEnd="2dp" />
+
+        <Button
+            android:id="@+id/btnCbClose"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.8"
+            android:text="TUTUP"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_text_primary"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginStart="1dp" />
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,0 +1,438 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/ninja_bg_deep"
+    android:padding="3dp">
+
+    <!-- Header -->
+    <TextView
+        android:id="@+id/tvEditTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="EDIT PROFILE"
+        android:textColor="@color/ninja_amber"
+        android:textSize="17sp"
+        android:fontFamily="sans-serif-medium"
+        android:textStyle="bold"
+        android:gravity="center_vertical"
+        android:paddingStart="4dp"
+        android:layout_marginBottom="2dp" />
+
+    <!-- Scrollable Form -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:scrollbars="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="2dp">
+
+            <!-- Profile Name -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Nama Profil:"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+            <EditText
+                android:id="@+id/etName"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/white"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:singleLine="true"
+                android:hint="Contoh: BRIDI"
+                android:textColorHint="#666666" />
+
+            <!-- Master Host -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Server Master Host:"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp" />
+            <EditText
+                android:id="@+id/etHost"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/white"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:singleLine="true"
+                android:hint="bm.amateur-radio.id"
+                android:textColorHint="#666666" />
+
+            <!-- Port & Password in row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="4dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginEnd="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Port:"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etPort"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/white"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="number"
+                        android:singleLine="true"
+                        android:text="62031" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginStart="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Password:"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etPassword"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/white"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="textPassword"
+                        android:singleLine="true" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Callsign -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Callsign Anda:"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp" />
+            <EditText
+                android:id="@+id/etCallsign"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/ninja_cyan"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:singleLine="true"
+                android:hint="YD0XXX"
+                android:textColorHint="#666666" />
+
+            <!-- DMR ID & ESSID -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="4dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="3"
+                    android:orientation="vertical"
+                    android:layout_marginEnd="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="DMR ID Anda:"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etDmrId"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/ninja_cyan"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="number"
+                        android:singleLine="true"
+                        android:hint="5100001"
+                        android:textColorHint="#666666" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1.6"
+                    android:orientation="vertical"
+                    android:layout_marginStart="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="ESSID (01-99):"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etEssid"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/ninja_cyan"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="number"
+                        android:singleLine="true"
+                        android:hint="01"
+                        android:textColorHint="#666666" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Talkgroup & Slot -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="4dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginEnd="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Default TX TG:"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etTalkgroup"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/ninja_amber"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="number"
+                        android:singleLine="true"
+                        android:hint="1025"
+                        android:textColorHint="#666666" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginStart="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Time Slot (TS):"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etSlot"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/ninja_amber"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="number"
+                        android:singleLine="true"
+                        android:text="2" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Multi TG / RX Group -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Multi-TG (* = Semua TG, atau daftar TG):"
+                android:textColor="@color/ninja_green"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="5dp" />
+            <EditText
+                android:id="@+id/etRxGroup"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/ninja_green"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:singleLine="true"
+                android:hint="* (Semua TG) atau misal 1025,91,510"
+                android:textColorHint="#666666" />
+
+            <!-- Station & Software Info (DMR Dashboard) -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Lokasi Stasiun (Location di Dashboard):"
+                android:textColor="@color/ninja_cyan"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="6dp" />
+            <EditText
+                android:id="@+id/etLocation"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/ninja_cyan"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:singleLine="true"
+                android:hint="Contoh: Mobile, ID / Jakarta"
+                android:textColorHint="#666666" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Info Software (Software di Dashboard):"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp" />
+            <EditText
+                android:id="@+id/etSoftware"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/ninja_cyan"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:singleLine="true"
+                android:hint="Contoh: NinjaRadio Lite, MMDVM"
+                android:textColorHint="#666666" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Info Hardware / Rig Model:"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp" />
+            <EditText
+                android:id="@+id/etHardware"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/white"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:singleLine="true"
+                android:hint="Contoh: KSUN ZL40, Android POC"
+                android:textColorHint="#666666" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Deskripsi Stasiun:"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp" />
+            <EditText
+                android:id="@+id/etDescription"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@drawable/edit_text_bg"
+                android:textColor="@color/white"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:singleLine="true"
+                android:hint="Contoh: NinjaDMR Mobile"
+                android:textColorHint="#666666" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Bottom Save / Cancel Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginTop="3dp">
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="SIMPAN"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_cyan"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:layout_marginEnd="2dp" />
+
+        <Button
+            android:id="@+id/btnCancel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="BATAL"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_text_dim"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:layout_marginStart="2dp" />
+    </LinearLayout>
+
+</LinearLayout>

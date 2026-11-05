@@ -69,3 +69,10 @@ Thumbs.db
 # Android APK & AAB builds
 *.apk
 *.aab
+
+# Gradle build cache & local properties
+.gradle/
+**/.gradle/
+**/local.properties
+local.properties
+

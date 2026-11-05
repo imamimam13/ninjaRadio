@@ -520,7 +520,14 @@ class CallbookService:
                 if org_raw:
                     org = str(org_raw).strip().upper()
                 else:
-                    org = "ORARI" if callsign.startswith(("YB", "YC", "YD")) else "KOMUNITAS"
+                    if callsign.startswith(("YB", "YC", "YD", "YE", "7A", "7B", "7C", "7D", "7E", "7F", "7G", "7H", "7I", "8A", "8B", "8C", "8D", "8E", "8F", "8G", "8H", "8I")):
+                        org = "ORARI"
+                    elif callsign.startswith(("BD", "BD62")):
+                        org = "BRIDI"
+                    elif callsign.startswith("JZ"):
+                        org = "RAPI"
+                    else:
+                        org = "KOMUNITAS"
 
             # Default TalkGroup
             if default_tg is not None and int(default_tg) > 0:
@@ -587,6 +594,21 @@ class CallbookService:
                                     elif not str(k).strip().isdigit() and not any(f in row_dict for f in ["callsign", "call", "call_sign"]):
                                         row_dict["callsign"] = str(k).strip()
                                     raw_rows.append(row_dict)
+                                elif isinstance(v, (list, tuple)) and len(v) > 0:
+                                    if str(k).strip().isdigit():
+                                        row_dict = {"dmr_id": int(k)}
+                                        row_dict["callsign"] = str(v[0]).strip()
+                                        if len(v) > 1 and v[1]:
+                                            row_dict["name"] = str(v[1]).strip()
+                                        if len(v) > 2 and v[2]:
+                                            loc = str(v[2]).strip()
+                                            if "," in loc:
+                                                parts = [p.strip() for p in loc.split(",", 1)]
+                                                row_dict["city"] = parts[0]
+                                                row_dict["province_state"] = parts[1]
+                                            else:
+                                                row_dict["city"] = loc
+                                        raw_rows.append(row_dict)
                                 elif isinstance(v, (str, int)):
                                     if str(k).strip().isdigit():
                                         raw_rows.append({"dmr_id": int(k), "callsign": str(v).strip()})

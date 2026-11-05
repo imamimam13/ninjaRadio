@@ -136,16 +136,7 @@ class MainActivity : ComponentActivity() {
                     }
                     return
                 }
-
-                val configured = settingsStore.hardwarePttKeyCode
-                val matches = com.ninjadmr.app.ptt.PttKeyMap.matchesConfigured(keyCode, configured)
-                if (matches) {
-                    val svc = service
-                    if (svc != null) {
-                        if (isDown) svc.setPtt(true)
-                        else if (isUp) svc.setPtt(false)
-                    }
-                }
+                // When capturer is null, DmrForegroundService.pttBroadcastReceiver handles PTT system-wide
             }
         }
         pttBroadcastReceiver = receiver
@@ -280,6 +271,7 @@ class MainActivity : ComponentActivity() {
         usbUartManager = UsbUartManager(this)
 
         hotspotBridge = MmdvmHotspotBridge(this, usbUartManager!!)
+        registerPttBroadcastReceiver()
 
 
 
@@ -1022,6 +1014,10 @@ callbookStore.importFromUrl(url) { count, err ->
             .putExtra(DmrForegroundService.EXTRA_SCAN_TGS, scanTgs.joinToString(","))
 
             .putExtra(DmrForegroundService.EXTRA_SCAN_INTERVAL, SCAN_DWELL_MS)
+            .putExtra(DmrForegroundService.EXTRA_LOCATION, config.location)
+            .putExtra(DmrForegroundService.EXTRA_HARDWARE, config.hardware)
+            .putExtra(DmrForegroundService.EXTRA_SOFTWARE, config.software)
+            .putExtra(DmrForegroundService.EXTRA_DESCRIPTION, config.description)
 
 
 
@@ -1267,6 +1263,28 @@ callbookStore.importFromUrl(url) { count, err ->
 
 
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val capturer = onKeyCaptured
+        if (capturer != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val keyName = com.ninjadmr.app.ptt.PttKeyMap.formatKeyName(event.keyCode)
+                capturer.invoke(event.keyCode, keyName)
+            }
+            return true
+        }
+        val configured = settingsStore.hardwarePttKeyCode
+        if (configured > 0 && event.keyCode == configured) {
+            val svc = service
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                svc?.handlePttEvent(true)
+            } else if (event.action == KeyEvent.ACTION_UP) {
+                svc?.handlePttEvent(false)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val capturer = onKeyCaptured
         if (capturer != null) {
@@ -1274,10 +1292,10 @@ callbookStore.importFromUrl(url) { count, err ->
             capturer.invoke(keyCode, keyName)
             return true
         }
-        if (isPttKeyCode(keyCode)) {
+        if (isPttEvent(keyCode, event)) {
             val svc = service
             if (svc != null && event?.repeatCount == 0) {
-                svc.setPtt(true)
+                svc.handlePttEvent(true)
             }
             return true
         }
@@ -1288,20 +1306,31 @@ callbookStore.importFromUrl(url) { count, err ->
         if (onKeyCaptured != null) {
             return true
         }
-        if (isPttKeyCode(keyCode)) {
+        if (isPttEvent(keyCode, event)) {
             val svc = service
             if (svc != null) {
-                svc.setPtt(false)
+                svc.handlePttEvent(false)
             }
             return true
         }
         return super.onKeyUp(keyCode, event)
     }
 
-    private fun isPttKeyCode(keyCode: Int): Boolean {
+    private fun isPttEvent(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_HOME,
+            KeyEvent.KEYCODE_MENU -> return false
+        }
         val configured = settingsStore.hardwarePttKeyCode
         if (configured > 0) {
             return keyCode == configured
+        }
+        val scan = event?.scanCode ?: 0
+        if (scan == 249 || scan == 250 || scan == 216) {
+            return true
         }
         return com.ninjadmr.app.ptt.PttKeyMap.isUniversalPttKey(keyCode)
     }
@@ -1320,6 +1349,7 @@ callbookStore.importFromUrl(url) { count, err ->
 
         }
 
+        unregisterPttBroadcastReceiver()
         super.onDestroy()
 
     }

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Official NinjaRadio Tactical Cyber SDR Palette -->
+    <color name="ninja_bg_deep">#060A12</color>
+    <color name="ninja_bg_grid">#0D1526</color>
+    <color name="ninja_panel">#0F192D</color>
+    <color name="ninja_panel_raised">#182644</color>
+    <color name="ninja_panel_edge">#2A3F66</color>
+
+    <!-- Ninja Accents -->
+    <color name="ninja_cyan">#38BDF8</color>
+    <color name="ninja_cyan_dim">#0284C7</color>
+    <color name="ninja_green">#34D399</color>
+    <color name="ninja_green_dim">#059669</color>
+    <color name="ninja_red">#F43F5E</color>
+    <color name="ninja_red_dim">#BE123C</color>
+    <color name="ninja_amber">#FBBF24</color>
+    <color name="ninja_violet">#A78BFA</color>
+
+    <!-- Ninja Text Colors -->
+    <color name="ninja_text_primary">#F8FAFC</color>
+    <color name="ninja_text_dim">#94A3B8</color>
+    <color name="ninja_text_faint">#64748B</color>
+
+    <!-- D-pad Button Colors -->
+    <color name="ninja_btn_normal">#18243E</color>
+    <color name="ninja_btn_border">#2A3F66</color>
+    <color name="ninja_btn_focused">#22355A</color>
+    <color name="ninja_btn_focused_border">#38BDF8</color>
+    <color name="ninja_btn_pressed">#0284C7</color>
+
+    <!-- PTT Button Colors -->
+    <color name="ninja_ptt_bg">#2A121E</color>
+    <color name="ninja_ptt_border">#F43F5E</color>
+    <color name="ninja_ptt_focused">#4A1A2E</color>
+
+    <!-- Aliases for existing views -->
+    <color name="black">#060A12</color>
+    <color name="white">#F8FAFC</color>
+    <color name="lcd_bg">#0F192D</color>
+    <color name="lcd_text">#38BDF8</color>
+    <color name="lcd_dim">#2A3F66</color>
+    <color name="accent_yellow">#FBBF24</color>
+    <color name="accent_orange">#F59E0B</color>
+    <color name="tx_red">#F43F5E</color>
+    <color name="rx_green">#34D399</color>
+    <color name="btn_normal">#18243E</color>
+    <color name="btn_focused">#22355A</color>
+    <color name="btn_pressed">#0284C7</color>
+    <color name="border_focused">#38BDF8</color>
+    <color name="border_normal">#2A3F66</color>
+</resources>

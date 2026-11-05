@@ -25,7 +25,7 @@ class AppSettingsStore(context: Context) {
             prefs.edit().putString(KEY_PTT_MODE, value).apply()
         }
 
-    private val _totSeconds = mutableIntStateOf(prefs.getInt(KEY_TOT_SECONDS, 60))
+    private val _totSeconds = mutableIntStateOf(prefs.getInt(KEY_TOT_SECONDS, 180))
     var totSeconds: Int
         get() = _totSeconds.intValue
         set(value) {

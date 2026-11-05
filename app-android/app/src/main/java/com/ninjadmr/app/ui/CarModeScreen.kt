@@ -107,13 +107,10 @@ fun CarModeScreen(
 
             Spacer(Modifier.height(18.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
-                HoloGauge(label = "RX", value = rxCount, color = Holo.cyan)
-                HoloGauge(label = "TX", value = txCount, color = Holo.magenta)
-            }
+            HoloPacketStatsRow(
+                rxCount = rxCount,
+                txCount = txCount,
+            )
 
             Spacer(Modifier.height(14.dp))
 

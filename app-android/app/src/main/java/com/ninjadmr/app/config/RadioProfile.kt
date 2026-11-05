@@ -18,6 +18,10 @@ data class RadioProfile(
     val zone: String = "NUSANTARA LINK A",
     val frequency: String = "438.50000",
     val quickTgs: String = "9990,1,515,1025",
+    val location: String = "Mobile, ID",
+    val hardware: String = "Android POC",
+    val software: String = "NinjaRadio",
+    val description: String = "NinjaDMR",
 ) {
     /** Effective id used on-air: DMR ID + optional two-digit ESSID suffix. */
     fun effectiveDmrId(): String {

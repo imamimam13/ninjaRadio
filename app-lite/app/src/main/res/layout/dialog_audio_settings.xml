@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/card_lcd">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="4dp">
+
+        <!-- Title Row with Quick Back button -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="22dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="2dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="AUDIO, HT JACK &amp; PTT"
+                android:textColor="@color/ninja_amber"
+                android:textSize="12sp"
+                android:fontFamily="sans-serif-black"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnAudioClose"
+                android:layout_width="68dp"
+                android:layout_height="match_parent"
+                android:text="✓ SIMPAN"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_green"
+                android:background="@drawable/btn_dpad" />
+        </LinearLayout>
+
+        <!-- Mic / HT Input Gain Row (10% - 500%) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="22dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="2dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="MIC / HT IN:"
+                android:textColor="@color/ninja_text_primary"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnMicDown"
+                android:layout_width="28dp"
+                android:layout_height="match_parent"
+                android:text="-"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_text_primary"
+                android:background="@drawable/btn_dpad" />
+
+            <TextView
+                android:id="@+id/tvMicGainVal"
+                android:layout_width="46dp"
+                android:layout_height="wrap_content"
+                android:text="250%"
+                android:textColor="@color/ninja_cyan"
+                android:textSize="11sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold"
+                android:gravity="center" />
+
+            <Button
+                android:id="@+id/btnMicUp"
+                android:layout_width="28dp"
+                android:layout_height="match_parent"
+                android:text="+"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_cyan"
+                android:background="@drawable/btn_dpad" />
+        </LinearLayout>
+
+        <!-- Speaker RX Gain Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="22dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="2dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="SPK RX OUT:"
+                android:textColor="@color/ninja_text_primary"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnSpkDown"
+                android:layout_width="28dp"
+                android:layout_height="match_parent"
+                android:text="-"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_text_primary"
+                android:background="@drawable/btn_dpad" />
+
+            <TextView
+                android:id="@+id/tvSpkGainVal"
+                android:layout_width="46dp"
+                android:layout_height="wrap_content"
+                android:text="120%"
+                android:textColor="@color/ninja_cyan"
+                android:textSize="11sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold"
+                android:gravity="center" />
+
+            <Button
+                android:id="@+id/btnSpkUp"
+                android:layout_width="28dp"
+                android:layout_height="match_parent"
+                android:text="+"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_cyan"
+                android:background="@drawable/btn_dpad" />
+        </LinearLayout>
+
+        <!-- TOT Cutoff Limit Row (60s, 120s, 180s, 300s, OFF) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="22dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="2dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="TOT CUTOFF:"
+                android:textColor="@color/ninja_text_primary"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnToggleTot"
+                android:layout_width="106dp"
+                android:layout_height="match_parent"
+                android:text="TOT: 180s"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_cyan"
+                android:background="@drawable/btn_dpad" />
+        </LinearLayout>
+
+        <!-- HT Headset Jack & VOX Auto-TX Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="23dp"
+            android:orientation="horizontal"
+            android:layout_marginBottom="2dp">
+
+            <Button
+                android:id="@+id/btnToggleVox"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1.15"
+                android:text="VOX HT: OFF"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_text_dim"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginEnd="2dp" />
+
+            <Button
+                android:id="@+id/btnToggleHeadset"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="JACK HT: PRIORITAS"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_green"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginStart="2dp" />
+        </LinearLayout>
+
+        <!-- Chirp & Callbook Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="23dp"
+            android:orientation="horizontal"
+            android:layout_marginBottom="2dp">
+
+            <Button
+                android:id="@+id/btnToggleChirp"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="CHIRP: ON"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_green"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginEnd="2dp" />
+
+            <Button
+                android:id="@+id/btnOpenCallbook"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="CALLBOOK DB"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_amber"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginStart="2dp" />
+        </LinearLayout>
+
+        <!-- PTT Hold/Toggle & Calibrate Row Side by Side -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="24dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnTogglePttMode"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="PTT: HOLD"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_cyan"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginEnd="2dp" />
+
+            <Button
+                android:id="@+id/btnCalibratePtt"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1.2"
+                android:text="SET TOMBOL PTT / CH"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_amber"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginStart="2dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

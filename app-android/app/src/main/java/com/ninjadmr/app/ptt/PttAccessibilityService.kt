@@ -25,6 +25,15 @@ class PttAccessibilityService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        val capturer = com.ninjadmr.app.MainActivity.onKeyCaptured
+        if (capturer != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val keyName = PttKeyMap.formatKeyName(event.keyCode)
+                capturer.invoke(event.keyCode, keyName)
+            }
+            return true
+        }
+
         val prefs = getSharedPreferences("ninjadmr_app_settings", Context.MODE_PRIVATE)
         val configured = prefs.getInt("hardware_ptt_key_code", 0)
 

@@ -51,33 +51,113 @@ object PttKeyMap {
     const val CARAKA_POC2_KEY = 300
 
     val PTT_DOWN_ACTIONS = setOf(
-        "com.android.ptt.key.down",         // Caraka 22 / MediaTek PoC PTT 2
-        "com.android.poc.key.down",         // Caraka 22 PoC side key 1
+        // MediaTek / Caraka / Generic POC
+        "com.android.ptt.key.down",
+        "com.android.poc.key.down",
         "com.android.ptt.down",
-        "android.intent.action.PTT.down",   // MediaTek & Qualcomm PoC standard
-        "com.zkrt.ptt.down",
-        "com.kylinservice.ptt.action.pttdown",
-        "com.chongdong.ptt.action.pttdown",
+        "android.intent.action.PTT.down",
+        "android.intent.action.PTT_BUTTON_DOWN",
+        "android.intent.action.PTT_DOWN",
+        "android.intent.action.PTT_BUTTON",
+
+        // Inrico & Talkpod
+        "com.inrico.ptt.down",
+        "com.inrico.action.ptt.down",
         "action.ptt.down",
         "com.poc.ptt.down",
-        "com.inrico.ptt.down",
+
+        // Boxchip / SenHaiX / Anysecu / Chongdong / Kylin / ZKRT / Zed3
+        "com.chongdong.ptt.action.pttdown",
+        "com.kylinservice.ptt.action.pttdown",
+        "com.zkrt.ptt.down",
+        "com.boxchip.ptt.down",
         "com.zed3.action.PTT_DOWN",
-        "com.motorola.audioptt.ACTION_PTT_KEY_DOWN"
+
+        // Runbo
+        "com.runbo.poc.ptt.down",
+        "com.runbo.action.PTT_DOWN",
+
+        // Hytera PoC (PNC series)
+        "com.hytera.action.PTT_DOWN",
+
+        // Caltta / ZTE
+        "caltta.action.ptt.down",
+        "com.caltta.action.PTT_DOWN",
+
+        // Sonim (XP5, XP7, XP8, XP10)
+        "com.sonim.intent.action.PTT_KEY_DOWN",
+        "com.sonim.action.PTT_DOWN",
+
+        // Kyocera DuraForce
+        "com.kyocera.action.PTT_DOWN",
+
+        // Telo Systems
+        "com.telo.action.PTT_DOWN",
+
+        // Samsung Knox / XCover
+        "com.samsung.android.knox.intent.action.HARD_KEY_REPORT",
+
+        // Zello OEM Mode
+        "com.zello.intent.action.PTT_DOWN",
+        "com.zello.action.PTT_BUTTON_PRESSED",
+
+        // Motorola WAVE / Kodiak / ESChat
+        "com.motorola.audioptt.ACTION_PTT_KEY_DOWN",
+        "com.kodiak.intent.action.PTT_BUTTON_DOWN",
+        "com.eschat.action.PTT_DOWN"
     )
 
     val PTT_UP_ACTIONS = setOf(
-        "com.android.ptt.key.up",           // Caraka 22 / MediaTek PoC PTT 2
-        "com.android.poc.key.up",           // Caraka 22 PoC side key 1
+        // MediaTek / Caraka / Generic POC
+        "com.android.ptt.key.up",
+        "com.android.poc.key.up",
         "com.android.ptt.up",
         "android.intent.action.PTT.up",
-        "com.zkrt.ptt.up",
-        "com.kylinservice.ptt.action.pttup",
-        "com.chongdong.ptt.action.pttup",
+        "android.intent.action.PTT_BUTTON_UP",
+        "android.intent.action.PTT_UP",
+
+        // Inrico & Talkpod
+        "com.inrico.ptt.up",
+        "com.inrico.action.ptt.up",
         "action.ptt.up",
         "com.poc.ptt.up",
-        "com.inrico.ptt.up",
+
+        // Boxchip / SenHaiX / Anysecu / Chongdong / Kylin / ZKRT / Zed3
+        "com.chongdong.ptt.action.pttup",
+        "com.kylinservice.ptt.action.pttup",
+        "com.zkrt.ptt.up",
+        "com.boxchip.ptt.up",
         "com.zed3.action.PTT_UP",
-        "com.motorola.audioptt.ACTION_PTT_KEY_UP"
+
+        // Runbo
+        "com.runbo.poc.ptt.up",
+        "com.runbo.action.PTT_UP",
+
+        // Hytera PoC
+        "com.hytera.action.PTT_UP",
+
+        // Caltta / ZTE
+        "caltta.action.ptt.up",
+        "com.caltta.action.PTT_UP",
+
+        // Sonim
+        "com.sonim.intent.action.PTT_KEY_UP",
+        "com.sonim.action.PTT_UP",
+
+        // Kyocera
+        "com.kyocera.action.PTT_UP",
+
+        // Telo Systems
+        "com.telo.action.PTT_UP",
+
+        // Zello OEM Mode
+        "com.zello.intent.action.PTT_UP",
+        "com.zello.action.PTT_BUTTON_RELEASED",
+
+        // Motorola WAVE / Kodiak / ESChat
+        "com.motorola.audioptt.ACTION_PTT_KEY_UP",
+        "com.kodiak.intent.action.PTT_BUTTON_UP",
+        "com.eschat.action.PTT_UP"
     )
 
     /**
@@ -88,12 +168,21 @@ object PttKeyMap {
         val action = intent.action ?: return Triple(false, false, 0)
         var isDown = false
         var isUp = false
-        var keyCode = 228
 
-        if (action.contains("poc", ignoreCase = true)) {
-            keyCode = CARAKA_POC_KEY
-        } else if (action.contains("ptt", ignoreCase = true)) {
-            keyCode = CARAKA_PTT_KEY
+        val extraCode = intent.getIntExtra("keycode", 0).takeIf { it != 0 }
+            ?: intent.getIntExtra("key_code", 0).takeIf { it != 0 }
+            ?: intent.getIntExtra("extra_key_code", 0).takeIf { it != 0 }
+            ?: intent.getIntExtra("code", 0).takeIf { it != 0 }
+
+        val keyCode = when {
+            extraCode != null -> extraCode
+            action.contains("poc", ignoreCase = true) -> CARAKA_POC_KEY
+            action.contains("sonim", ignoreCase = true) -> 261
+            action.contains("kyocera", ignoreCase = true) -> 149
+            action.contains("xcover", ignoreCase = true) -> 1011
+            action.contains("inrico", ignoreCase = true) -> 131
+            action.contains("ptt", ignoreCase = true) -> CARAKA_PTT_KEY
+            else -> 228
         }
 
         if (PTT_DOWN_ACTIONS.contains(action)) {
@@ -103,12 +192,17 @@ object PttKeyMap {
         } else {
             val stateBool = intent.getBooleanExtra("state", false) ||
                 intent.getBooleanExtra("down", false) ||
-                intent.getBooleanExtra("pressed", false)
-            val stateInt = intent.getIntExtra("state", -1)
-            val stateStr = intent.getStringExtra("state") ?: intent.getStringExtra("action") ?: ""
-            if (stateBool || stateInt == 1 || stateStr.equals("down", ignoreCase = true) || stateStr.equals("true", ignoreCase = true)) {
+                intent.getBooleanExtra("pressed", false) ||
+                intent.getBooleanExtra("is_down", false) ||
+                intent.getBooleanExtra("keydown", false)
+            val stateInt = intent.getIntExtra("state", -1).takeIf { it != -1 }
+                ?: intent.getIntExtra("action", -1).takeIf { it != -1 }
+                ?: intent.getIntExtra("status", -1)
+            val stateStr = (intent.getStringExtra("state") ?: intent.getStringExtra("action") ?: intent.getStringExtra("event") ?: "").lowercase()
+
+            if (stateBool || stateInt == 1 || stateInt == KeyEvent.ACTION_DOWN || stateStr in listOf("down", "press", "pressed", "true", "1")) {
                 isDown = true
-            } else if (!stateBool || stateInt == 0 || stateStr.equals("up", ignoreCase = true) || stateStr.equals("false", ignoreCase = true)) {
+            } else if (stateInt == 0 || stateInt == KeyEvent.ACTION_UP || stateStr in listOf("up", "release", "released", "false", "0")) {
                 isUp = true
             }
         }
@@ -148,7 +242,7 @@ object PttKeyMap {
             // Kyocera DuraForce programmable side key
             149,                               // KEYCODE_CALCULATOR (Kyocera PTT)
 
-            // Sonim Rugged Radios (XP5 / XP7 / XP8)
+            // Sonim Rugged Radios (XP5 / XP7 / XP8 / XP10)
             261,                               // KEYCODE_TV_DATA_SERVICE (Sonim dedicated PTT)
             268,                               // KEYCODE_TV_RADIO_SERVICE (Sonim yellow key)
             269,                               // KEYCODE_TV_TELETEXT
@@ -181,21 +275,22 @@ object PttKeyMap {
         return when (keyCode) {
             0 -> "ALL / ANY KEY (Semua Tombol)"
             228 -> "Dedicated PTT (228)"
-            290 -> "Caraka PTT 1 / PoC (290)"
-            291 -> "Caraka PTT 2 / DMR (291)"
-            300 -> "Caraka Side Key 3 (300)"
-            289 -> "SOS / Orange Key (289)"
+            290 -> "Caraka / PoC Key 1 (290)"
+            291 -> "Caraka / DMR Key 2 (291)"
+            300 -> "PoC Side Key 3 (300)"
+            289 -> "SOS / Emergency Key (289)"
             292 -> "Squelch / Monitor Key (292)"
-            261 -> "Sonim / Rugged PTT (261)"
-            268, 269 -> "Sonim Function Key ($keyCode)"
+            261 -> "Sonim PTT Key (261)"
+            268, 269 -> "Sonim Extra Key ($keyCode)"
             264 -> "Side Smart Key (264)"
             25 -> "Volume Down (-)"
             24 -> "Volume Up (+)"
-            79 -> "Headset / Mic Button (79)"
+            79 -> "Headset Hook / Inline Mic (79)"
             85 -> "Media Play/Pause (85)"
-            130 -> "Bluetooth PTT (130 - Media Record)"
-            149 -> "Kyocera Side PTT (149)"
-            1011, 1079 -> "Samsung XCover Key ($keyCode)"
+            130 -> "Bluetooth PTT / Media Record (130)"
+            149 -> "Kyocera DuraForce PTT (149)"
+            1011 -> "Samsung XCover Key (1011)"
+            1079 -> "Samsung Top Key (1079)"
             in 131..142 -> "Function Key F${keyCode - 130} ($keyCode)"
             in 188..203 -> "Hardware Button ${keyCode - 187} ($keyCode)"
             else -> {

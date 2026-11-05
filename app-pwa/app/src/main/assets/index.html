@@ -1,0 +1,1442 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>NinjaRadio WebKit PWA (PoC & Multi-Device Edition)</title>
+  <style>
+    :root {
+      --bg-dark: #05070c;
+      --bg-card: #0b121e;
+      --bg-lcd: #08120e;
+      --cyan: #00f0ff;
+      --emerald: #34d399;
+      --amber: #fbbf24;
+      --rose: #f43f5e;
+      --purple: #a855f7;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    input, select, textarea {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg-dark);
+      color: var(--text-main);
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+    }
+
+    .app-shell {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      background: var(--bg-dark);
+      position: relative;
+    }
+
+    /* POC CHASSIS ROTARY BAR */
+    .poc-chassis-bar {
+      background: #111827;
+      border-bottom: 1px solid #1e293b;
+      padding: 4px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      gap: 4px;
+    }
+
+    .rotary-box {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: #060a12;
+      padding: 2px 6px;
+      border-radius: 7px;
+      border: 1px solid #334155;
+    }
+
+    /* TOP HEADER BAR */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 8px;
+      background: #060a12;
+      border-bottom: 1px solid rgba(6, 182, 212, 0.3);
+      flex-shrink: 0;
+      gap: 4px;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #34d399;
+      box-shadow: 0 0 8px #34d399;
+    }
+
+    .status-dot.offline {
+      background: #fbbf24;
+      box-shadow: 0 0 8px #fbbf24;
+    }
+
+    .pill-group {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      overflow-x: auto;
+    }
+
+    .pill-group::-webkit-scrollbar {
+      display: none;
+    }
+
+    .top-pill {
+      padding: 3px 6px;
+      border-radius: 6px;
+      font-size: 9px;
+      font-family: monospace;
+      font-weight: 900;
+      background: #0b121e;
+      border: 1px solid rgba(6, 182, 212, 0.42);
+      color: #67e8f9;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .top-pill.amber {
+      background: rgba(251, 191, 36, 0.2);
+      border-color: #fbbf24;
+      color: #fde047;
+    }
+
+    .top-pill.emerald {
+      background: #10b981;
+      border-color: #6ee7b7;
+      color: #020617;
+    }
+
+    /* PROFILE BAR */
+    .profile-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      background: #070c16;
+      border-bottom: 1px solid rgba(6, 182, 212, 0.18);
+      flex-shrink: 0;
+      gap: 6px;
+    }
+
+    .profile-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: #0b121e;
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      padding: 3px 7px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .cat-tag {
+      background: #10b981;
+      color: #020617;
+      font-size: 8px;
+      font-weight: 900;
+      font-family: monospace;
+      padding: 1.5px 4px;
+      border-radius: 4px;
+    }
+
+    .call-type-switch {
+      display: flex;
+      background: #0b121e;
+      padding: 2px;
+      border-radius: 7px;
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      gap: 2px;
+    }
+
+    .ct-btn {
+      padding: 2.5px 6px;
+      border-radius: 5px;
+      font-size: 9px;
+      font-family: monospace;
+      font-weight: 800;
+      border: none;
+      background: transparent;
+      color: #94a3b8;
+      cursor: pointer;
+    }
+
+    .ct-btn.active-grp {
+      background: #083344;
+      color: #67e8f9;
+      border: 1px solid #0e7490;
+    }
+
+    .ct-btn.active-prv {
+      background: #3b0764;
+      color: #d8b4fe;
+      border: 1px solid #7e22ce;
+    }
+
+    /* MAIN ADAPTIVE CONTENT STAGE (ZERO DEADSPACE) */
+    .stage-portrait {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 6px 8px;
+      gap: 6px;
+      overflow: hidden;
+    }
+
+    .stage-landscape {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1.04fr 1fr;
+      gap: 8px;
+      padding: 7px 10px;
+      overflow: hidden;
+    }
+
+    .stage-web {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1.05fr 1.05fr 0.95fr;
+      gap: 10px;
+      padding: 8px 12px;
+      overflow: hidden;
+    }
+
+    .col-stretch {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 6px;
+      min-height: 0;
+      height: 100%;
+    }
+
+    /* CYBERDECK PHOSPHOR LCD SCREEN */
+    .phosphor-lcd {
+      background: var(--bg-lcd);
+      border: 2px solid rgba(16, 185, 129, 0.65);
+      border-radius: 14px;
+      padding: 7px 10px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.85), 0 0 12px rgba(16, 185, 129, 0.12);
+      flex: 1;
+      min-height: 0;
+      cursor: pointer;
+    }
+
+    .phosphor-lcd::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px,
+        transparent 2px,
+        rgba(0, 0, 0, 0.25) 3px,
+        rgba(0, 0, 0, 0.25) 4px
+      );
+      pointer-events: none;
+    }
+
+    .lcd-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(16, 185, 129, 0.3);
+      padding-bottom: 4px;
+      font-size: 9.5px;
+      font-family: monospace;
+      font-weight: 800;
+      color: #34d399;
+      z-index: 1;
+    }
+
+    .lcd-body {
+      text-align: center;
+      padding: 2px;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+    }
+
+    .lcd-status-pill {
+      display: inline-block;
+      padding: 1.5px 7px;
+      border-radius: 4px;
+      font-size: 8.5px;
+      font-family: monospace;
+      font-weight: 900;
+      letter-spacing: 0.6px;
+      margin-bottom: 2px;
+    }
+
+    .lcd-main-readout {
+      font-size: 24px;
+      font-weight: 900;
+      font-family: monospace;
+      letter-spacing: 1px;
+      line-height: 1.05;
+      text-shadow: 0 0 12px rgba(52, 211, 153, 0.4);
+    }
+
+    .lcd-sub-readout {
+      font-size: 10px;
+      font-weight: 700;
+      font-family: monospace;
+      margin-top: 2px;
+      color: #10b981;
+    }
+
+    .lcd-footer {
+      border-top: 1px solid rgba(16, 185, 129, 0.3);
+      padding-top: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 9.5px;
+      font-family: monospace;
+      color: #34d399;
+      z-index: 1;
+    }
+
+    .scope-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 12px;
+    }
+
+    .scope-bar {
+      width: 3.5px;
+      border-radius: 1.5px;
+      background: #34d399;
+      transition: height 0.12s ease;
+    }
+
+    /* CHANNEL & QUICK SETUP ROWS */
+    .ch-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+
+    .ch-btn {
+      padding: 6px 4px;
+      border-radius: 9px;
+      background: #0b121e;
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      color: #e2e8f0;
+      font-size: 10px;
+      font-family: monospace;
+      font-weight: 800;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+
+    .ch-btn.sms {
+      background: linear-gradient(90deg, #9333ea, #4f46e5);
+      border-color: #a855f7;
+      color: #fff;
+    }
+
+    .quick-setup-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 5px;
+      flex-shrink: 0;
+    }
+
+    .setup-chip {
+      padding: 4.5px 5px;
+      border-radius: 7px;
+      background: #0b121e;
+      border: 1px solid rgba(6, 182, 212, 0.3);
+      font-size: 9.5px;
+      font-family: monospace;
+      font-weight: 800;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+
+    /* TACTILE PTT PAD */
+    .ptt-pad {
+      width: 100%;
+      flex: 1;
+      min-height: 60px;
+      border-radius: 16px;
+      background: linear-gradient(180deg, #111827 0%, #0b121e 100%);
+      border: 2px solid rgba(6, 182, 212, 0.55);
+      color: var(--cyan);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      cursor: pointer;
+      box-shadow: 0 0 20px rgba(6, 182, 212, 0.15);
+      touch-action: none;
+    }
+
+    .ptt-pad.tx-active {
+      background: linear-gradient(180deg, #f43f5e 0%, #be123c 100%);
+      border: 3px solid #fda4af;
+      color: #fff;
+      box-shadow: 0 0 30px rgba(244, 63, 94, 0.65);
+    }
+
+    .ptt-pad.rx-active {
+      background: linear-gradient(180deg, #064e3b 0%, #08120e 100%);
+      border: 2px solid #34d399;
+      color: #34d399;
+    }
+
+    /* QUICK TALKGROUP MATRIX */
+    .tg-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .tg-chip {
+      padding: 5px 3px;
+      border-radius: 8px;
+      background: #0b121e;
+      border: 1px solid #1e293b;
+      color: #cbd5e1;
+      font-family: monospace;
+      text-align: center;
+      cursor: pointer;
+    }
+
+    .tg-chip.selected {
+      background: rgba(0, 240, 255, 0.16);
+      border-color: var(--cyan);
+      color: #fff;
+    }
+
+    .net-guard-bar {
+      background: #0b121e;
+      border: 1px solid rgba(6, 182, 212, 0.3);
+      border-radius: 9px;
+      padding: 4px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 9px;
+      font-family: monospace;
+      color: #94a3b8;
+      flex-shrink: 0;
+    }
+
+    .glass-card {
+      background: rgba(11, 18, 30, 0.92);
+      border: 1px solid rgba(6, 182, 212, 0.32);
+      border-radius: 11px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 0;
+    }
+
+    .qso-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 7px;
+      border-radius: 7px;
+      background: #060a12;
+      border: 1px solid #1e293b;
+      font-size: 9.5px;
+      font-family: monospace;
+    }
+
+    /* BOTTOM NAVIGATION BAR */
+    .bottom-nav {
+      background: #060a12;
+      border-top: 1px solid rgba(6, 182, 212, 0.3);
+      padding: 3px 5px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 3px;
+      flex-shrink: 0;
+    }
+
+    .bnav-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 3.5px 2px;
+      color: #64748b;
+      font-size: 8.5px;
+      font-family: monospace;
+      font-weight: 800;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      cursor: pointer;
+    }
+
+    .bnav-btn.active {
+      background: rgba(0, 240, 255, 0.14);
+      border-color: rgba(0, 240, 255, 0.45);
+      color: var(--cyan);
+    }
+
+    /* MODAL OVERLAY */
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(2, 6, 14, 0.9);
+      backdrop-filter: blur(5px);
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px;
+    }
+
+    .modal-box {
+      width: 100%;
+      max-width: 320px;
+      background: #0b121e;
+      border: 2px solid var(--cyan);
+      border-radius: 16px;
+      padding: 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 92vh;
+      overflow-y: auto;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: #05070c;
+      border: 1px solid #0e7490;
+      color: #00f0ff;
+      font-family: monospace;
+      font-size: 11px;
+      font-weight: 700;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell" id="app-shell"></div>
+
+  <script>
+    // =========================================================================
+    // STATE & SERVER CONFIGURATION
+    // =========================================================================
+    let serverOrigin = localStorage.getItem("ninja_server_origin") || "https://43.173.13.117.sslip.io";
+    let layoutOverride = localStorage.getItem("ninja_layout_override") || "poc24"; // Default PoC 2.4" Edition!
+    let currentTab = "radio"; // 'noc' | 'radio' | 'matrix' | 'logbook' | 'config'
+    let pttMode = localStorage.getItem("ninjaradio_ptt_mode") || "hold";
+    let callType = "group";
+    let privateId = "1022023";
+    let timeSlot = Number(localStorage.getItem("ninjaradio_locked_ts") || 2);
+    let txFreq = localStorage.getItem("ninjaradio_tx_freq") || "438.5000";
+    let voxOn = false;
+    let cableOn = false;
+    // Show Server & Operator Quick Setup on very first launch unless already confirmed
+    let activeModal = localStorage.getItem("ninja_setup_done") === "1" ? null : "server_setup";
+    let lastHwKey = "KEY 291 / VOL";
+
+    let operatorProfile = {
+      callsign: localStorage.getItem("ninja_callsign") || "BD62BOT",
+      name: localStorage.getItem("ninja_opname") || "OPERATOR",
+      dmrId: Number(localStorage.getItem("ninja_dmrid") || 1022057),
+      category: "AMATIR",
+      networkTag: "ORARI / BrandMeister"
+    };
+
+    const talkgroups = [
+      { id: 1025, name: "Nusantara Link 1", mode: "DMR", slot: 2, zone: "LINK 1" },
+      { id: 510,  name: "Indo National DMR", mode: "DMR", slot: 1, zone: "ORARI" },
+      { id: 5101, name: "Jabar Regional", mode: "YSF", slot: 2, zone: "REGIONAL" },
+      { id: 5109, name: "RAPI Nusantara", mode: "KRAP", slot: 1, zone: "RAPI" },
+      { id: 5108, name: "11M CB Gateway", mode: "CB", slot: 1, zone: "CITIZEN" },
+      { id: 9990, name: "Parrot Echo Test", mode: "ECHO", slot: 2, zone: "TEST" }
+    ];
+    let selectedTgIdx = 0;
+
+    let wsConnected = false;
+    let isTransmitting = false;
+    let activeRxStation = null;
+    let rxPacketCount = 0;
+    let txPacketCount = 0;
+
+    let qsoList = [
+      { callsign: "BD62ANG", name: "ANANG", dmr_id: 1022023, talkgroup: 1025, slot: 2, duration: "12.4s", ber: "0.0%" },
+      { callsign: "BD62AA",  name: "ALI",   dmr_id: 1022001, talkgroup: 1025, slot: 2, duration: "08.1s", ber: "0.0%" },
+      { callsign: "BD62BOT", name: "BOT",   dmr_id: 1022057, talkgroup: 9990, slot: 2, duration: "05.0s", ber: "0.0%" }
+    ];
+
+    // =========================================================================
+    // WEBAUDIO SYNTHETIC BEEPS & LIVE 8kHz PCM STREAMING
+    // =========================================================================
+    let rxAudioCtx = null;
+    let rxNextTime = 0;
+    let txAudioCtx = null;
+    let txMicStream = null;
+    let txProcessor = null;
+    let txHeartbeatTimer = null;
+    let txSampleQueue = [];
+    let ws = null;
+
+    function ensureRxAudio() {
+      if (!rxAudioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (Ctx) rxAudioCtx = new Ctx({ sampleRate: 8000 });
+      }
+      if (rxAudioCtx && rxAudioCtx.state === "suspended") {
+        rxAudioCtx.resume().catch(() => {});
+      }
+    }
+
+    function playTone(freq, durationMs) {
+      try {
+        ensureRxAudio();
+        if (!rxAudioCtx) return;
+        const osc = rxAudioCtx.createOscillator();
+        const gain = rxAudioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.value = 0.12;
+        osc.connect(gain);
+        gain.connect(rxAudioCtx.destination);
+        osc.start();
+        osc.stop(rxAudioCtx.currentTime + durationMs / 1000);
+      } catch (e) {}
+    }
+
+    function playPcmBase64(b64, tg) {
+      if (isTransmitting || !b64) return;
+      const curTg = talkgroups[selectedTgIdx].id;
+      if (tg && tg !== curTg && tg !== 9990) return;
+      try {
+        ensureRxAudio();
+        if (!rxAudioCtx) return;
+        const bin = atob(b64);
+        const len = bin.length;
+        const samples = len >> 1;
+        if (samples === 0) return;
+        const view = new DataView(new ArrayBuffer(len));
+        for (let i = 0; i < len; i++) view.setUint8(i, bin.charCodeAt(i));
+        const float32 = new Float32Array(samples);
+        for (let i = 0; i < samples; i++) {
+          float32[i] = view.getInt16(i * 2, true) / 32768.0;
+        }
+        const now = rxAudioCtx.currentTime;
+        if (!rxNextTime || rxNextTime < now) rxNextTime = now + 0.15;
+        else if (rxNextTime > now + 0.45) rxNextTime = now + 0.15;
+
+        const buf = rxAudioCtx.createBuffer(1, float32.length, 8000);
+        buf.copyToChannel(float32, 0);
+        const src = rxAudioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(rxAudioCtx.destination);
+        src.start(rxNextTime);
+        rxNextTime += buf.duration;
+      } catch (e) {}
+    }
+
+    function getWsUrl() {
+      const clean = serverOrigin.trim().replace(/\/+$/, "");
+      const wsBase = clean.startsWith("https://")
+        ? "wss://" + clean.slice(8)
+        : clean.startsWith("http://")
+        ? "ws://" + clean.slice(7)
+        : "wss://" + clean;
+      return wsBase + "/ws/live?app=NinjaRadio%20PoC%20PWA";
+    }
+
+    function connectWebSocket() {
+      try {
+        if (ws) {
+          try { ws.onclose = null; ws.close(); } catch (e) {}
+        }
+        ws = new WebSocket(getWsUrl());
+        ws.onopen = () => {
+          wsConnected = true;
+          render();
+        };
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === "INITIAL_STATE") {
+              if (msg.data && Array.isArray(msg.data.last_heard) && msg.data.last_heard.length > 0) {
+                qsoList = msg.data.last_heard.slice(0, 10);
+              }
+              activeRxStation = (msg.data && msg.data.current_tx) || null;
+              render();
+            } else if (msg.type === "TX_STATE_CHANGE") {
+              activeRxStation = msg.data || null;
+              render();
+            } else if (msg.type === "LAST_HEARD_UPDATE" && msg.data) {
+              qsoList = [msg.data, ...qsoList.slice(0, 9)];
+              render();
+            } else if (msg.type === "AUDIO_RX") {
+              const d = msg.data || msg;
+              rxPacketCount++;
+              playPcmBase64(d.pcm, d.tg);
+            }
+          } catch (e) {}
+        };
+        ws.onclose = () => {
+          wsConnected = false;
+          render();
+          setTimeout(connectWebSocket, 3000);
+        };
+        ws.onerror = () => {
+          try { ws.close(); } catch (e) {}
+        };
+      } catch (e) {}
+    }
+
+    function sendWsJson(obj) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify(obj)); } catch (e) {}
+      }
+    }
+
+    async function startLiveMicTx(targetTg) {
+      try {
+        txSampleQueue = [];
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        });
+        txMicStream = stream;
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new Ctx();
+        txAudioCtx = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const proc = ctx.createScriptProcessor(1024, 1, 1);
+        txProcessor = proc;
+
+        proc.onaudioprocess = (e) => {
+          if (!isTransmitting) return;
+          const input = e.inputBuffer.getChannelData(0);
+          const ratio = ctx.sampleRate / 8000;
+          const outLen = Math.floor(input.length / ratio);
+          for (let i = 0; i < outLen; i++) {
+            const pos = i * ratio;
+            const i0 = Math.floor(pos);
+            const i1 = Math.min(i0 + 1, input.length - 1);
+            const frac = pos - i0;
+            const s = input[i0] * (1 - frac) + input[i1] * frac;
+            txSampleQueue.push(Math.max(-1, Math.min(1, s)));
+          }
+          while (txSampleQueue.length >= 160) {
+            const frame = txSampleQueue.splice(0, 160);
+            const pcm16 = new Int16Array(160);
+            for (let i = 0; i < 160; i++) {
+              const v = Math.max(-1, Math.min(1, frame[i] * 1.25));
+              pcm16[i] = v < 0 ? Math.round(v * 0x8000) : Math.round(v * 0x7FFF);
+            }
+            const u8 = new Uint8Array(pcm16.buffer);
+            let bin = "";
+            for (let i = 0; i < u8.byteLength; i++) bin += String.fromCharCode(u8[i]);
+            txPacketCount++;
+            sendWsJson({
+              type: "AUDIO_TX",
+              pcm: btoa(bin),
+              is_tx: true,
+              tg: targetTg,
+              slot: timeSlot,
+              callsign: operatorProfile.callsign,
+              dmr_id: operatorProfile.dmrId
+            });
+          }
+        };
+
+        const zeroGain = ctx.createGain();
+        zeroGain.gain.value = 0;
+        source.connect(proc);
+        proc.connect(zeroGain);
+        zeroGain.connect(ctx.destination);
+      } catch (e) {}
+    }
+
+    function stopLiveMicTx() {
+      txSampleQueue = [];
+      if (txProcessor) { try { txProcessor.disconnect(); } catch (e) {} txProcessor = null; }
+      if (txAudioCtx) { try { txAudioCtx.close(); } catch (e) {} txAudioCtx = null; }
+      if (txMicStream) {
+        try { txMicStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+        txMicStream = null;
+      }
+    }
+
+    function startTx() {
+      if (isTransmitting) return;
+      isTransmitting = true;
+      playTone(1200, 65);
+      if (window.NinjaAndroidBridge && window.NinjaAndroidBridge.vibrate) {
+        window.NinjaAndroidBridge.vibrate(45);
+      }
+      const targetTg = callType === "private" ? Number(privateId) : talkgroups[selectedTgIdx].id;
+      startLiveMicTx(targetTg);
+
+      if (txHeartbeatTimer) clearInterval(txHeartbeatTimer);
+      txHeartbeatTimer = setInterval(() => {
+        if (!isTransmitting) return;
+        sendWsJson({
+          type: "PTT_HEARTBEAT",
+          tg: targetTg,
+          slot: timeSlot,
+          callsign: operatorProfile.callsign,
+          dmr_id: operatorProfile.dmrId
+        });
+      }, 250);
+
+      fetch(serverOrigin + "/api/ptt/transmit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          callsign: operatorProfile.callsign,
+          dmr_id: operatorProfile.dmrId,
+          tg: targetTg,
+          slot: timeSlot,
+          call_type: callType,
+          category: "Amatir",
+          is_transmitting: true
+        })
+      }).catch(() => {});
+
+      render();
+    }
+
+    function stopTx() {
+      if (!isTransmitting) return;
+      isTransmitting = false;
+      playTone(880, 55);
+      if (txHeartbeatTimer) { clearInterval(txHeartbeatTimer); txHeartbeatTimer = null; }
+      stopLiveMicTx();
+
+      const targetTg = callType === "private" ? Number(privateId) : talkgroups[selectedTgIdx].id;
+      sendWsJson({
+        type: "AUDIO_TX",
+        pcm: null,
+        is_tx: false,
+        tg: targetTg,
+        slot: timeSlot,
+        callsign: operatorProfile.callsign,
+        dmr_id: operatorProfile.dmrId
+      });
+
+      fetch(serverOrigin + "/api/ptt/transmit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          callsign: operatorProfile.callsign,
+          dmr_id: operatorProfile.dmrId,
+          tg: targetTg,
+          slot: timeSlot,
+          call_type: callType,
+          category: "Amatir",
+          is_transmitting: false
+        })
+      }).catch(() => {});
+
+      render();
+    }
+
+    function toggleTx() {
+      if (isTransmitting) stopTx();
+      else startTx();
+    }
+
+    window.addEventListener("ninja-ptt-down", (e) => {
+      if (e && e.detail && e.detail.key) lastHwKey = e.detail.key;
+      if (pttMode === "toggle") toggleTx();
+      else startTx();
+    });
+
+    window.addEventListener("ninja-ptt-up", () => {
+      if (pttMode === "hold") stopTx();
+    });
+
+    function getEffectiveMode() {
+      if (layoutOverride !== "auto") return layoutOverride;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      if (w <= 290 && h <= 370) return "poc18";
+      if (w <= 360 && h <= 550) return "poc24";
+      if (w >= 1100 && w > h) return "web";
+      if (w > h && w >= 560) return "tablet";
+      return "poc24";
+    }
+
+    function cycleLayoutMode() {
+      const order = ["poc24", "poc18", "hape", "tablet", "web", "auto"];
+      const next = order[(order.indexOf(layoutOverride) + 1) % order.length];
+      layoutOverride = next;
+      localStorage.setItem("ninja_layout_override", next);
+      render();
+    }
+
+    function selectTg(idx) {
+      selectedTgIdx = (idx + talkgroups.length) % talkgroups.length;
+      timeSlot = talkgroups[selectedTgIdx].slot || 2;
+      playTone(1050, 40);
+      render();
+    }
+
+    function saveServerAndProfile() {
+      const srvEl = document.getElementById("inp-server");
+      const csEl = document.getElementById("inp-callsign");
+      const idEl = document.getElementById("inp-dmrid");
+      const modeEl = document.getElementById("inp-mode");
+      if (srvEl && srvEl.value.trim()) {
+        serverOrigin = srvEl.value.trim().replace(/\/+$/, "");
+        localStorage.setItem("ninja_server_origin", serverOrigin);
+      }
+      if (csEl && csEl.value.trim()) {
+        operatorProfile.callsign = csEl.value.trim().toUpperCase();
+        localStorage.setItem("ninja_callsign", operatorProfile.callsign);
+      }
+      if (idEl && idEl.value.trim()) {
+        operatorProfile.dmrId = Number(idEl.value.trim()) || 1022057;
+        localStorage.setItem("ninja_dmrid", String(operatorProfile.dmrId));
+      }
+      if (modeEl && modeEl.value) {
+        layoutOverride = modeEl.value;
+        localStorage.setItem("ninja_layout_override", layoutOverride);
+      }
+      localStorage.setItem("ninja_setup_done", "1");
+      activeModal = null;
+      connectWebSocket();
+      render();
+    }
+
+    function renderLcd(compact) {
+      const tg = talkgroups[selectedTgIdx];
+      let body = "";
+      if (isTransmitting) {
+        body = `
+          <div class="lcd-status-pill" style="background:#e11d48;color:#fff;">🔴 TX ON AIR</div>
+          <div class="lcd-main-readout" style="color:#fb7185;font-size:${compact?'21px':'27px'};">${operatorProfile.callsign}</div>
+          <div class="lcd-sub-readout" style="color:#fda4af;">${callType==='private'?'PRIVATE ID ' + privateId : 'TG ' + tg.id + ' • ' + tg.name}</div>
+        `;
+      } else if (activeRxStation) {
+        body = `
+          <div class="lcd-status-pill" style="background:#10b981;color:#020617;">🟢 RX RECEIVING</div>
+          <div class="lcd-main-readout" style="color:#6ee7b7;font-size:${compact?'21px':'27px'};">${activeRxStation.callsign}</div>
+          <div class="lcd-sub-readout" style="color:#34d399;">${activeRxStation.name || 'STATION'} • TG ${activeRxStation.talkgroup || tg.id}</div>
+        `;
+      } else {
+        body = `
+          <div style="font-size:${compact?'8px':'9.5px'};color:#059669;font-weight:900;font-family:monospace;letter-spacing:0.6px;margin-bottom:2px;">
+            CH ${selectedTgIdx + 1} [${tg.zone}] <span style="background:rgba(16,185,129,0.2);color:#6ee7b7;padding:1px 4px;border-radius:4px;">DIAL ✎</span>
+          </div>
+          <div class="lcd-main-readout" style="color:#34d399;font-size:${compact?'22px':'28px'};">
+            ${callType==='private' ? 'ID ' + privateId : 'TG ' + tg.id}
+          </div>
+          <div class="lcd-sub-readout">${callType==='private' ? 'Direct Private Call' : tg.name}</div>
+        `;
+      }
+
+      const active = isTransmitting || !!activeRxStation;
+      const bars = active ? [7, 12, 10, 12, 8, 11, 12, 7, 10, 9] : [3, 4, 3, 4, 3, 3, 4, 3, 4, 3];
+      const barCol = isTransmitting ? "#f43f5e" : "#34d399";
+
+      return `
+        <div class="phosphor-lcd" onclick="activeModal='dial';render();">
+          <div class="lcd-header">
+            <span>📻 ${operatorProfile.callsign}</span>
+            <div style="display:flex;align-items:center;gap:4px;">
+              <span onclick="event.stopPropagation();activeModal='freq';render();" style="background:#083344;border:1px solid #0e7490;color:#67e8f9;padding:1px 4px;border-radius:4px;">${txFreq.slice(0,7)}</span>
+              <span onclick="event.stopPropagation();timeSlot=timeSlot===1?2:1;render();" style="background:rgba(6,182,212,0.18);border:1px solid #06b6d4;color:#67e8f9;padding:1px 4px;border-radius:4px;">TS${timeSlot}⇄</span>
+              <span style="background:#022c22;padding:1px 4px;border-radius:4px;">${tg.mode}</span>
+            </div>
+          </div>
+          <div class="lcd-body">${body}</div>
+          <div class="lcd-footer">
+            <span>${active ? 'S9+20dB' : 'S0 (-121dBm)'}</span>
+            <div class="scope-bars">
+              ${bars.map(h => `<div class="scope-bar" style="height:${h}px;background:${barCol};"></div>`).join("")}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPttBlock(compact) {
+      const tg = talkgroups[selectedTgIdx];
+      const cls = isTransmitting ? "tx-active" : (activeRxStation ? "rx-active" : "");
+      const title = isTransmitting
+        ? (pttMode === "toggle" ? "🔴 ON AIR (TAP STOP)" : "🔴 TRANSMITTING...")
+        : (activeRxStation ? "🟢 RX: " + activeRxStation.callsign : (pttMode === "toggle" ? "🎙️ TAP TO TALK" : "🎙️ HOLD PTT [KEY 291 / VOL]"));
+
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;font-size:9px;font-family:monospace;color:#94a3b8;flex-shrink:0;">
+          <button onclick="pttMode=pttMode==='hold'?'toggle':'hold';localStorage.setItem('ninjaradio_ptt_mode',pttMode);render();" style="background:${pttMode==='toggle'?'#fbbf24':'#0f172a'};color:${pttMode==='toggle'?'#020617':'#67e8f9'};border:1px solid #334155;padding:2px 6px;border-radius:5px;font-weight:800;">
+            PTT: ${pttMode==='toggle' ? '🔒 TOGGLE' : '🖐️ HOLD'}
+          </button>
+          <span style="color:#cbd5e1;">⚙️ ${lastHwKey}</span>
+        </div>
+        <button class="ptt-pad ${cls}"
+          onpointerdown="if(pttMode==='hold'){startTx();}"
+          onpointerup="if(pttMode==='hold'){stopTx();}"
+          onpointercancel="if(pttMode==='hold'){stopTx();}"
+          onclick="if(pttMode==='toggle'){toggleTx();}">
+          <div style="font-size:${compact?'16px':'22px'};">${isTransmitting ? '📡' : '🎙️'}</div>
+          <div style="font-size:${compact?'12px':'15px'};font-weight:900;">${title}</div>
+          <div style="font-size:8.5px;font-family:monospace;color:${isTransmitting?'#ffe4e6':'#94a3b8'};">
+            ${isTransmitting ? 'TX ' + operatorProfile.callsign + ' -> TG ' + tg.id : 'Server: ' + serverOrigin.replace(/^https?:\/\//, '')}
+          </div>
+        </button>
+      `;
+    }
+
+    function renderQuickTgGrid() {
+      return `
+        <div class="tg-grid">
+          ${talkgroups.map((t, idx) => `
+            <div class="tg-chip ${idx === selectedTgIdx ? 'selected' : ''}" onclick="selectTg(${idx})">
+              <div style="font-size:9.5px;font-weight:900;color:${idx === selectedTgIdx ? '#00f0ff' : '#f1f5f9'};">TG ${t.id}</div>
+              <div style="font-size:7.5px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.name}</div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function renderOtherTabs() {
+      if (currentTab === "noc") {
+        return `
+          <div class="stage-portrait">
+            <div class="glass-card" style="gap:5px;">
+              <div class="mono" style="font-size:10px;font-weight:900;color:#00f0ff;">📡 LIVE NOC & PACKETS</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+                <div style="background:#060a12;padding:6px;border-radius:7px;border:1px solid #1e293b;">
+                  <div class="mono" style="font-size:8px;color:#94a3b8;">RX PACKETS</div>
+                  <div class="mono" style="font-size:13px;font-weight:900;color:#00f0ff;">${rxPacketCount} PKT</div>
+                </div>
+                <div style="background:#060a12;padding:6px;border-radius:7px;border:1px solid #1e293b;">
+                  <div class="mono" style="font-size:8px;color:#94a3b8;">TX PACKETS</div>
+                  <div class="mono" style="font-size:13px;font-weight:900;color:#f43f5e;">${txPacketCount} PKT</div>
+                </div>
+              </div>
+            </div>
+            <div class="glass-card" style="flex:1;justify-content:flex-start;gap:4px;overflow-y:auto;">
+              <div class="mono" style="font-size:10px;font-weight:900;color:#34d399;">🔊 LAST HEARD STATIONS</div>
+              ${qsoList.map(q => `
+                <div class="qso-item">
+                  <span><strong style="color:#00f0ff;">${q.callsign}</strong></span>
+                  <span style="color:#34d399;">TG ${q.talkgroup} • ${q.duration || 'LIVE'}</span>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        `;
+      }
+      if (currentTab === "matrix") {
+        return `
+          <div class="stage-portrait">
+            <div class="glass-card" style="flex:1;justify-content:flex-start;gap:5px;">
+              <div class="mono" style="font-size:10px;font-weight:900;color:#00f0ff;">🌐 TALKGROUP MATRIX</div>
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:5px;flex:1;">
+                ${talkgroups.map((t, idx) => `
+                  <div onclick="selectTg(${idx});currentTab='radio';render();" style="background:#060a12;border:1px solid ${idx===selectedTgIdx?'#00f0ff':'#1e293b'};border-radius:9px;padding:6px;display:flex;flex-direction:column;justify-content:space-between;cursor:pointer;">
+                    <div class="mono" style="font-size:12px;font-weight:900;color:#00f0ff;">TG ${t.id}</div>
+                    <div style="font-size:10px;font-weight:700;color:#e2e8f0;">${t.name}</div>
+                    <div class="mono" style="font-size:8px;color:#34d399;">${t.mode} • TS${t.slot}</div>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      if (currentTab === "logbook") {
+        return `
+          <div class="stage-portrait">
+            <div class="glass-card" style="flex:1;justify-content:flex-start;gap:4px;overflow-y:auto;">
+              <div class="mono" style="font-size:10px;font-weight:900;color:#00f0ff;">📖 QSO LOGBOOK</div>
+              ${qsoList.map(q => `
+                <div class="qso-item">
+                  <div><strong style="color:#00f0ff;">${q.callsign}</strong> <span style="color:#94a3b8;">ID:${q.dmr_id || '-'}</span></div>
+                  <div style="color:#34d399;">TG ${q.talkgroup} • BER ${q.ber || '0.0%'}</div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        `;
+      }
+      return `
+        <div class="stage-portrait">
+          <div class="glass-card" style="flex:1;justify-content:flex-start;gap:6px;overflow-y:auto;">
+            <div class="mono" style="font-size:10px;font-weight:900;color:#00f0ff;">⚙️ PENGATURAN SERVER & MODE LAYAR</div>
+            <div>
+              <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:2px;">Alamat Server (URL / IP):</div>
+              <input id="inp-server" class="form-input" value="${serverOrigin}" placeholder="https://43.173.13.117.sslip.io" />
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+              <div>
+                <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:2px;">Callsign:</div>
+                <input id="inp-callsign" class="form-input" value="${operatorProfile.callsign}" />
+              </div>
+              <div>
+                <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:2px;">DMR ID:</div>
+                <input id="inp-dmrid" class="form-input" value="${operatorProfile.dmrId}" />
+              </div>
+            </div>
+            <div>
+              <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:3px;">Mode Layar:</div>
+              <select id="inp-mode" class="form-input">
+                <option value="poc24" ${layoutOverride==='poc24'?'selected':''}>📟 PoC 2.4" Full (Zero Deadspace)</option>
+                <option value="poc18" ${layoutOverride==='poc18'?'selected':''}>📟 PoC 1.8" Rugged T9 Keypad</option>
+                <option value="hape" ${layoutOverride==='hape'?'selected':''}>📱 Hape Portrait</option>
+                <option value="tablet" ${layoutOverride==='tablet'?'selected':''}>💻 Tablet Landscape 2-Kolom</option>
+                <option value="web" ${layoutOverride==='web'?'selected':''}>🌐 Web Desktop 3-Kolom</option>
+                <option value="auto" ${layoutOverride==='auto'?'selected':''}>🔄 Otomatis Deteksi Layar</option>
+              </select>
+            </div>
+            <button onclick="saveServerAndProfile();currentTab='radio';render();" class="mono" style="padding:8px;border-radius:8px;background:#10b981;color:#020617;font-weight:900;border:none;font-size:11px;">
+              ✅ SIMPAN & CONNECT KE SERVER
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderModal() {
+      if (!activeModal) return "";
+      let content = "";
+      if (activeModal === "server_setup") {
+        content = `
+          <div class="mono" style="font-size:11px;font-weight:900;color:#00f0ff;">🌐 KONEKSI SERVER & CALLSIGN POC</div>
+          <div>
+            <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:2px;">Alamat Server NinjaRadio:</div>
+            <input id="inp-server" class="form-input" value="${serverOrigin}" />
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+            <div>
+              <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:2px;">Callsign:</div>
+              <input id="inp-callsign" class="form-input" value="${operatorProfile.callsign}" />
+            </div>
+            <div>
+              <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:2px;">DMR ID:</div>
+              <input id="inp-dmrid" class="form-input" value="${operatorProfile.dmrId}" />
+            </div>
+          </div>
+          <div>
+            <div class="mono" style="font-size:9px;color:#94a3b8;margin-bottom:2px;">Tampilan Layar:</div>
+            <select id="inp-mode" class="form-input">
+              <option value="poc24" ${layoutOverride==='poc24'?'selected':''}>📟 PoC 2.4" Full (Zero Deadspace)</option>
+              <option value="poc18" ${layoutOverride==='poc18'?'selected':''}>📟 PoC 1.8" Rugged T9 Keypad</option>
+              <option value="hape" ${layoutOverride==='hape'?'selected':''}>📱 Hape Portrait</option>
+              <option value="tablet" ${layoutOverride==='tablet'?'selected':''}>💻 Tablet Landscape</option>
+              <option value="web" ${layoutOverride==='web'?'selected':''}>🌐 Web Desktop</option>
+            </select>
+          </div>
+          <button onclick="saveServerAndProfile()" class="mono" style="padding:8px;border-radius:8px;background:#10b981;color:#020617;font-weight:900;border:none;font-size:11px;">
+            🚀 CONNECT & MASUK RADIO
+          </button>
+        `;
+      } else if (activeModal === "dial") {
+        content = `
+          <div class="mono" style="font-size:11px;font-weight:900;color:#00f0ff;">📞 Pilih / Dial TalkGroup</div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:5px;">
+            ${talkgroups.map((t, idx) => `
+              <button onclick="selectTg(${idx});activeModal=null;render();" class="mono" style="padding:6px;border-radius:7px;border:1px solid #06b6d4;background:${idx===selectedTgIdx?'#00f0ff':'#060a12'};color:${idx===selectedTgIdx?'#020617':'#67e8f9'};font-size:10px;font-weight:800;">
+                TG ${t.id} (${t.name.split(' ')[0]})
+              </button>
+            `).join("")}
+          </div>
+        `;
+      } else if (activeModal === "freq") {
+        content = `
+          <div class="mono" style="font-size:11px;font-weight:900;color:#00f0ff;">📡 Frekuensi VFO</div>
+          <div class="mono" style="background:#05070c;padding:9px;border-radius:9px;text-align:center;border:1px solid #0e7490;">
+            <div style="font-size:20px;font-weight:900;color:#00f0ff;">${txFreq} MHz</div>
+            <div style="font-size:9px;color:#34d399;margin-top:3px;">Color Code 1 • Simplex DMR</div>
+          </div>
+        `;
+      } else if (activeModal === "cable") {
+        content = `
+          <div class="mono" style="font-size:11px;font-weight:900;color:#fbbf24;">🔌 Kabel Audio Radio Gateway</div>
+          <button onclick="cableOn=!cableOn;activeModal=null;render();" style="padding:7px;border-radius:8px;background:#fbbf24;color:#020617;font-weight:900;border:none;">
+            ${cableOn ? 'Matikan Kabel Gateway' : 'Aktifkan Kabel Gateway'}
+          </button>
+        `;
+      } else if (activeModal === "vox") {
+        content = `
+          <div class="mono" style="font-size:11px;font-weight:900;color:#34d399;">🎧 Hands-Free VOX</div>
+          <button onclick="voxOn=!voxOn;activeModal=null;render();" style="padding:7px;border-radius:8px;background:#10b981;color:#020617;font-weight:900;border:none;">
+            ${voxOn ? 'Matikan VOX' : 'Aktifkan VOX (-35 dB)'}
+          </button>
+        `;
+      } else if (activeModal === "sms") {
+        content = `
+          <div class="mono" style="font-size:11px;font-weight:900;color:#a855f7;">💬 DMR Quick SMS</div>
+          <div class="mono" style="font-size:9.5px;background:#060a12;padding:7px;border-radius:7px;color:#e9d5ff;">
+            📍 [${operatorProfile.callsign} -> TG ${talkgroups[selectedTgIdx].id}]: Monitor standby 10-28 aman terkendali.
+          </div>
+        `;
+      }
+      return `
+        <div class="modal-backdrop" onclick="activeModal=null;render();">
+          <div class="modal-box" onclick="event.stopPropagation()">
+            ${content}
+            ${activeModal === "server_setup" ? "" : `<button onclick="activeModal=null;render();" style="padding:5px;border-radius:7px;background:#1e293b;color:#fff;border:none;font-weight:800;font-size:10px;">Tutup</button>`}
+          </div>
+        </div>
+      `;
+    }
+
+    function render() {
+      const shell = document.getElementById("app-shell");
+      const mode = getEffectiveMode(); // 'poc18' | 'poc24' | 'hape' | 'tablet' | 'web'
+
+      const pocChassisHtml = (mode === "poc18" || mode === "poc24") ? `
+        <div class="poc-chassis-bar">
+          <div style="display:flex;align-items:center;gap:5px;">
+            <span class="status-dot ${wsConnected ? '' : 'offline'}"></span>
+            <span class="mono" style="font-size:9.5px;font-weight:900;color:#e2e8f0;">POC ${mode==='poc18'?'1.8"':'2.4"'}</span>
+          </div>
+          <div class="rotary-box">
+            <button onclick="selectTg(selectedTgIdx - 1)" style="background:none;border:none;color:#fbbf24;font-size:10px;font-weight:900;">◀</button>
+            <span class="mono" style="font-size:9.5px;font-weight:900;color:#fff;">CH ${selectedTgIdx + 1}</span>
+            <button onclick="selectTg(selectedTgIdx + 1)" style="background:none;border:none;color:#fbbf24;font-size:10px;font-weight:900;">▶</button>
+          </div>
+          <div style="display:flex;gap:3px;">
+            <button onclick="activeModal='server_setup';render();" class="top-pill">🌐 SVR</button>
+            <button onclick="layoutOverride = mode==='poc18'?'poc24':'poc18';render();" class="top-pill">⇄ ${mode==='poc18'?'2.4"':'1.8" T9'}</button>
+          </div>
+        </div>
+      ` : "";
+
+      const topBarHtml = `
+        <div class="top-bar">
+          <div class="brand-row">
+            ${(mode === "poc18" || mode === "poc24") ? "" : `<span class="status-dot ${wsConnected ? '' : 'offline'}"></span>`}
+            <span style="font-weight:900;font-size:11px;letter-spacing:0.4px;">NINJA<span style="color:#00f0ff;">PWA</span></span>
+          </div>
+          <div class="pill-group">
+            <span class="top-pill" onclick="cycleLayoutMode()">📐 ${mode.toUpperCase()}</span>
+            <span class="top-pill" onclick="activeModal='server_setup';render();">🌐 SVR</span>
+            <span class="top-pill" onclick="pttMode=pttMode==='hold'?'toggle':'hold';render();">${pttMode.toUpperCase()}</span>
+            <span class="top-pill ${cableOn?'amber':''}" onclick="activeModal='cable';render();">KBL</span>
+            <span class="top-pill ${voxOn?'emerald':''}" onclick="activeModal='vox';render();">VOX</span>
+          </div>
+        </div>
+      `;
+
+      const profileBarHtml = `
+        <div class="profile-bar">
+          <div class="profile-badge" onclick="activeModal='server_setup';render();">
+            <span class="cat-tag">${operatorProfile.category}</span>
+            <span class="mono" style="font-size:10px;font-weight:900;color:#fff;">${operatorProfile.callsign} <span style="color:#67e8f9;font-size:8.5px;">(${operatorProfile.dmrId})</span></span>
+          </div>
+          <div class="call-type-switch">
+            <button class="ct-btn ${callType==='group'?'active-grp':''}" onclick="callType='group';render();">👥 Group</button>
+            <button class="ct-btn ${callType==='private'?'active-prv':''}" onclick="callType='private';render();">🔒 Private</button>
+          </div>
+        </div>
+      `;
+
+      let mainHtml = "";
+      if (currentTab !== "radio") {
+        mainHtml = renderOtherTabs();
+      } else if (mode === "poc18") {
+        mainHtml = `
+          <div class="stage-portrait">
+            ${renderLcd(true)}
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:3.5px;flex-shrink:0;">
+              ${talkgroups.map((t, idx) => `
+                <button onclick="selectTg(${idx})" class="mono" style="padding:4px 2px;border-radius:6px;border:1px solid ${idx===selectedTgIdx?'#fbbf24':'#334155'};background:${idx===selectedTgIdx?'#fbbf24':'#0b121e'};color:${idx===selectedTgIdx?'#020617':'#e2e8f0'};">
+                  <div style="font-size:9.5px;font-weight:900;">${idx + 1}</div>
+                  <div style="font-size:7.5px;">TG${t.id}</div>
+                </button>
+              `).join("")}
+            </div>
+            ${renderPttBlock(true)}
+          </div>
+        `;
+      } else if (mode === "poc24") {
+        mainHtml = `
+          <div class="stage-portrait">
+            ${renderLcd(true)}
+            <div class="ch-row">
+              <button class="ch-btn" onclick="selectTg(selectedTgIdx - 1)">◀ PREV</button>
+              <button class="ch-btn sms" onclick="activeModal='sms';render();">💬 SMS</button>
+              <button class="ch-btn" onclick="selectTg(selectedTgIdx + 1)">NEXT ▶</button>
+            </div>
+            ${renderPttBlock(true)}
+          </div>
+        `;
+      } else if (mode === "tablet") {
+        mainHtml = `
+          <div class="stage-landscape">
+            <div class="col-stretch">
+              ${renderLcd(false)}
+              <div class="ch-row">
+                <button class="ch-btn" onclick="selectTg(selectedTgIdx - 1)">◀ CH PREV</button>
+                <button class="ch-btn sms" onclick="activeModal='sms';render();">💬 DMR SMS</button>
+                <button class="ch-btn" onclick="selectTg(selectedTgIdx + 1)">CH NEXT ▶</button>
+              </div>
+              <div class="quick-setup-row">
+                <button class="setup-chip" style="color:#67e8f9;" onclick="activeModal='dial';render();">📞 Dial TG</button>
+                <button class="setup-chip" style="color:#fbbf24;" onclick="activeModal='cable';render();">🔌 Kabel</button>
+                <button class="setup-chip" style="color:#34d399;" onclick="activeModal='vox';render();">🎚️ VOX</button>
+              </div>
+            </div>
+            <div class="col-stretch">
+              ${renderPttBlock(false)}
+              ${renderQuickTgGrid()}
+              <div class="net-guard-bar">
+                <span>🛡️ Net Firewall: <strong style="color:#34d399;">${operatorProfile.networkTag}</strong></span>
+                <span style="color:#67e8f9;">RX:${rxPacketCount} TX:${txPacketCount}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (mode === "web") {
+        mainHtml = `
+          <div class="stage-web">
+            <div class="col-stretch">
+              ${renderLcd(false)}
+              <div class="ch-row">
+                <button class="ch-btn" onclick="selectTg(selectedTgIdx - 1)">◀ CH PREV</button>
+                <button class="ch-btn sms" onclick="activeModal='sms';render();">💬 SMS</button>
+                <button class="ch-btn" onclick="selectTg(selectedTgIdx + 1)">CH NEXT ▶</button>
+              </div>
+              <div class="quick-setup-row">
+                <button class="setup-chip" style="color:#67e8f9;" onclick="activeModal='dial';render();">📞 Dial</button>
+                <button class="setup-chip" style="color:#fbbf24;" onclick="activeModal='cable';render();">🔌 Kabel</button>
+                <button class="setup-chip" style="color:#34d399;" onclick="activeModal='vox';render();">🎚️ VOX</button>
+              </div>
+            </div>
+            <div class="col-stretch">
+              ${renderPttBlock(false)}
+              ${renderQuickTgGrid()}
+              <div class="net-guard-bar">
+                <span>🛡️ Firewall: <strong style="color:#34d399;">${operatorProfile.networkTag}</strong></span>
+                <span style="color:#67e8f9;">USRP READY</span>
+              </div>
+            </div>
+            <div class="col-stretch">
+              <div class="glass-card" style="flex:1;justify-content:flex-start;gap:4px;overflow-y:auto;">
+                <div class="mono" style="font-size:9.5px;font-weight:900;color:#00f0ff;">📡 LIVE MONITOR (RX:${rxPacketCount} TX:${txPacketCount})</div>
+                ${qsoList.map(q => `
+                  <div class="qso-item">
+                    <strong style="color:#00f0ff;">${q.callsign}</strong>
+                    <span style="color:#34d399;">TG ${q.talkgroup} • ${q.duration || 'LIVE'}</span>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+          </div>
+        `;
+      } else {
+        mainHtml = `
+          <div class="stage-portrait">
+            ${renderLcd(false)}
+            <div class="ch-row">
+              <button class="ch-btn" onclick="selectTg(selectedTgIdx - 1)">◀ CH PREV</button>
+              <button class="ch-btn sms" onclick="activeModal='sms';render();">💬 SMS</button>
+              <button class="ch-btn" onclick="selectTg(selectedTgIdx + 1)">CH NEXT ▶</button>
+            </div>
+            <div class="quick-setup-row">
+              <button class="setup-chip" style="color:#67e8f9;" onclick="activeModal='dial';render();">📞 Dial Keypad</button>
+              <button class="setup-chip" style="color:#fbbf24;" onclick="activeModal='cable';render();">🔌 Kabel Radio</button>
+              <button class="setup-chip" style="color:#34d399;" onclick="activeModal='vox';render();">🎚️ VOX</button>
+            </div>
+            ${renderPttBlock(false)}
+            ${renderQuickTgGrid()}
+            <div class="net-guard-bar">
+              <span>🛡️ Net Firewall:</span>
+              <strong style="color:#34d399;">${operatorProfile.networkTag}</strong>
+            </div>
+          </div>
+        `;
+      }
+
+      const bottomNavHtml = `
+        <div class="bottom-nav">
+          <button class="bnav-btn ${currentTab==='noc'?'active':''}" onclick="currentTab='noc';render();">📈<span>NOC</span></button>
+          <button class="bnav-btn ${currentTab==='radio'?'active':''}" onclick="currentTab='radio';render();">📻<span>RADIO</span></button>
+          <button class="bnav-btn ${currentTab==='matrix'?'active':''}" onclick="currentTab='matrix';render();">🌐<span>MATRIX</span></button>
+          <button class="bnav-btn ${currentTab==='logbook'?'active':''}" onclick="currentTab='logbook';render();">📖<span>LOG</span></button>
+          <button class="bnav-btn ${currentTab==='config'?'active':''}" onclick="currentTab='config';render();">⚙️<span>CONFIG</span></button>
+        </div>
+      `;
+
+      shell.innerHTML = pocChassisHtml + topBarHtml + (mode === "poc18" || mode === "poc24" ? "" : profileBarHtml) + mainHtml + bottomNavHtml + renderModal();
+    }
+
+    window.addEventListener("resize", render);
+    render();
+    connectWebSocket();
+  </script>
+</body>
+</html>
