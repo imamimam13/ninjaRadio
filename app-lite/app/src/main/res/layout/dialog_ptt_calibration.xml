@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/card_lcd"
+    android:padding="5dp">
+
+    <!-- Header Row with Title + Instant Back/Close Button -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="24dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="3dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="SET TOMBOL PTT &amp; CHANNEL"
+            android:textColor="@color/ninja_amber"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnTopCloseCalib"
+            android:layout_width="54dp"
+            android:layout_height="match_parent"
+            android:text="✕ BACK"
+            android:textSize="10sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:background="@drawable/btn_ptt" />
+    </LinearLayout>
+
+    <!-- Target Selector Buttons: PTT | CH+ | CH- -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="26dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="3dp">
+
+        <Button
+            android:id="@+id/btnTargetPtt"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="1. PTT"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_red"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginEnd="2dp" />
+
+        <Button
+            android:id="@+id/btnTargetChNext"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.15"
+            android:text="2. CH+ (NEXT)"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_cyan"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginStart="1dp"
+            android:layout_marginEnd="1dp" />
+
+        <Button
+            android:id="@+id/btnTargetChPrev"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.15"
+            android:text="3. CH- (PREV)"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_amber"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginStart="2dp" />
+    </LinearLayout>
+
+    <!-- Compact Current Mapping Summary -->
+    <TextView
+        android:id="@+id/tvCurrentPttSetting"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="PTT: Auto | CH+: Default"
+        android:textColor="@color/ninja_cyan"
+        android:textSize="10sp"
+        android:gravity="center"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:layout_marginBottom="3dp" />
+
+    <!-- Detection Status Box -->
+    <TextView
+        android:id="@+id/tvPttDetectStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="TEKAN TOMBOL FISIK HT SEKARANG..."
+        android:textColor="@color/ninja_text_primary"
+        android:textSize="11sp"
+        android:fontFamily="sans-serif-condensed"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:background="@drawable/item_focus"
+        android:padding="4dp"
+        android:layout_marginBottom="4dp" />
+
+    <!-- Single Compact Bottom Action Row: SIMPAN | RESET | KEMBALI -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="28dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnSaveLearnedKey"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.2"
+            android:text="SIMPAN"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_green"
+            android:background="@drawable/btn_dpad"
+            android:enabled="false"
+            android:layout_marginEnd="2dp" />
+
+        <Button
+            android:id="@+id/btnResetPttDefault"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="RESET"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_amber"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginStart="1dp"
+            android:layout_marginEnd="1dp" />
+
+        <Button
+            android:id="@+id/btnCancelPttCalib"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.1"
+            android:text="KEMBALI"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginStart="2dp" />
+    </LinearLayout>
+
+</LinearLayout>

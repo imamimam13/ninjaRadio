@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="52dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="6dp"
+    android:paddingEnd="5dp"
+    android:background="@drawable/item_channel_normal">
+
+    <TextView
+        android:id="@+id/tvActiveMark"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="CH01"
+        android:textColor="@color/ninja_cyan"
+        android:textSize="11sp"
+        android:fontFamily="monospace"
+        android:textStyle="bold"
+        android:background="@drawable/badge_pill"
+        android:paddingStart="5dp"
+        android:paddingEnd="5dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:layout_marginEnd="6dp" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvItemName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Profile Name"
+            android:textColor="@color/ninja_text_primary"
+            android:textSize="15sp"
+            android:fontFamily="sans-serif-medium"
+            android:textStyle="bold"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/tvItemDetails"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="TG 510 · TS 2"
+            android:textColor="@color/ninja_cyan"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:singleLine="true" />
+    </LinearLayout>
+
+    <!-- Direct Edit button on each item -->
+    <Button
+        android:id="@+id/btnItemEdit"
+        android:layout_width="48dp"
+        android:layout_height="34dp"
+        android:text="EDIT"
+        android:textColor="@color/ninja_amber"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:background="@drawable/btn_dpad"
+        android:focusable="false"
+        android:layout_marginStart="4dp" />
+
+</LinearLayout>

@@ -7,20 +7,17 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.util.Log
-import com.ninjadmr.app.dsp.Agc
-import com.ninjadmr.app.dsp.Biquad
-import com.ninjadmr.app.dsp.Envelope
 import com.ninjadmr.app.dsp.JitterBuffer
+import java.util.concurrent.Executors
 
 /**
  * 8 kHz mono PCM capture/playback for the DMR vocoder path.
  *
- * * Capture: frames are accumulated into 60 ms (480 sample) bursts, high-pass
- *   filtered (to strip DC offset and handling rumble before the AMBE vocoder),
- *   smoothly leveled, and handed to [onMicFrame].
- * * Playback: decoded bursts are buffered via [JitterBuffer] (3 bursts / 180 ms cushion)
- *   to eliminate underrun pops, gently leveled, smooth onset envelope applied,
- *   and written to the output track by a dedicated thread.
+ * * Capture: raw 160-sample frames accumulated into 60 ms (480 sample) bursts,
+ *   scaled with crisp linear micGain, and handed to [onMicFrame].
+ * * Playback: decoded bursts buffered with low-latency JitterBuffer,
+ *   scaled with clean linear spkGain, and written to AudioTrack without artificial
+ *   starvation gaps or volume pumping.
  */
 class AudioEngine(
     private val sampleRate: Int = 8000,
@@ -40,14 +37,19 @@ class AudioEngine(
 
     @Volatile private var running = false
 
-    // TX AGC: targets 6000 RMS, bounded gain [0.5, 2.5] with per-sample interpolation
-    private val txAgc = Agc(targetRms = 6000.0, maxGain = 2.5, minGain = 0.5)
-    // RX AGC: gentle speech leveling (AMBE output is already synthesized and bounded)
-    private val rxAgc = Agc(targetRms = 6500.0, maxGain = 1.5, minGain = 0.7)
-    // High-pass filter at 160 Hz for microphone capture (eliminates DC offset and sub-audible puff/rumble)
-    private val txHp = Biquad().highPass(sampleRate.toDouble(), 160.0)
-    // Jitter buffer with 3 frames (180 ms) cushion to absorb internet packet jitter without clicks
-    private val jitter = JitterBuffer(BURST_SAMPLES, cushionFrames = 3)
+    // Clean linear gains (matches NinjaRadio Lite: 250% mic, 120% speaker)
+    @Volatile var micGain: Float = 2.5f
+    @Volatile var spkGain: Float = 1.2f
+
+    private val playExec = Executors.newSingleThreadExecutor()
+
+    fun setGains(mic: Float, spk: Float) {
+        this.micGain = mic.coerceIn(1.0f, 5.0f)
+        this.spkGain = spk.coerceIn(0.5f, 2.5f)
+    }
+
+    // Jitter buffer with immediate single-frame priming to eliminate dropouts & stuttering
+    private val jitter = JitterBuffer(BURST_SAMPLES, cushionFrames = 1, maxFrames = 32)
     private val micAccum = ShortArray(BURST_SAMPLES)
     private var micPos = 0
     @Volatile private var lastMicRms = 0
@@ -101,11 +103,34 @@ class AudioEngine(
 
     fun isCapturing(): Boolean = record?.recordingState == AudioRecord.RECORDSTATE_RECORDING
 
+    @Synchronized
+    fun stopCapture() {
+        val t = captureThread
+        captureThread = null
+        t?.interrupt()
+        try {
+            t?.join(300)
+        } catch (_: Exception) {}
+        record?.let {
+            try {
+                if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    it.stop()
+                }
+            } catch (_: Exception) {}
+            try {
+                it.release()
+            } catch (_: Exception) {}
+        }
+        record = null
+        lastMicRms = 0
+        micPos = 0
+    }
+
     private fun captureLoop(rec: AudioRecord) {
         val frame = ShortArray(FRAME_SAMPLES)
-        while (running) {
+        while (running && captureThread != null) {
             var read = 0
-            while (read < FRAME_SAMPLES && running) {
+            while (read < FRAME_SAMPLES && running && captureThread != null) {
                 val n = rec.read(frame, read, FRAME_SAMPLES - read)
                 if (n <= 0) {
                     if (n < 0) Log.w(TAG, "AudioRecord.read error $n")
@@ -114,29 +139,16 @@ class AudioEngine(
                 read += n
             }
             if (read != FRAME_SAMPLES) continue
-            var offset = 0
-            while (offset < frame.size) {
-                val n = minOf(BURST_SAMPLES - micPos, frame.size - offset)
-                System.arraycopy(frame, offset, micAccum, micPos, n)
-                micPos += n
-                offset += n
-                if (micPos == BURST_SAMPLES) {
-                    val burst = micAccum.copyOf()
-                    // 1. High-pass filter to clean up DC offset & low rumble before vocoder
-                    for (i in burst.indices) {
-                        val hp = txHp.process(burst[i].toDouble())
-                        burst[i] = hp.coerceIn(-32768.0, 32767.0).toInt().toShort()
-                    }
-                    // 2. Smooth AGC
-                    txAgc.process(burst)
-                    var sum = 0L
-                    for (s in burst) sum += (s.toLong() * s.toLong())
-                    lastMicRms = kotlin.math.sqrt((sum / burst.size).toDouble()).toInt()
-                    AudioVisualizer.feed(burst, tx = true)
-                    onMicFrame(burst)
-                    micPos = 0
-                }
+            val out = ShortArray(FRAME_SAMPLES)
+            var sum = 0L
+            for (i in 0 until FRAME_SAMPLES) {
+                val s = (frame[i] * micGain).toInt().coerceIn(-32768, 32767).toShort()
+                out[i] = s
+                sum += (s.toLong() * s.toLong())
             }
+            lastMicRms = kotlin.math.sqrt((sum / FRAME_SAMPLES).toDouble()).toInt()
+            AudioVisualizer.feed(out, tx = true)
+            onMicFrame(out)
         }
     }
 
@@ -147,90 +159,75 @@ class AudioEngine(
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        val bufSize = maxOf(minBuf, BURST_SAMPLES * 2 * 6)
-        val t = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build(),
-            )
-            .setBufferSizeInBytes(bufSize)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        t.play()
-        track = t
+        if (minBuf <= 0) {
+            onError("AudioTrack.getMinBufferSize failed: $minBuf")
+            return
+        }
+        val bufSize = maxOf(minBuf, 8000)
+        val trk = AudioTrack(
+            AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .build(),
+            AudioFormat.Builder()
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .build(),
+            bufSize,
+            AudioTrack.MODE_STREAM,
+            0,
+        )
+        if (trk.state != AudioTrack.STATE_INITIALIZED) {
+            trk.release()
+            onError("AudioTrack not initialized")
+            return
+        }
+        track = trk
+        trk.play()
         running = true
-        playbackThread = Thread({ playbackLoop() }, "dmr-playback").apply { start() }
+    }
+
+    /** Direct real-time audio playback without jitter buffer delays. */
+    fun play(pcm: ShortArray) {
+        playExec.execute {
+            val t = track ?: return@execute
+            val out = if (spkGain != 1.0f) {
+                val amplified = ShortArray(pcm.size)
+                for (i in pcm.indices) {
+                    amplified[i] = (pcm[i] * spkGain).toInt().coerceIn(-32768, 32767).toShort()
+                }
+                amplified
+            } else {
+                pcm
+            }
+            t.write(out, 0, out.size)
+            try {
+                AudioVisualizer.feed(out, tx = false)
+            } catch (_: Exception) {}
+        }
     }
 
     /** Queue a decoded downstream burst (480 samples). */
     fun submitRx(burst: ShortArray) {
-        jitter.put(burst)
+        play(burst)
     }
 
-    private fun playbackLoop() {
-        var lastWriteMs = 0L
-        while (running) {
-            val frame = jitter.poll()
-            if (frame == null) {
-                try {
-                    Thread.sleep(5)
-                } catch (_: InterruptedException) {
-                    break
-                }
-                continue
-            }
-            rxAgc.process(frame)
-            AudioVisualizer.feed(frame, tx = false)
-            val now = System.currentTimeMillis()
-            // Fade in only at the start of a new talkspurt (gap > 180 ms)
-            if (lastWriteMs == 0L || now - lastWriteMs > 180) {
-                Envelope.fadeIn(frame, 40)
-            }
-            lastWriteMs = now
-            track?.write(frame, 0, frame.size, AudioTrack.WRITE_BLOCKING)
-        }
-    }
-
-    fun playbackDepth(): Int = jitter.depth()
+    fun playbackDepth(): Int = 0
 
     @Synchronized
     fun stop() {
         running = false
-        playbackThread?.interrupt()
-        playbackThread?.join(500)
-        playbackThread = null
-        captureThread?.interrupt()
-        captureThread?.join(500)
-        captureThread = null
-        record?.let {
-            try {
-                it.stop()
-            } catch (_: IllegalStateException) {
-            }
-            it.release()
-        }
-        record = null
+        stopCapture()
         track?.let {
             try {
                 it.stop()
-            } catch (_: IllegalStateException) {
-            }
-            it.release()
+            } catch (_: Exception) {}
+            try {
+                it.release()
+            } catch (_: Exception) {}
         }
         track = null
-        jitter.reset()
-        txHp.reset()
-        txAgc.reset()
-        rxAgc.reset()
         micPos = 0
     }
 }

@@ -40,6 +40,12 @@ import java.util.concurrent.ArrayBlockingQueue
 import com.ninjadmr.app.ptt.PttController
 
 import com.ninjadmr.app.util.AppLog
+import com.ninjadmr.app.util.NinjaAudioFx
+import com.example.hblink.AmbeVocoder
+import com.example.hblink.AmbeVocoders
+import com.ninjadmr.app.dmr.Dmr
+import com.ninjadmr.app.dmr.DmrCall
+import kotlin.concurrent.thread
 
 
 
@@ -106,6 +112,10 @@ class DmrForegroundService : Service() {
         const val EXTRA_SCAN_TGS = "scan_tgs"
 
         const val EXTRA_SCAN_INTERVAL = "scan_interval"
+        const val EXTRA_LOCATION = "location"
+        const val EXTRA_HARDWARE = "hardware"
+        const val EXTRA_SOFTWARE = "software"
+        const val EXTRA_DESCRIPTION = "description"
 
     }
 
@@ -157,7 +167,12 @@ class DmrForegroundService : Service() {
 
 
 
-    private val txQueue = ArrayBlockingQueue<ByteArray>(8)
+    private val txQueue = ArrayBlockingQueue<ByteArray>(32)
+
+    private val ambeVocoder: AmbeVocoder = AmbeVocoders.create()
+    private val txAmbeQueue = ArrayList<ByteArray>()
+    private var txVseq = 0
+    private var txCall: DmrCall? = null
 
     private lateinit var contactsStore: com.ninjadmr.app.contacts.ContactsStore
     private lateinit var callbookStore: com.ninjadmr.app.contacts.CallbookStore
@@ -267,10 +282,10 @@ class DmrForegroundService : Service() {
                 if (matches) {
                     if (isDown) {
                         AppLog.add("Hardware PTT DOWN ($action -> $keyName)")
-                        setPtt(true)
+                        handlePttEvent(true)
                     } else if (isUp) {
                         AppLog.add("Hardware PTT UP ($action -> $keyName)")
-                        setPtt(false)
+                        handlePttEvent(false)
                     }
                 }
             }
@@ -305,9 +320,10 @@ class DmrForegroundService : Service() {
 
         createChannel()
 
-        PttController.install(set = { setPtt(it) }, state = { ptt })
+        PttController.install(set = { handlePttEvent(it) }, state = { ptt })
 
         setupMediaSession()
+        registerPttBroadcastReceiver()
 
     }
 
@@ -391,7 +407,37 @@ class DmrForegroundService : Service() {
 
     }
 
+    private val pttHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pttReleaseRunnable: Runnable? = null
 
+    fun handlePttEvent(down: Boolean) {
+        val prefs = com.ninjadmr.app.config.AppSettingsStore(this)
+        val isToggle = prefs.pttMode.equals("TOGGLE", ignoreCase = true)
+        pttHandler.removeCallbacksAndMessages(null)
+        if (isToggle) {
+            if (down) {
+                setPtt(!ptt)
+            }
+        } else {
+            if (down) {
+                setPtt(true)
+            } else {
+                // Debounce release by 150ms to ignore hardware key chatter / contact bounce
+                val r = Runnable { setPtt(false) }
+                pttReleaseRunnable = r
+                pttHandler.postDelayed(r, 150)
+            }
+        }
+    }
+
+    private val totRunnable = Runnable {
+        if (ptt) {
+            val totSec = com.ninjadmr.app.config.AppSettingsStore(this@DmrForegroundService).totSeconds
+            android.util.Log.w("NinjaDMR", "TOT Limit (${totSec}s) reached - stopping transmission")
+            AppLog.add("TOT Timeout (${totSec}s) - Transmisi Selesai")
+            setPtt(false)
+        }
+    }
 
     fun setPtt(enabled: Boolean) {
 
@@ -403,13 +449,21 @@ class DmrForegroundService : Service() {
 
         if (enabled) {
 
-            lastTxTs = System.currentTimeMillis()
-
-            if (audio?.isCapturing() != true) {
-
-                audio?.startCapture()
-
+            pttHandler.removeCallbacks(totRunnable)
+            val totSec = com.ninjadmr.app.config.AppSettingsStore(this).totSeconds
+            if (totSec > 0) {
+                pttHandler.postDelayed(totRunnable, totSec * 1000L)
             }
+
+            lastTxTs = System.currentTimeMillis()
+            ambeVocoder.resetEncoder()
+            txVseq = 0
+            synchronized(txAmbeQueue) { txAmbeQueue.clear() }
+            val srcNum = currentDmrId.filter { it.isDigit() }.toIntOrNull() ?: 1022057
+            val tgNum = currentTalkgroup.toIntOrNull() ?: 1025
+            txCall = DmrCall(src = srcNum, dst = tgNum, colorCode = 1)
+
+            NinjaAudioFx.playSwordClang(this)
 
             try {
 
@@ -421,20 +475,44 @@ class DmrForegroundService : Service() {
 
             }
 
-            AppLog.add("PTT down — transmitting on TG (vocoder=$vocoder)")
+            if (audio?.isCapturing() != true) {
 
-        } else {
-
-            try {
-
-                PyBridge.endCall(this)
-
-            } catch (exc: Exception) {
-
-                AppLog.add("endCall failed: ${exc.message}")
+                audio?.startCapture()
 
             }
 
+            AppLog.add("PTT down — transmitting on TG $currentTalkgroup (Native AMBE=${ambeVocoder.available})")
+
+        } else {
+            pttHandler.removeCallbacks(totRunnable)
+            NinjaAudioFx.playShuriken(this)
+            synchronized(txAmbeQueue) {
+                if (txAmbeQueue.isNotEmpty()) {
+                    while (txAmbeQueue.size < 3) {
+                        txAmbeQueue.add(Dmr.AMBE_SILENCE)
+                    }
+                    val call = txCall ?: DmrCall(
+                        src = currentDmrId.filter { it.isDigit() }.toIntOrNull() ?: 1022057,
+                        dst = currentTalkgroup.toIntOrNull() ?: 1025,
+                        colorCode = 1
+                    )
+                    val v = txVseq
+                    txVseq = (txVseq + 1) % 6
+                    val burst = Dmr.buildPayload(txAmbeQueue[0], txAmbeQueue[1], txAmbeQueue[2], call.voiceMid(v))
+                    txAmbeQueue.clear()
+                    try {
+                        PyBridge.feedTxBurst(this@DmrForegroundService, burst)
+                    } catch (e: Throwable) {
+                        android.util.Log.e("NinjaDMR", "feedTxBurst on PTT up error", e)
+                    }
+                }
+            }
+            try {
+                PyBridge.endCall(this)
+            } catch (exc: Exception) {
+                AppLog.add("endCall failed: ${exc.message}")
+            }
+            txCall = null
             AppLog.add("PTT up")
 
         }
@@ -610,7 +688,7 @@ class DmrForegroundService : Service() {
 
         pendingScan = intent?.getBooleanExtra(EXTRA_SCAN_ENABLED, false) ?: false
 
-        AppLog.add("Starting session → ${config["host"]}:${config["port"]} (${config["protocol"]})")
+        AppLog.add("Starting session â†’ ${config["host"]}:${config["port"]} (${config["protocol"]})")
 
         Thread({ doStart(config) }, "dmr-start").start()
 
@@ -642,12 +720,14 @@ class DmrForegroundService : Service() {
                 AppLog.add("Session error: ${status["error"]}")
             }
 
-            status["vocoder"]?.let { voc ->
-
-                vocoder = voc
-
-                AppLog.add("vocoder: $voc")
-
+            if (ambeVocoder.available) {
+                vocoder = "Native AMBE+2"
+                AppLog.add("vocoder: Native AMBE+2 (DVSI libambe.so) active")
+            } else {
+                status["vocoder"]?.let { voc ->
+                    vocoder = voc
+                    AppLog.add("vocoder: $voc")
+                }
             }
 
         } catch (exc: Throwable) {
@@ -736,9 +816,10 @@ class DmrForegroundService : Service() {
 
         val essid = str(EXTRA_ESSID, "")
 
-        val dmrId = if (rawDmrId.isBlank()) "1022057" else rawDmrId
+        val digitsOnly = (if (rawDmrId.isBlank()) "1022057" else rawDmrId).filter { it.isDigit() }
+        val cleanRadioId = if (digitsOnly.length > 7) digitsOnly.dropLast(2) else digitsOnly
 
-        val effective = if (essid.isBlank()) dmrId else "$dmrId${essid.filter { it.isDigit() }.take(2)}"
+        val peerId = if (essid.isBlank()) cleanRadioId else "$cleanRadioId${essid.filter { it.isDigit() }.padStart(2, '0').takeLast(2)}"
 
         val activeTg = str(EXTRA_TALKGROUP, "1025")
 
@@ -764,7 +845,8 @@ class DmrForegroundService : Service() {
 
             "port" to num(EXTRA_PORT, 62301),
 
-            "dmr_id" to effective,
+            "dmr_id" to peerId,
+            "radio_id" to cleanRadioId,
 
             "callsign" to str(EXTRA_CALLSIGN, "BD62BOT"),
 
@@ -777,11 +859,12 @@ class DmrForegroundService : Service() {
             "color_code" to num(EXTRA_COLOR_CODE, 1),
 
             "subscribed_tgs" to allSubscribed,
-            "station_hardware" to com.ninjadmr.app.config.AppSettingsStore(this).stationHardware.ifBlank { "NinjaRadio" },
-            "station_software" to com.ninjadmr.app.config.AppSettingsStore(this).stationSoftware.ifBlank { "NinjaRadio" },
-            "station_location" to com.ninjadmr.app.config.AppSettingsStore(this).stationLocation.ifBlank { "Mobile, ID" },
-            "station_description" to com.ninjadmr.app.config.AppSettingsStore(this).stationDescription.ifBlank { "NinjaDMR" },
+            "station_hardware" to str(EXTRA_HARDWARE, com.ninjadmr.app.config.AppSettingsStore(this).stationHardware.ifBlank { "Android POC" }),
+            "station_software" to str(EXTRA_SOFTWARE, com.ninjadmr.app.config.AppSettingsStore(this).stationSoftware.ifBlank { "NinjaRadio" }),
+            "station_location" to str(EXTRA_LOCATION, com.ninjadmr.app.config.AppSettingsStore(this).stationLocation.ifBlank { "Mobile, ID" }),
+            "station_description" to str(EXTRA_DESCRIPTION, com.ninjadmr.app.config.AppSettingsStore(this).stationDescription.ifBlank { "NinjaDMR" }),
             "station_url" to com.ninjadmr.app.config.AppSettingsStore(this).stationUrl.ifBlank { "https://ninjadmr.app" },
+            "tot_seconds" to com.ninjadmr.app.config.AppSettingsStore(this).totSeconds,
         )
 
     }
@@ -800,18 +883,32 @@ class DmrForegroundService : Service() {
 
             try {
 
-                val rx = PyBridge.pollRx(this)
-
-                if (rx != null && rx.isNotEmpty()) {
-
-                    audio?.submitRx(bytesToShorts(rx))
-
+                // 1. Native AMBE vocoder: poll raw 33-byte DMR voice bursts
+                val rawBurst = PyBridge.pollRxBurst(this)
+                if (rawBurst != null && rawBurst.size >= 33) {
                     lastRxTs = System.currentTimeMillis()
-
                     rxCount++
-
                     busy = true
+                    if (ambeVocoder.available) {
+                        val subframes = Dmr.extractAmbe(rawBurst)
+                        val burstPcm = ShortArray(subframes.size * 160)
+                        for (i in subframes.indices) {
+                            val pcm = ambeVocoder.decode(subframes[i])
+                            System.arraycopy(pcm, 0, burstPcm, i * 160, 160)
+                        }
+                        audio?.play(burstPcm)
+                    }
+                }
 
+                // 2. Fallback if Native AMBE is not available
+                val rx = PyBridge.pollRx(this)
+                if (rx != null && rx.isNotEmpty()) {
+                    lastRxTs = System.currentTimeMillis()
+                    rxCount++
+                    busy = true
+                    if (!ambeVocoder.available) {
+                        audio?.play(bytesToShorts(rx))
+                    }
                 }
 
                 val trafficList = PyBridge.drainTraffic(this)
@@ -831,7 +928,7 @@ class DmrForegroundService : Service() {
                         val currentTg = currentTalkgroup.ifBlank { "1025" }
                         val isAcceptedTg = tg.isBlank() || currentTg.isBlank() || tg == currentTg ||
                                            tg == "9" || tg == "9990" || tg == "9999" || tg == "16777215" ||
-                                           tg == currentDmrId || srcId == currentTg
+                                           tg == currentDmrId || (currentDmrId.length > 7 && tg == currentDmrId.dropLast(2)) || srcId == currentTg
                         if (!isAcceptedTg) {
                             continue
                         }
@@ -866,7 +963,7 @@ class DmrForegroundService : Service() {
 
                             if (dt == "0" || dt == "START") {
 
-                                AppLog.add("RX Call ← $peer on TG $tg")
+                                AppLog.add("RX Call â† $peer on TG $tg")
 
                             }
 
@@ -953,15 +1050,34 @@ class DmrForegroundService : Service() {
 
 
     private fun onMicFrame(frame: ShortArray) {
-
         if (!running || !ptt) return
 
-        // Drop oldest if the bridge is backed up so we stay real-time.
-
-        if (txQueue.remainingCapacity() == 0) txQueue.poll()
-
-        txQueue.offer(shortsToBytes(frame))
-
+        if (ambeVocoder.available) {
+            val ambe = ambeVocoder.encode(frame)
+            synchronized(txAmbeQueue) {
+                txAmbeQueue.add(ambe)
+                if (txAmbeQueue.size == 3) {
+                    val srcNum = currentDmrId.filter { it.isDigit() }.toIntOrNull() ?: 1022057
+                    val tgNum = currentTalkgroup.toIntOrNull() ?: 1025
+                    val call = txCall ?: DmrCall(src = srcNum, dst = tgNum, colorCode = 1)
+                    val v = txVseq
+                    txVseq = (txVseq + 1) % 6
+                    val burst = Dmr.buildPayload(txAmbeQueue[0], txAmbeQueue[1], txAmbeQueue[2], call.voiceMid(v))
+                    txAmbeQueue.clear()
+                    lastTxTs = System.currentTimeMillis()
+                    txCount++
+                    try {
+                        PyBridge.feedTxBurst(this@DmrForegroundService, burst)
+                    } catch (e: Throwable) {
+                        android.util.Log.e("NinjaDMR", "feedTxBurst onMicFrame error", e)
+                    }
+                }
+            }
+        } else {
+            // Drop oldest if the bridge is backed up so we stay real-time.
+            if (txQueue.remainingCapacity() == 0) txQueue.poll()
+            txQueue.offer(shortsToBytes(frame))
+        }
     }
 
 
@@ -1083,9 +1199,9 @@ class DmrForegroundService : Service() {
 
         val detail = when {
 
-            ptt -> "Transmitting…"
+            ptt -> "Transmittingâ€¦"
 
-            linkStatus() == "RX" -> "Receiving…"
+            linkStatus() == "RX" -> "Receivingâ€¦"
 
             else -> statusLine
 
@@ -1095,7 +1211,7 @@ class DmrForegroundService : Service() {
 
             .setContentTitle(getString(R.string.app_name))
 
-            .setContentText("$connectionState · $detail · RX $rxCount / TX $txCount")
+            .setContentText("$connectionState Â· $detail Â· RX $rxCount / TX $txCount")
 
             .setContentIntent(contentIntent)
 

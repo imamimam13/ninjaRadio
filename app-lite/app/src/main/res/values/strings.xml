@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">NinjaRadio MD380</string>
+    <string name="status_disconnected">DISCONNECTED</string>
+    <string name="status_connecting">CONNECTING...</string>
+    <string name="status_connected">CONNECTED</string>
+    <string name="status_tx">TX</string>
+    <string name="status_rx">RX</string>
+    <string name="btn_connect">CONNECT</string>
+    <string name="btn_disconnect">DISCONNECT</string>
+    <string name="btn_profiles">PROFILES</string>
+    <string name="btn_ptt">PTT</string>
+</resources>

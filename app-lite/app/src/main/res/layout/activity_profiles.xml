@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/ninja_bg_deep"
+    android:padding="3dp">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/top_bar_bg"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp"
+        android:paddingTop="3dp"
+        android:paddingBottom="3dp"
+        android:layout_marginBottom="3dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚡ MEMORY CHANNELS"
+            android:textColor="@color/ninja_amber"
+            android:textSize="15sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvProfileCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0 CH"
+            android:textColor="@color/ninja_cyan"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:textStyle="bold"
+            android:background="@drawable/badge_pill"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="1dp"
+            android:paddingBottom="1dp" />
+    </LinearLayout>
+
+    <!-- Profile / Channel List -->
+    <ListView
+        android:id="@+id/lvProfiles"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:choiceMode="singleChoice"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="3dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true" />
+
+    <!-- Action Buttons Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginTop="3dp">
+
+        <Button
+            android:id="@+id/btnAddProfile"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="+ ADD"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_cyan"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:layout_marginEnd="1.5dp" />
+
+        <Button
+            android:id="@+id/btnEditProfile"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="EDIT"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_text_primary"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:layout_marginStart="1.5dp"
+            android:layout_marginEnd="1.5dp" />
+
+        <Button
+            android:id="@+id/btnDeleteProfile"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="DEL"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_red"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:layout_marginStart="1.5dp"
+            android:layout_marginEnd="1.5dp" />
+
+        <Button
+            android:id="@+id/btnBack"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="BACK"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_text_dim"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:layout_marginStart="1.5dp" />
+    </LinearLayout>
+
+</LinearLayout>

@@ -175,6 +175,15 @@ object PyBridge {
         }
     }
 
+    fun feedTxBurst(context: Context, burst: ByteArray): Boolean {
+        val result = runtime(context).callAttr("feed_tx_burst", burst) ?: return false
+        return try {
+            result.toJava(Boolean::class.javaObjectType) ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun startCall(context: Context): Boolean {
         val result = runtime(context).callAttr("start_call") ?: return false
         return try {
@@ -216,6 +225,16 @@ object PyBridge {
     /** Returns the next decoded PCM buffer (960 bytes), or null when idle. */
     fun pollRx(context: Context): ByteArray? {
         val result = runtime(context).callAttr("poll_rx") ?: return null
+        return try {
+            result.toJava(ByteArray::class.java)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Returns the next raw 33-byte DMR voice burst, or null when idle. */
+    fun pollRxBurst(context: Context): ByteArray? {
+        val result = runtime(context).callAttr("poll_rx_burst") ?: return null
         return try {
             result.toJava(ByteArray::class.java)
         } catch (_: Exception) {

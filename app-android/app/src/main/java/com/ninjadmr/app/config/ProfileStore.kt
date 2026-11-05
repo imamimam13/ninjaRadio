@@ -62,6 +62,10 @@ class ProfileStore(context: Context) {
             put("zone", p.zone)
             put("frequency", p.frequency)
             put("quickTgs", p.quickTgs)
+            put("location", p.location)
+            put("hardware", p.hardware)
+            put("software", p.software)
+            put("description", p.description)
         }
 
         private fun fromJson(o: JSONObject): RadioProfile = RadioProfile(
@@ -81,6 +85,10 @@ class ProfileStore(context: Context) {
             zone = o.optString("zone", "NUSANTARA LINK A"),
             frequency = o.optString("frequency", "438.50000"),
             quickTgs = o.optString("quickTgs", "9990,1,515,1025"),
+            location = o.optString("location", "Mobile, ID"),
+            hardware = o.optString("hardware", "Android POC"),
+            software = o.optString("software", "NinjaRadio"),
+            description = o.optString("description", "NinjaDMR"),
         )
     }
 }

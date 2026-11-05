@@ -49,6 +49,7 @@ export interface RadioTalkgroup {
 }
 
 const ALL_TALKGROUPS: RadioTalkgroup[] = [
+  { id: 1025, name: "Nusantara Link 1", slot: 2, mode: "DMR", category: "Amatir" },
   { id: 510, name: "Indo National DMR", slot: 1, mode: "DMR", category: "Amatir" },
   { id: 5101, name: "Jawa Barat Regional", slot: 2, mode: "YSF", category: "Amatir" },
   { id: 5102, name: "Jawa Tengah Regional", slot: 1, mode: "DMR", category: "Amatir" },
@@ -1455,7 +1456,7 @@ export default function RadioPocketMode() {
   };
 
   return (
-    <div className={`h-[100dvh] max-h-[100dvh] w-full bg-[#05070c] text-slate-100 flex flex-col justify-between overflow-hidden select-none px-2 sm:px-4 pt-[max(0.35rem,env(safe-area-inset-top))] pb-[max(0.35rem,env(safe-area-inset-bottom))] ${screenMetrics.isLandscape ? "max-w-5xl" : "max-w-md"} mx-auto`}>
+    <div className={`h-[100dvh] max-h-[100dvh] w-full bg-[#05070c] text-slate-100 flex flex-col justify-between overflow-hidden select-none px-2 sm:px-4 pt-[max(0.35rem,env(safe-area-inset-top))] pb-[max(0.35rem,env(safe-area-inset-bottom))] ${screenMetrics.isLandscape ? "max-w-none" : "max-w-md"} mx-auto`}>
       
       {/* Top Device Header */}
       <div className="flex items-center justify-between border-b border-cyan-900/40 pb-1.5 flex-shrink-0 gap-1">
@@ -2167,6 +2168,43 @@ export default function RadioPocketMode() {
                 )}
               </button>
             </div>
+
+            {/* Quick Talkgroup Presets Matrix (Zero-Deadspace Grid) */}
+            {!screenMetrics.isUltraCompactHeight && (
+              <div className="bg-[#0b121e]/90 border border-cyan-900/40 rounded-xl p-2 flex-shrink-0 space-y-1.5">
+                <div className="flex items-center justify-between text-[9px] sm:text-[10px] font-mono">
+                  <span className="font-black text-cyan-400 tracking-wider">⚡ QUICK TALKGROUPS</span>
+                  <span className="text-emerald-400 font-bold">TS{currentTimeSlot} • {currentTg.mode}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {availableTgs.slice(0, 6).map((tgItem) => {
+                    const isSelected = currentTg.id === tgItem.id;
+                    return (
+                      <button
+                        key={tgItem.id}
+                        type="button"
+                        onClick={() => {
+                          tuneToTalkgroup(tgItem);
+                          beepPlayer?.playTalkGrant();
+                        }}
+                        className={`px-2 py-1.5 rounded-lg border font-mono text-center transition-all cursor-pointer active:scale-95 ${
+                          isSelected
+                            ? "bg-cyan-500/20 border-cyan-400 text-white shadow-[0_0_12px_rgba(0,240,255,0.25)]"
+                            : "bg-[#060a12] border-slate-800 text-slate-300 hover:border-cyan-500/60"
+                        }`}
+                      >
+                        <div className={`text-[10px] sm:text-xs font-black ${isSelected ? "text-cyan-300" : "text-slate-100"}`}>
+                          TG {tgItem.id}
+                        </div>
+                        <div className="text-[8px] sm:text-[9px] text-slate-400 truncate">
+                          {tgItem.name}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Network Guard Info */}
             {!screenMetrics.isUltraCompactHeight && (

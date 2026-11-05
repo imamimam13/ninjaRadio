@@ -88,7 +88,6 @@ export function usePhysicalPTT({
     }
 
     // 2. Default "AUTO" mode: accepts smartphone Volume Down, Volume Up, Headset Hook / Media, and dedicated PoC hardware keys
-    // Note: Spacebar is NOT triggered automatically to prevent accidental transmissions while scrolling/typing
     const isVolumeDown = e.code === "VolumeDown" || e.key === "AudioVolumeDown" || e.keyCode === 25;
     const isVolumeUp = e.code === "VolumeUp" || e.key === "AudioVolumeUp" || e.keyCode === 24;
     const isHeadset =
@@ -100,12 +99,20 @@ export function usePhysicalPTT({
 
     const isPocHardware =
       e.keyCode === 138 || // KEY_PTT
+      e.keyCode === 142 || // F12 PoC
       e.keyCode === 226 || // KEY_MEDIA_FAST_FORWARD (MTK PTT)
       e.keyCode === 228 || // Qualcomm PTT
       e.keyCode === 261 || // F4
       e.keyCode === 262 || // F5
       e.keyCode === 263 || // F6
-      e.key === "F4";
+      e.keyCode === 288 || // PoC Side PTT 1
+      e.keyCode === 289 || // PoC Side PTT 2
+      e.keyCode === 290 || // PoC Side Key
+      e.keyCode === 291 || // CARAKA-22 / F22 / Zello Hardware PTT
+      e.keyCode === 292 || // PoC SOS / Aux PTT
+      e.key === "F4" ||
+      e.key === "PTT" ||
+      e.code === "PTT";
 
     return isVolumeDown || isVolumeUp || isHeadset || isPocHardware;
   }, [pttKey]);
@@ -147,6 +154,21 @@ export function usePhysicalPTT({
       }
     };
 
+    const handleNativePttDown = () => {
+      setLastKeyPressed("NATIVE_POC_PTT (Android Bridge)");
+      if (pttMode === "toggle") {
+        toggleTx();
+      } else {
+        startTx();
+      }
+    };
+
+    const handleNativePttUp = () => {
+      if (pttMode === "hold") {
+        stopTx();
+      }
+    };
+
     // Auto-release PTT if tab loses focus, window blurs, or page is navigated away
     let blurTimer: any = null;
     const handleSafetyRelease = () => {
@@ -176,6 +198,8 @@ export function usePhysicalPTT({
 
     window.addEventListener("keydown", handleKeyDown, { passive: false });
     window.addEventListener("keyup", handleKeyUp, { passive: false });
+    window.addEventListener("ninja-ptt-down", handleNativePttDown as EventListener);
+    window.addEventListener("ninja-ptt-up", handleNativePttUp as EventListener);
     window.addEventListener("blur", handleSafetyRelease);
     window.addEventListener("focus", handleFocus);
     window.addEventListener("beforeunload", handleSafetyRelease);
@@ -185,6 +209,8 @@ export function usePhysicalPTT({
       if (blurTimer) clearTimeout(blurTimer);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("ninja-ptt-down", handleNativePttDown as EventListener);
+      window.removeEventListener("ninja-ptt-up", handleNativePttUp as EventListener);
       window.removeEventListener("blur", handleSafetyRelease);
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("beforeunload", handleSafetyRelease);

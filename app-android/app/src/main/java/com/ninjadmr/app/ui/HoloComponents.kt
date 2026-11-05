@@ -1,4 +1,4 @@
-package com.ninjadmr.app.ui
+﻿package com.ninjadmr.app.ui
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -128,6 +131,7 @@ fun HoloPanel(
     modifier: Modifier = Modifier,
     accent: Color = Holo.brass,
     contentPadding: PaddingValues = PaddingValues(14.dp),
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(14.dp)
@@ -172,7 +176,11 @@ fun HoloPanel(
                 strokeWidth = 1.2f,
             )
         }
-        Column(Modifier.padding(contentPadding), content = content)
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(contentPadding),
+            verticalArrangement = verticalArrangement,
+            content = content,
+        )
     }
 }
 
@@ -210,7 +218,105 @@ fun HoloBadge(text: String, color: Color, modifier: Modifier = Modifier) {
     }
 }
 
-/** Small arc gauge: value over max, neon sweep. */
+/** Compact linear packet telemetry bar indicator (saves vertical space compared to curved gauge). */
+@Composable
+fun HoloPacketBar(
+    label: String,
+    value: Int,
+    max: Int = 24,
+    color: Color = Holo.cyan,
+    modifier: Modifier = Modifier,
+) {
+    val fraction = if (max <= 0) 0f else (value.toFloat() / max).coerceIn(0f, 1f)
+    val shape = RoundedCornerShape(6.dp)
+
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(Color(0xE6101726))
+            .border(1.dp, color.copy(alpha = 0.35f), shape)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label.uppercase(),
+                color = Holo.textDim,
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 9.sp,
+                    letterSpacing = 1.sp,
+                ),
+            )
+            Text(
+                text = value.toString(),
+                color = color,
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 13.sp,
+                ),
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Holo.bgDeep)
+                .border(0.5.dp, Holo.panelEdge, RoundedCornerShape(2.dp)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .fillMaxWidth(fraction)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                color.copy(alpha = 0.6f),
+                                color,
+                            )
+                        )
+                    ),
+            )
+        }
+    }
+}
+
+/** Side-by-side compact packet counters for RX and TX. */
+@Composable
+fun HoloPacketStatsRow(
+    rxCount: Int,
+    txCount: Int,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HoloPacketBar(
+            label = "RX PACKETS",
+            value = rxCount,
+            color = Holo.cyan,
+            modifier = Modifier.weight(1f),
+        )
+        HoloPacketBar(
+            label = "TX PACKETS",
+            value = txCount,
+            color = Holo.magenta,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** Legacy HoloGauge mapped to HoloPacketBar for compact display. */
 @Composable
 fun HoloGauge(
     label: String,
@@ -219,42 +325,13 @@ fun HoloGauge(
     color: Color = Holo.cyan,
     modifier: Modifier = Modifier,
 ) {
-    val fraction = if (max <= 0) 0f else (value.toFloat() / max).coerceIn(0f, 1f)
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Canvas(Modifier.size(52.dp)) {
-            val stroke = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
-            val inset = stroke.width / 2f
-            val arcSize = Size(size.width - stroke.width, size.height - stroke.width)
-            drawArc(
-                color = Holo.panelEdge,
-                startAngle = 140f,
-                sweepAngle = 260f,
-                useCenter = false,
-                topLeft = Offset(inset, inset),
-                size = arcSize,
-                style = stroke,
-            )
-            drawArc(
-                color = color,
-                startAngle = 140f,
-                sweepAngle = 260f * fraction,
-                useCenter = false,
-                topLeft = Offset(inset, inset),
-                size = arcSize,
-                style = stroke,
-            )
-        }
-        Text(
-            text = value.toString(),
-            color = color,
-            style = TextStyle(
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-            ),
-        )
-        Text(text = label.uppercase(), style = MaterialTheme.typography.labelSmall)
-    }
+    HoloPacketBar(
+        label = label,
+        value = value,
+        max = max,
+        color = color,
+        modifier = modifier,
+    )
 }
 
 @Composable

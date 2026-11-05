@@ -204,27 +204,59 @@ class CallbookStore(context: Context) {
                     val cleanJson = rawContent.substring(jsonStart).trim()
                     val userArray = if (cleanJson.startsWith("{")) {
                         val root = JSONObject(cleanJson)
-                        root.optJSONArray("users") ?: root.optJSONArray("data") ?: JSONArray()
+                        root.optJSONArray("users") ?: root.optJSONArray("subscribers") ?: root.optJSONArray("subscriber_ids") ?: root.optJSONArray("results") ?: root.optJSONArray("data") ?: root.optJSONArray("records") ?: root.optJSONArray("items") ?: JSONArray()
                     } else {
                         JSONArray(cleanJson)
                     }
-                    for (i in 0 until userArray.length()) {
-                        val obj = userArray.optJSONObject(i) ?: continue
-                        val id = listOf("radio_id", "id", "dmr_id", "dmrid", "radioId", "RADIO_ID", "ID", "DMR_ID")
-                            .firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: ""
-                        val callsign = listOf("callsign", "call_sign", "call", "CALLSIGN", "CALL", "Callsign")
-                            .firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } }?.uppercase() ?: ""
-                        val name = listOf("name", "full_name", "NAME")
-                            .firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: run {
-                                val f = listOf("fname", "first_name", "FNAME", "FIRST_NAME").firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: ""
-                                val s = listOf("surname", "last_name", "SURNAME", "LAST_NAME").firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: ""
-                                "$f $s".trim()
+                    if (userArray.length() > 0) {
+                        for (i in 0 until userArray.length()) {
+                            val obj = userArray.optJSONObject(i) ?: continue
+                            val id = listOf("radio_id", "id", "dmr_id", "dmrid", "radioId", "RADIO_ID", "ID", "DMR_ID")
+                                .firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: ""
+                            val callsign = listOf("callsign", "call_sign", "call", "CALLSIGN", "CALL", "Callsign")
+                                .firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } }?.uppercase() ?: ""
+                            val name = listOf("name", "full_name", "NAME")
+                                .firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: run {
+                                    val f = listOf("fname", "first_name", "FNAME", "FIRST_NAME").firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: ""
+                                    val s = listOf("surname", "last_name", "SURNAME", "LAST_NAME").firstNotNullOfOrNull { k -> obj.opt(k)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: ""
+                                    "$f $s".trim()
+                                }
+                            if (id.isNotBlank() && (callsign.isNotBlank() || name.isNotBlank())) {
+                                val user = CallbookUser(id, callsign, name)
+                                index[id] = user
+                                id.toLongOrNull()?.let { index[it.toString()] = user }
+                                count++
                             }
-                        if (id.isNotBlank() && (callsign.isNotBlank() || name.isNotBlank())) {
-                            val user = CallbookUser(id, callsign, name)
-                            index[id] = user
-                            id.toLongOrNull()?.let { index[it.toString()] = user }
-                            count++
+                        }
+                    } else if (cleanJson.startsWith("{")) {
+                        // Keyed dictionary format (e.g. {"1022001": ["BD62AA", "ALI AKBAR", ...]} or {"1022001": {...}})
+                        val root = JSONObject(cleanJson)
+                        val keys = root.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            val id = k.trim()
+                            if (id.isEmpty()) continue
+                            val value = root.opt(k)
+                            var callsign = ""
+                            var name = ""
+                            if (value is JSONArray) {
+                                callsign = value.optString(0, "").trim().uppercase()
+                                if (value.length() > 1) {
+                                    name = value.optString(1, "").trim()
+                                }
+                            } else if (value is JSONObject) {
+                                callsign = listOf("callsign", "call_sign", "call", "CALLSIGN", "CALL", "Callsign")
+                                    .firstNotNullOfOrNull { key -> value.opt(key)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } }?.uppercase() ?: ""
+                                name = listOf("name", "fname", "first_name").firstNotNullOfOrNull { key -> value.opt(key)?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" } } ?: ""
+                            } else if (value is String) {
+                                callsign = value.trim().uppercase()
+                            }
+                            if (id.isNotBlank() && (callsign.isNotBlank() || name.isNotBlank())) {
+                                val user = CallbookUser(id, callsign, name)
+                                index[id] = user
+                                id.toLongOrNull()?.let { index[it.toString()] = user }
+                                count++
+                            }
                         }
                     }
                 } else {
