@@ -2808,8 +2808,6 @@ usrpAGC = -20,10,100
             # and is not our own active local Web TX (self-echo suppression)
             decoded_pcm = b""
             data_type = traffic.get("data_type", 1)
-            if self.direct_dmr and data_type in (0, 2):
-                self.direct_dmr.reset_rx_state()
             if not is_local_origin and data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
@@ -2991,8 +2989,6 @@ usrpAGC = -20,10,100
             # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
             decoded_pcm = b""
             data_type = traffic.get("data_type", 1)
-            if self.direct_dmr and data_type in (0, 2):
-                self.direct_dmr.reset_rx_state()
             if data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])

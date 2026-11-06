@@ -113,9 +113,6 @@ export default function DashboardPage() {
   const activeTxRef = useRef(activeTx);
   useEffect(() => {
     activeTxRef.current = activeTx;
-    if (!activeTx) {
-      rxNextTimeRef.current = 0;
-    }
   }, [activeTx]);
 
   const rxSuspendedQueueRef = useRef<AudioRxData[]>([]);
@@ -142,14 +139,9 @@ export default function DashboardPage() {
       }
 
       const now = ctx.currentTime;
-      const isBurstStart = !rxNextTimeRef.current || rxNextTimeRef.current < now;
-      if (isBurstStart) {
+      if (!rxNextTimeRef.current || rxNextTimeRef.current < now) {
         rxNextTimeRef.current = now + 0.15;
-        const attackLen = Math.min(4, Math.floor(float32.length / 4));
-        for (let i = 0; i < attackLen; i++) {
-          float32[i] *= (i / attackLen);
-        }
-      } else if (rxNextTimeRef.current > now + 0.45) {
+      } else if (rxNextTimeRef.current > now + 0.85) {
         rxNextTimeRef.current = now + 0.15;
       }
 
