@@ -96,7 +96,14 @@ def load_room_mappings():
     return mappings
 
 def get_mumble_sqlite_path():
-    for p in ["/mumble_data/mumble-server.sqlite", "/data/mumble-server.sqlite"]:
+    for p in [
+        "/mumble_data/mumble-server.sqlite",
+        "/mumble_data/murmur.sqlite",
+        "/mumble_data/mumble.sqlite",
+        "/data/mumble-server.sqlite",
+        "/data/murmur.sqlite",
+        "/data/mumble.sqlite"
+    ]:
         if os.path.exists(p):
             return p
     return None
@@ -133,72 +140,147 @@ def sync_channels_direct_sqlite():
     except Exception as e:
         logger.debug(f"Direct SQLite channel sync error: {e}")
 
+def _murmur_tls_exec(action: str, **kwargs):
+    """Direct, reliable TLS connection to Murmur as SuperUser.
+    Avoids pymumble thread deadlocks on su.stop().
+    Supported actions:
+      - 'list_channels': returns list of dicts [{'id': int, 'name': str, 'parent': int}]
+      - 'create_channel': kwargs name: str, parent: int
+      - 'delete_channel': kwargs channel_id: int
+    """
+    import ssl
+    superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    try:
+        raw_s = socket.create_connection((MUMBLE_HOST, MUMBLE_PORT), timeout=3.5)
+        s = ctx.wrap_socket(raw_s)
+
+        # Version (type 0)
+        ver = bytes([0x08, 0x80, 0xca, 0x04, 0x12, 0x05, 0x31, 0x2e, 0x35, 0x2e, 0x30, 0x1a, 0x06, 0x50, 0x79, 0x74, 0x68, 0x6f, 0x6e])
+        s.sendall(struct.pack(">HI", 0, len(ver)) + ver)
+
+        # Authenticate (type 2)
+        user_b = b"SuperUser"
+        pwd_b = superuser_pwd.encode("utf-8")
+        auth = bytes([0x0a, len(user_b)]) + user_b + bytes([0x12, len(pwd_b)]) + pwd_b
+        s.sendall(struct.pack(">HI", 2, len(auth)) + auth)
+
+        if action == "create_channel":
+            name = str(kwargs.get("name", "")).encode("utf-8")
+            parent = int(kwargs.get("parent", 0))
+            if name:
+                # ChannelState (type 7): field 2 (parent, 0x10), field 3 (name, 0x1a), field 8 (temporary, 0x40)
+                cs_body = bytes([0x10, parent, 0x1a, len(name)]) + name + bytes([0x40, 0x00])
+                s.sendall(struct.pack(">HI", 7, len(cs_body)) + cs_body)
+                time.sleep(0.15)
+            s.close()
+            return True
+
+        elif action == "delete_channel":
+            cid = int(kwargs.get("channel_id", 0))
+            if cid > 0:
+                s.settimeout(1.5)
+                while True:
+                    try:
+                        h = s.recv(6)
+                        if len(h) < 6: break
+                        t, l = struct.unpack(">HI", h)
+                        d = b""
+                        while len(d) < l:
+                            c = s.recv(l - len(d))
+                            if not c: break
+                            d += c
+                        if t == 5: break
+                    except socket.timeout:
+                        break
+                # ChannelRemove (type 6): field 1 (0x08), value cid
+                rm_body = bytes([0x08, cid])
+                s.sendall(struct.pack(">HI", 6, len(rm_body)) + rm_body)
+                time.sleep(0.15)
+            s.close()
+            return True
+
+        elif action == "list_channels":
+            chs = []
+            s.settimeout(1.5)
+            try:
+                while True:
+                    h = s.recv(6)
+                    if len(h) < 6: break
+                    t, l = struct.unpack(">HI", h)
+                    d = b""
+                    while len(d) < l:
+                        c = s.recv(l - len(d))
+                        if not c: break
+                        d += c
+                    if t == 7: # ChannelState
+                        cid, parent, name = None, 0, None
+                        idx = 0
+                        while idx < len(d):
+                            tag = d[idx]
+                            fn = tag >> 3
+                            wt = tag & 0x07
+                            idx += 1
+                            if wt == 0:
+                                v, shift = 0, 0
+                                while idx < len(d):
+                                    b = d[idx]
+                                    idx += 1
+                                    v |= (b & 0x7f) << shift
+                                    if not (b & 0x80): break
+                                    shift += 7
+                                if fn == 1: cid = v
+                                elif fn == 2: parent = v
+                            elif wt == 2:
+                                vl = d[idx]
+                                idx += 1
+                                vb = d[idx:idx+vl]
+                                idx += vl
+                                if fn == 3: name = vb.decode("utf-8", errors="ignore")
+                            else:
+                                break
+                        if cid is not None and name and cid != 0:
+                            chs.append({"id": int(cid), "name": str(name), "parent": int(parent)})
+                    elif t == 5: # ServerSync
+                        break
+            except Exception:
+                pass
+            s.close()
+            return chs
+    except Exception as e:
+        logger.debug(f"_murmur_tls_exec error ({action}): {e}")
+        return [] if action == "list_channels" else False
+
 def ensure_channels_created():
-    """Connects as SuperUser to create permanent channels in Murmur and removes channels that were deleted."""
+    """Connects via native TLS as SuperUser to create permanent channels in Murmur and clean up old ones."""
     sync_channels_direct_sqlite()
 
-    import pymumble_py3 as pymumble
-    superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
-    logger.info("Synchronizing Murmur channels as SuperUser...")
+    logger.info("Synchronizing Murmur channels via native Mumble TLS protocol...")
     try:
-        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
-        su.start()
-        # Wait up to 4 seconds for SuperUser connection and ServerSync
-        is_ready = False
-        try:
-            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
-                is_ready = su.ready.wait(timeout=4.0)
-            else:
-                su.is_ready()
-                is_ready = su.is_alive()
-        except Exception:
-            is_ready = False
-
-        if not is_ready or not su.is_alive():
-            logger.warning(f"SuperUser network login could not be confirmed ({MUMBLE_HOST}:{MUMBLE_PORT}). Channels backed by SQLite directly.")
-            try:
-                su.stop()
-            except Exception:
-                pass
-            return
-        time.sleep(0.5)
-
-        existing_chs = {}
-        for ch in list(su.channels.values()):
-            try:
-                cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
-                cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-                if cname and cid is not None and int(cid) != 0:
-                    existing_chs[str(cname)] = int(cid)
-            except Exception:
-                pass
-
+        live_chs = _murmur_tls_exec("list_channels")
+        existing_chs = {ch["name"]: ch["id"] for ch in live_chs}
         logger.info(f"Existing Murmur channels: {list(existing_chs.keys())}")
 
         # 1. Create channels defined in ROOM_MAPPINGS that do not yet exist
         for room_name, tg_val in ROOM_MAPPINGS.items():
             if room_name not in existing_chs:
-                try:
-                    su.channels.new_channel(0, room_name, temporary=False)
-                    logger.info(f"✓ SuperUser created permanent Mumble Room: '{room_name}' (TG {tg_val})")
-                    time.sleep(0.3)
-                except Exception as ce:
-                    logger.warning(f"Could not create channel '{room_name}': {ce}")
+                _murmur_tls_exec("create_channel", name=room_name, parent=0)
+                logger.info(f"✓ SuperUser created permanent Mumble Room: '{room_name}' (TG {tg_val})")
+                time.sleep(0.1)
 
         # 2. Delete channels from Murmur that were removed from ROOM_MAPPINGS
         if os.path.exists(CONFIG_PATH):
             for ex_name, ex_id in list(existing_chs.items()):
                 if ex_name not in ROOM_MAPPINGS and ex_id != 0:
-                    try:
-                        su.channels.remove_channel(ex_id)
-                        logger.info(f"✓ SuperUser removed decommissioned room '{ex_name}' (ID: {ex_id}) from Murmur")
-                        time.sleep(0.3)
-                    except Exception as de:
-                        logger.warning(f"Could not remove channel '{ex_name}': {de}")
+                    _murmur_tls_exec("delete_channel", channel_id=ex_id)
+                    logger.info(f"✓ SuperUser removed decommissioned room '{ex_name}' (ID: {ex_id}) from Murmur")
+                    time.sleep(0.1)
 
-        su.stop()
-        time.sleep(0.5)
-        persist_live_channels_cache(get_live_murmur_channels())
+        updated_live = _murmur_tls_exec("list_channels")
+        persist_live_channels_cache(updated_live if updated_live else live_chs)
     except Exception as e:
         logger.warning(f"SuperUser channel synchronization error: {e}")
 
@@ -220,7 +302,12 @@ def get_live_murmur_channels():
             if res:
                 return res
 
-    # 2. Try querying Murmur SQLite database directly
+    # 2. Try native TLS query
+    tls_chs = _murmur_tls_exec("list_channels")
+    if tls_chs:
+        return tls_chs
+
+    # 3. Try querying Murmur SQLite database directly
     db_path = get_mumble_sqlite_path()
     if db_path:
         try:
@@ -234,40 +321,7 @@ def get_live_murmur_channels():
         except Exception:
             pass
 
-    # 3. Fallback to connecting as SuperUser
-    try:
-        import pymumble_py3 as pymumble
-        superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
-        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
-        su.start()
-        is_ready = False
-        try:
-            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
-                is_ready = su.ready.wait(timeout=4.0)
-            else:
-                su.is_ready()
-                is_ready = su.is_alive()
-        except Exception:
-            is_ready = False
-        if not is_ready or not su.is_alive():
-            su.stop()
-            return []
-        time.sleep(0.5)
-        res = []
-        for ch in list(su.channels.values()):
-            try:
-                cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
-                cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-                parent = ch["parent"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "parent", 0)
-                if cid is not None and cname and int(cid) != 0:
-                    res.append({"id": int(cid), "name": str(cname), "parent": int(parent)})
-            except Exception:
-                pass
-        su.stop()
-        return res
-    except Exception as e:
-        logger.debug(f"get_live_murmur_channels SuperUser fallback error: {e}")
-        return []
+    return []
 
 def create_murmur_channel(name: str, parent: int = 0) -> bool:
     # 1. Direct SQLite insertion fail-safe
@@ -290,43 +344,11 @@ def create_murmur_channel(name: str, parent: int = 0) -> bool:
         except Exception as se:
             logger.debug(f"SQLite create room note: {se}")
 
-    # 2. Live SuperUser network creation
-    import pymumble_py3 as pymumble
-    superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
-    logger.info(f"Connecting as SuperUser to create channel '{name}' in Murmur...")
-    try:
-        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
-        su.start()
-        is_ready = False
-        try:
-            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
-                is_ready = su.ready.wait(timeout=4.0)
-            else:
-                su.is_ready()
-                is_ready = su.is_alive()
-        except Exception:
-            is_ready = False
-        if not is_ready or not su.is_alive():
-            logger.warning(f"SuperUser not connected for create_murmur_channel '{name}'.")
-            su.stop()
-            return True
-        time.sleep(0.5)
-        exists = False
-        for ch in list(su.channels.values()):
-            cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-            if str(cname) == str(name):
-                exists = True
-                break
-        if not exists:
-            su.channels.new_channel(parent, name, temporary=False)
-            logger.info(f"✓ SuperUser permanently created channel '{name}' in Murmur")
-            time.sleep(0.4)
-        su.stop()
-        time.sleep(0.5)
-        return True
-    except Exception as e:
-        logger.error(f"SuperUser failed to create channel '{name}': {e}")
-        return True
+    # 2. Live SuperUser native TLS creation
+    logger.info(f"Connecting via TLS as SuperUser to create channel '{name}' in Murmur...")
+    res = _murmur_tls_exec("create_channel", name=name, parent=parent)
+    logger.info(f"✓ SuperUser permanently created channel '{name}' in Murmur")
+    return res
 
 def delete_murmur_channel(name_or_id: str) -> bool:
     # 1. Direct SQLite deletion fail-safe
@@ -342,47 +364,16 @@ def delete_murmur_channel(name_or_id: str) -> bool:
         except Exception as se:
             logger.debug(f"SQLite delete room note: {se}")
 
-    # 2. Live SuperUser network removal
-    import pymumble_py3 as pymumble
-    superuser_pwd = os.getenv("MUMBLE_SUPERUSER_PASSWORD", "ninjaradio_admin")
-    logger.info(f"Connecting as SuperUser to delete channel '{name_or_id}' from Murmur...")
-    try:
-        su = pymumble.Mumble(MUMBLE_HOST, "SuperUser", port=MUMBLE_PORT, password=superuser_pwd)
-        su.start()
-        is_ready = False
-        try:
-            if hasattr(su, "ready") and hasattr(su.ready, "wait"):
-                is_ready = su.ready.wait(timeout=4.0)
-            else:
-                su.is_ready()
-                is_ready = su.is_alive()
-        except Exception:
-            is_ready = False
-        if not is_ready or not su.is_alive():
-            logger.warning(f"SuperUser not connected for delete_murmur_channel '{name_or_id}'.")
-            su.stop()
+    # 2. Live SuperUser native TLS removal
+    logger.info(f"Connecting via TLS as SuperUser to delete channel '{name_or_id}' from Murmur...")
+    live_chs = _murmur_tls_exec("list_channels")
+    for ch in live_chs:
+        if str(ch.get("id")) == str(name_or_id) or str(ch.get("name")) == str(name_or_id):
+            cid = ch["id"]
+            _murmur_tls_exec("delete_channel", channel_id=cid)
+            logger.info(f"✓ SuperUser permanently removed channel '{ch.get('name')}' (ID: {cid}) from Murmur")
             return True
-        time.sleep(0.5)
-        deleted = False
-        for ch in list(su.channels.values()):
-            cid = ch["channel_id"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "channel_id", None)
-            cname = ch["name"] if (isinstance(ch, dict) or hasattr(ch, "__getitem__")) else getattr(ch, "name", None)
-            if (str(cid) == str(name_or_id) or str(cname) == str(name_or_id)):
-                if cid is not None and int(cid) != 0:
-                    try:
-                        ch.remove()
-                    except Exception:
-                        su.channels.remove_channel(int(cid))
-                    logger.info(f"✓ SuperUser permanently removed channel '{cname}' (ID: {cid}) from Murmur")
-                    deleted = True
-                    time.sleep(0.4)
-                    break
-        su.stop()
-        time.sleep(0.5)
-        return deleted
-    except Exception as e:
-        logger.error(f"SuperUser failed to delete channel '{name_or_id}': {e}")
-        return True
+    return True
 
 def persist_live_channels_cache(channels):
     cache_path = "/app/data/mumble_live_channels.json"
