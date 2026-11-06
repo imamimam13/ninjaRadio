@@ -1027,22 +1027,11 @@ class MumbleGatewayBot:
                 if len(samples_8k) == 0:
                     return
 
-                # Smooth micro-cosine envelope (16 samples = 2ms) on chunk boundaries to prevent clicks/kresek
-                fade_len = min(16, len(samples_8k) // 4)
-                if fade_len > 0:
-                    ramp = 0.5 * (1.0 - np.cos(np.pi * np.arange(fade_len) / fade_len))
-                    samples_8k[:fade_len] *= ramp
-                    samples_8k[-fade_len:] *= ramp[::-1]
-
-                # High quality upsampling 8kHz -> 48kHz (6x) with smoothing to eliminate aliased harmonics ("sss"/"tt")
+                # High quality upsampling 8kHz -> 48kHz (6x linear interpolation)
                 idx_orig = np.arange(len(samples_8k))
                 idx_target = np.linspace(0, len(samples_8k) - 1, len(samples_8k) * 6)
                 samples_48k_f = np.interp(idx_target, idx_orig, samples_8k)
-
-                # 4-sample moving average smoothing filter on 48kHz to cut ultrasonic images
-                kernel = np.ones(4) / 4.0
-                samples_48k_smooth = np.convolve(samples_48k_f, kernel, mode="same")
-                samples_48k = np.clip(samples_48k_smooth, -32768, 32767).astype(np.int16)
+                samples_48k = np.clip(samples_48k_f, -32768, 32767).astype(np.int16)
 
                 self.mumble.sound_output.add_sound(samples_48k.tobytes())
             except Exception:
@@ -1112,12 +1101,6 @@ class MumbleGatewayBot:
                         n_blocks = len(samples_48k) // 6
                         if n_blocks > 0:
                             samples_8k = samples_48k[:n_blocks * 6].reshape(-1, 6).mean(axis=1)
-                            # Cosine envelope on 20ms boundary to eliminate inter-frame clicks
-                            fade_len = min(8, len(samples_8k) // 4)
-                            if fade_len > 0:
-                                ramp = 0.5 * (1.0 - np.cos(np.pi * np.arange(fade_len) / fade_len))
-                                samples_8k[:fade_len] *= ramp
-                                samples_8k[-fade_len:] *= ramp[::-1]
                             pcm_8k = np.clip(samples_8k, -32768, 32767).astype(np.int16).tobytes()
                         else:
                             pcm_8k = samples_48k[::6].astype(np.int16).tobytes()
@@ -1256,6 +1239,9 @@ def ptt_watchdog_loop(usrp_sock):
                     logger.info(f"[MUMBLE-TX] ⏹️ DIRECT DMR RELEASE from {callsign} ({dmr_id}) -> TG {tg} Slot {slot}")
                 except Exception:
                     pass
+                for b in gateway_pool.values():
+                    b.tx_pcm_buffer.clear()
+                last_mumble_tx = time.time()
                 active_mumble_tx = None
 
 def load_configured_bots():
