@@ -521,12 +521,6 @@ export default function RadioPocketMode() {
     return activeTx;
   }, [activeTx, currentTg.id, callType, privateId, activeProfile]);
 
-  useEffect(() => {
-    if (!relevantActiveTx) {
-      rxNextTimeRef.current = 0;
-    }
-  }, [relevantActiveTx]);
-
   // SMS Modal State
   const [showSmsModal, setShowSmsModal] = useState(false);
   const [smsType, setSmsType] = useState<"group" | "private">("group");
@@ -706,11 +700,7 @@ export default function RadioPocketMode() {
       if (isBurstStart) {
         // 150ms jitter cushion bridges TDMA DMR bursts (60-80ms interval) seamlessly
         rxNextTimeRef.current = now + 0.15;
-        const attackLen = Math.min(4, Math.floor(float32.length / 4));
-        for (let i = 0; i < attackLen; i++) {
-          float32[i] *= (i / attackLen);
-        }
-      } else if (rxNextTimeRef.current > now + 0.45) {
+      } else if (rxNextTimeRef.current > now + 0.85) {
         // Clock drift recovery: bring buffer back to stable 150ms cushion
         rxNextTimeRef.current = now + 0.15;
       }
