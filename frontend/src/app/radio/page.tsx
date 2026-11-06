@@ -571,11 +571,11 @@ export default function RadioPocketMode() {
       if (!rxAudioCtxRef.current) {
         const ctx = new AudioCtx();
 
-        // 1. Communications Low-pass filter (3400 Hz) to eliminate vocoder quantization hiss/scratch ("kresek-kresek")
+        // 1. Communications Low-pass filter (3100 Hz, Q=0.68) to eliminate vocoder quantization hiss/scratch ("kresek-kresek") & harsh "sss"/"tt"
         const lpf = ctx.createBiquadFilter();
         lpf.type = "lowpass";
-        lpf.frequency.value = 3400;
-        lpf.Q.value = 0.707;
+        lpf.frequency.value = 3100;
+        lpf.Q.value = 0.68;
 
         // 2. High-pass filter (250 Hz) to eliminate DC offset and sub-bass rumble
         const hpf = ctx.createBiquadFilter();
@@ -694,8 +694,8 @@ export default function RadioPocketMode() {
         float32[i] = int16[i] / 32768.0;
       }
 
-      // Micro cosine envelope on chunk boundaries (8 samples = 1ms) to prevent boundary clicks/pops
-      const envLen = Math.min(8, Math.floor(float32.length / 4));
+      // Micro cosine envelope on chunk boundaries (16 samples = 2ms) to prevent boundary clicks/kresek
+      const envLen = Math.min(16, Math.floor(float32.length / 4));
       for (let i = 0; i < envLen; i++) {
         const gain = 0.5 * (1 - Math.cos((Math.PI * i) / envLen));
         float32[i] *= gain;

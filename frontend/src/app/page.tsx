@@ -43,11 +43,11 @@ export default function DashboardPage() {
       if (!rxAudioCtxRef.current) {
         const ctx = new AudioCtx();
 
-        // 1. Communications Low-pass filter (3400 Hz) to eliminate vocoder quantization hiss
+        // 1. Communications Low-pass filter (3100 Hz, Q=0.68) to eliminate vocoder quantization hiss & harsh sibilance ("sss"/"tt")
         const lpf = ctx.createBiquadFilter();
         lpf.type = "lowpass";
-        lpf.frequency.value = 3400;
-        lpf.Q.value = 0.707;
+        lpf.frequency.value = 3100;
+        lpf.Q.value = 0.68;
 
         // 2. High-pass filter (250 Hz) to eliminate DC offset and sub-bass rumble
         const hpf = ctx.createBiquadFilter();
@@ -138,8 +138,8 @@ export default function DashboardPage() {
         float32[i] = int16[i] / 32768.0;
       }
 
-      // Micro cosine envelope (8 samples fade-in & fade-out) to eliminate chunk boundary pops
-      const fadeLen = Math.min(8, Math.floor(float32.length / 4));
+      // Micro cosine envelope (16 samples = 2ms) to eliminate chunk boundary pops & kresek
+      const fadeLen = Math.min(16, Math.floor(float32.length / 4));
       for (let i = 0; i < fadeLen; i++) {
         const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
         float32[i] *= factor;
