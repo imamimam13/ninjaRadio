@@ -636,6 +636,8 @@ class DirectDmrEngine:
         # Real-time Telecom Audio Conditioning (300Hz - 3200Hz bandpass)
         self.hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
         self.lpf = BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
+        self.rx_hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
+        self.rx_lpf = BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
 
         # TX State Tracking
         self.in_tx = False
@@ -839,7 +841,27 @@ class DirectDmrEngine:
         return out_packets
 
     def decode_dmr_burst(self, burst_33: bytes) -> bytes:
-        """Decodes 33-byte DMR AMBE burst into 960 bytes of 8kHz 16-bit PCM."""
+        """Decodes 33-byte DMR AMBE burst into 960 bytes of 8kHz 16-bit PCM with telecom filtering."""
         if not burst_33 or len(burst_33) < BURST_BYTES:
             return b""
-        return self.vocoder.decode_burst(burst_33)
+        raw_pcm = self.vocoder.decode_burst(burst_33)
+        if not raw_pcm or len(raw_pcm) < BURST_PCM_BYTES:
+            return raw_pcm
+
+        # Apply telecom de-emphasis / bandpass filter & soft limiter to eliminate harsh "sss", "tt" and vocoder scratch
+        import math
+        samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
+        processed = []
+        for s in samples:
+            # 1. High-pass (300Hz) & Low-pass (3200Hz)
+            f_val = self.rx_lpf.process(self.rx_hpf.process(float(s)))
+            # 2. Transparent soft-knee limiter to prevent digital clipping/kresek on loud voice peaks
+            sign = 1.0 if f_val >= 0 else -1.0
+            x = abs(f_val)
+            if x <= 14000.0:
+                y = x
+            else:
+                y = 14000.0 + 3500.0 * math.tanh((x - 14000.0) / 6000.0)
+            processed.append(int(sign * y))
+
+        return struct.pack("<480h", *processed)

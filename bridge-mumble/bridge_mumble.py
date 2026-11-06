@@ -1023,14 +1023,27 @@ class MumbleGatewayBot:
         if self.mumble and self.mumble.is_alive() and len(pcm_8k) > 0:
             try:
                 self.last_rx_play_time = time.time()
-                # Resample 8kHz 16-bit mono PCM to 48kHz for Mumble Opus encoder
-                samples_8k = np.frombuffer(pcm_8k, dtype=np.int16)
-                # Gentle 1.1x gain cushion to prevent digital distortion
-                samples_8k_f = np.clip(samples_8k.astype(np.float32) * 1.1, -32768, 32767)
-                # Linear interpolation to 48kHz (eliminates harsh vocoder stair-step harmonics)
-                idx_orig = np.arange(len(samples_8k_f))
-                idx_target = np.linspace(0, len(samples_8k_f) - 1, len(samples_8k_f) * 6)
-                samples_48k = np.interp(idx_target, idx_orig, samples_8k_f).astype(np.int16)
+                samples_8k = np.frombuffer(pcm_8k, dtype=np.int16).astype(np.float32)
+                if len(samples_8k) == 0:
+                    return
+
+                # Smooth micro-cosine envelope (16 samples = 2ms) on chunk boundaries to prevent clicks/kresek
+                fade_len = min(16, len(samples_8k) // 4)
+                if fade_len > 0:
+                    ramp = 0.5 * (1.0 - np.cos(np.pi * np.arange(fade_len) / fade_len))
+                    samples_8k[:fade_len] *= ramp
+                    samples_8k[-fade_len:] *= ramp[::-1]
+
+                # High quality upsampling 8kHz -> 48kHz (6x) with smoothing to eliminate aliased harmonics ("sss"/"tt")
+                idx_orig = np.arange(len(samples_8k))
+                idx_target = np.linspace(0, len(samples_8k) - 1, len(samples_8k) * 6)
+                samples_48k_f = np.interp(idx_target, idx_orig, samples_8k)
+
+                # 4-sample moving average smoothing filter on 48kHz to cut ultrasonic images
+                kernel = np.ones(4) / 4.0
+                samples_48k_smooth = np.convolve(samples_48k_f, kernel, mode="same")
+                samples_48k = np.clip(samples_48k_smooth, -32768, 32767).astype(np.int16)
+
                 self.mumble.sound_output.add_sound(samples_48k.tobytes())
             except Exception:
                 pass
@@ -1094,15 +1107,20 @@ class MumbleGatewayBot:
                         return
 
                     try:
-                        # Downsample 48kHz -> 8kHz PCM with anti-aliasing box filter
-                        samples_48k = np.frombuffer(pcm_48k, dtype=np.int16)
+                        # Downsample 48kHz -> 8kHz PCM with smooth anti-aliasing filter
+                        samples_48k = np.frombuffer(pcm_48k, dtype=np.int16).astype(np.float32)
                         n_blocks = len(samples_48k) // 6
                         if n_blocks > 0:
-                            # Averaging each 6-sample block acts as a sinc lowpass filter (cuts ultrasonic aliasing)
-                            samples_8k = samples_48k[:n_blocks * 6].reshape(-1, 6).mean(axis=1).astype(np.int16)
+                            samples_8k = samples_48k[:n_blocks * 6].reshape(-1, 6).mean(axis=1)
+                            # Cosine envelope on 20ms boundary to eliminate inter-frame clicks
+                            fade_len = min(8, len(samples_8k) // 4)
+                            if fade_len > 0:
+                                ramp = 0.5 * (1.0 - np.cos(np.pi * np.arange(fade_len) / fade_len))
+                                samples_8k[:fade_len] *= ramp
+                                samples_8k[-fade_len:] *= ramp[::-1]
+                            pcm_8k = np.clip(samples_8k, -32768, 32767).astype(np.int16).tobytes()
                         else:
-                            samples_8k = samples_48k[::6]
-                        pcm_8k = samples_8k.tobytes()
+                            pcm_8k = samples_48k[::6].astype(np.int16).tobytes()
 
                         # Buffer and send exact 320-byte (20ms) 8kHz mono PCM frames directly to DirectDmrEngine (UDP 32100 NPTT)
                         if not active_mumble_tx:

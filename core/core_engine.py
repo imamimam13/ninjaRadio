@@ -475,8 +475,8 @@ DEFAULT_CONFIG = {
     "tx_pwr": 25,
     "hotspot_port": DMR_MASTER_PORT,
     "hotspot_password": "ninjaradio_pass",
-    "rx_audio_gain": 2.50,
-    "tx_audio_gain": 1.25,
+    "rx_audio_gain": 1.00,
+    "tx_audio_gain": 1.00,
     "peering": []
 }
 
@@ -615,8 +615,8 @@ class DVSwitchCoreManager:
         color_code = int(cfg.get("color_code", 1))
         tx_pwr = int(cfg.get("tx_pwr", 25))
         default_tg = int(cfg.get("default_tg", 510))
-        rx_audio_gain = float(cfg.get("rx_audio_gain", 2.50))
-        tx_audio_gain = float(cfg.get("tx_audio_gain", 1.25))
+        rx_audio_gain = float(cfg.get("rx_audio_gain", 1.00))
+        tx_audio_gain = float(cfg.get("tx_audio_gain", 1.00))
 
         active_peers = [p for p in peers if p.get("isActive") is True]
         self.standalone_mode = len(active_peers) == 0
@@ -1199,8 +1199,8 @@ Send={ambe_rx}
         # 3. Write Analog_Bridge.ini and start Analog_Bridge
         ini_path = f"/app/data/Analog_Bridge_{w_id}.ini"
         log_path = f"/var/log/dvswitch/Analog_Bridge_{w_id}.log"
-        rx_audio_gain = float(self.config.get("rx_audio_gain", 2.50))
-        tx_audio_gain = float(self.config.get("tx_audio_gain", 1.25))
+        rx_audio_gain = float(self.config.get("rx_audio_gain", 1.00))
+        tx_audio_gain = float(self.config.get("tx_audio_gain", 1.00))
         ini_content = f"""; Auto-generated On-Demand Full-Stack Worker for TG {tg} Slot {slot}
 [GENERAL]
 logLevel = 2
