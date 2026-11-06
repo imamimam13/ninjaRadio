@@ -1315,6 +1315,15 @@ async def save_system_config(config: dict):
     except Exception:
         pass
 
+    # Notify mumble-bridge to synchronize channels & bots with Murmur
+    if "mumble_rooms" in config or "mumble_bots" in config:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                await client.post("http://mumble-bridge:12347/sync")
+        except Exception:
+            pass
+
     return {
         "status": "SUCCESS",
         "message": "Konfigurasi server berhasil disimpan dan diterapkan ke Core DMR Engine",
