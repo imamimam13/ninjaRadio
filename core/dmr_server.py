@@ -175,11 +175,11 @@ class HomeBrewMasterServer:
             client["last_slot"] = 1
 
     def is_local_transmission(self, src_id: int) -> bool:
-        """Returns True if the transmission was originated locally within the last 2.5s (Loopback suppression)."""
+        """Returns True if the transmission was originated locally within the last 0.6s (Loopback suppression)."""
         entry = self.active_local_txs.get(src_id)
         if entry:
             ts = entry["time"] if isinstance(entry, dict) else entry
-            if time.time() - ts < 2.5:
+            if time.time() - ts < 0.6:
                 return True
         return False
 

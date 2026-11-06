@@ -451,6 +451,24 @@ class DirectOpenDmrVocoder:
     def is_available(self) -> bool:
         return self._enc is not None and self._dec is not None
 
+    def reset_decoder(self):
+        if self._dec and self.lib and hasattr(self.lib, "opendmr_decoder_reset"):
+            try:
+                self.lib.opendmr_decoder_reset(self._dec)
+            except Exception:
+                pass
+
+    def reset_encoder(self):
+        if self._enc and self.lib and hasattr(self.lib, "opendmr_encoder_reset"):
+            try:
+                self.lib.opendmr_encoder_reset(self._enc)
+            except Exception:
+                pass
+
+    def reset(self):
+        self.reset_encoder()
+        self.reset_decoder()
+
     def encode_frame(self, pcm: bytes) -> bytes:
         if not self._enc or len(pcm) != PCM_BYTES:
             return bytes(FRAME_BYTES)
@@ -683,6 +701,12 @@ class DirectDmrEngine:
                 logger.debug(f"[DirectDMR] Pacer loop note: {e}")
                 time.sleep(0.01)
 
+    def reset_rx_state(self):
+        self.rx_hpf.reset()
+        self.rx_lpf.reset()
+        if self.vocoder.is_available():
+            self.vocoder.reset_decoder()
+
     def _enqueue_paced_pkt(self, pkt: bytes, interval_s: float = 0.060):
         self._pacer_queue.put((pkt, interval_s))
 
@@ -750,6 +774,12 @@ class DirectDmrEngine:
             self.tx_pcm_buffer.clear()
             self.current_burst_seq = 0
             self.current_emblc = None
+            self.hpf.reset()
+            self.lpf.reset()
+            self.rx_hpf.reset()
+            self.rx_lpf.reset()
+            if self.vocoder.is_available():
+                self.vocoder.reset_encoder()
             return out_packets
 
         # PTT Active (Keyed)

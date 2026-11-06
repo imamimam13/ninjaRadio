@@ -2350,7 +2350,7 @@ usrpAGC = -20,10,100
                                 "dst_tg": tg,
                                 "slot": slot,
                                 "callsign": callsign,
-                                "is_tx": False,
+                                "is_tx": True,
                                 "is_transmitting": True,
                                 "data_type": 1,
                                 "payload": pcm_chunk
@@ -2362,6 +2362,10 @@ usrpAGC = -20,10,100
                     else:
                         if session_key in active_tx_sessions:
                             active_tx_sessions.discard(session_key)
+                            self.is_transmitting = False
+                            self.current_tx_tg = 0
+                            self.current_tx_slot = 0
+                            self.current_tx_dmr_id = 0
                             logger.info(f"🎙️ [WebPTT-Ingress] ⏹️ Unkeyed from {addr}: ID {dmr_id} ({callsign}) -> TG {tg} (total frames: {pkt_count})")
                             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                             unkey_usrp = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
@@ -2378,7 +2382,7 @@ usrpAGC = -20,10,100
                                 "dst_tg": tg,
                                 "slot": slot,
                                 "callsign": callsign,
-                                "is_tx": False,
+                                "is_tx": True,
                                 "is_transmitting": False,
                                 "data_type": 2
                             }))
@@ -2804,6 +2808,8 @@ usrpAGC = -20,10,100
             # and is not our own active local Web TX (self-echo suppression)
             decoded_pcm = b""
             data_type = traffic.get("data_type", 1)
+            if self.direct_dmr and data_type in (0, 2):
+                self.direct_dmr.reset_rx_state()
             if not is_local_origin and data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])
@@ -2985,6 +2991,8 @@ usrpAGC = -20,10,100
             # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
             decoded_pcm = b""
             data_type = traffic.get("data_type", 1)
+            if self.direct_dmr and data_type in (0, 2):
+                self.direct_dmr.reset_rx_state()
             if data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33])

@@ -113,6 +113,9 @@ export default function DashboardPage() {
   const activeTxRef = useRef(activeTx);
   useEffect(() => {
     activeTxRef.current = activeTx;
+    if (!activeTx) {
+      rxNextTimeRef.current = 0;
+    }
   }, [activeTx]);
 
   const rxSuspendedQueueRef = useRef<AudioRxData[]>([]);
@@ -138,12 +141,16 @@ export default function DashboardPage() {
         float32[i] = int16[i] / 32768.0;
       }
 
-      // Micro cosine envelope (16 samples = 2ms) to eliminate chunk boundary pops & kresek
-      const fadeLen = Math.min(16, Math.floor(float32.length / 4));
-      for (let i = 0; i < fadeLen; i++) {
-        const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
-        float32[i] *= factor;
-        float32[float32.length - 1 - i] *= factor;
+      const now = ctx.currentTime;
+      const isBurstStart = !rxNextTimeRef.current || rxNextTimeRef.current < now;
+      if (isBurstStart) {
+        rxNextTimeRef.current = now + 0.15;
+        const attackLen = Math.min(4, Math.floor(float32.length / 4));
+        for (let i = 0; i < attackLen; i++) {
+          float32[i] *= (i / attackLen);
+        }
+      } else if (rxNextTimeRef.current > now + 0.45) {
+        rxNextTimeRef.current = now + 0.15;
       }
 
       const audioBuffer = ctx.createBuffer(1, float32.length, 8000);
@@ -155,13 +162,6 @@ export default function DashboardPage() {
         source.connect(rxInputNodeRef.current);
       } else {
         source.connect(ctx.destination);
-      }
-
-      const now = ctx.currentTime;
-      if (!rxNextTimeRef.current || rxNextTimeRef.current < now) {
-        rxNextTimeRef.current = now + 0.15;
-      } else if (rxNextTimeRef.current > now + 0.85) {
-        rxNextTimeRef.current = now + 0.15;
       }
       source.start(rxNextTimeRef.current);
       rxNextTimeRef.current += audioBuffer.duration;
