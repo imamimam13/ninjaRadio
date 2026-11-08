@@ -1004,7 +1004,7 @@ async def run_stream_watchdog():
 
             for stream_key, info in stale_keys:
                 ACTIVE_STREAMS.pop(stream_key, None)
-                await manager.update_tx_state(None)
+                await manager.update_stream(stream_key, None)
 
                 start_ts = info.get("start_time", now - 3.0)
                 dur = round(max(0.5, now - start_ts), 1)
@@ -1124,10 +1124,11 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         }
         ACTIVE_STREAMS[stream_key] = tx_data
 
+        tx_data["stream_key"] = stream_key
         # Throttle TX_STATE_CHANGE to avoid flooding WebSockets 50x per sec (prevents React re-render lag)
         if is_new_stream or (now - last_broadcast > 0.5):
             tx_data["last_broadcast"] = now
-            await manager.update_tx_state(tx_data)
+            await manager.update_stream(stream_key, tx_data)
 
         # Broadcast live audio chunk to web clients if payload present and NOT outgoing TX
         payload_b64 = event.get("payload_b64")
@@ -1153,8 +1154,8 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
 
     # Voice Terminator (Call Ended)
     elif data_type == 2:
-        await manager.update_tx_state(None)
         cached = ACTIVE_STREAMS.pop(stream_key, None)
+        await manager.update_stream(stream_key, None)
         now = time.time()
         start_ts = cached.get("start_time", now - 3.5) if cached else (now - 3.5)
         dur = round(max(0.5, now - start_ts), 1)

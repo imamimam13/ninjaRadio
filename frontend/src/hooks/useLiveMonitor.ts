@@ -66,6 +66,7 @@ export function registerAudioRxListener(listener: AudioRxListener) {
 export function useLiveMonitor() {
   const [lastHeard, setLastHeard] = useState<LastHeardEntry[]>([]);
   const [activeTx, setActiveTx] = useState<ActiveTransmission | null>(null);
+  const [activeTxList, setActiveTxList] = useState<ActiveTransmission[]>([]);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -112,8 +113,22 @@ export function useLiveMonitor() {
             if (message.type === "INITIAL_STATE") {
               setLastHeard(message.data.last_heard || []);
               setActiveTx(message.data.current_tx || null);
+              setActiveTxList(
+                Array.isArray(message.data.active_tx_list)
+                  ? message.data.active_tx_list
+                  : message.data.current_tx
+                  ? [message.data.current_tx]
+                  : []
+              );
             } else if (message.type === "TX_STATE_CHANGE") {
               setActiveTx(message.data);
+              if (Array.isArray(message.active_tx_list)) {
+                setActiveTxList(message.active_tx_list);
+              } else if (message.data) {
+                setActiveTxList([message.data]);
+              } else {
+                setActiveTxList([]);
+              }
             } else if (message.type === "LAST_HEARD_UPDATE") {
               setLastHeard((prev) => [message.data, ...prev.slice(0, 49)]);
             } else if (message.type === "AUDIO_RX") {
@@ -187,6 +202,7 @@ export function useLiveMonitor() {
   return {
     lastHeard,
     activeTx,
+    activeTxList,
     incomingAudio: null as AudioRxData | null,
     sendJson,
     isConnected,

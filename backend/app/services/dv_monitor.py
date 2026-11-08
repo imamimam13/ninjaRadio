@@ -22,6 +22,13 @@ class ConnectionManager:
         self.client_sessions: Dict[WebSocket, Dict] = {}
         self.last_heard_history: List[Dict] = []
         self.current_tx: Dict = None
+        self.active_streams: Dict[str, Dict] = {}
+
+    def get_active_tx_list(self) -> List[Dict]:
+        """Returns all active transmissions ordered chronologically: first transmit stays at top, newer appear below."""
+        streams = list(self.active_streams.values())
+        streams.sort(key=lambda s: s.get("start_time", 0.0))
+        return streams
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -61,11 +68,13 @@ class ConnectionManager:
         }
 
         # Send initial state
+        active_list = self.get_active_tx_list()
         await websocket.send_json({
             "type": "INITIAL_STATE",
             "data": {
                 "last_heard": self.last_heard_history,
-                "current_tx": self.current_tx
+                "current_tx": self.current_tx,
+                "active_tx_list": active_list
             }
         })
 
@@ -104,12 +113,33 @@ class ConnectionManager:
             "data": item
         })
 
-    async def update_tx_state(self, tx_data: Dict = None):
-        self.current_tx = tx_data
+    async def update_stream(self, stream_key: str, stream_data: Dict = None):
+        """Updates or removes a single stream without disrupting other concurrent transmissions."""
+        if stream_data is None:
+            self.active_streams.pop(stream_key, None)
+        else:
+            self.active_streams[stream_key] = stream_data
+
+        active_list = self.get_active_tx_list()
+        self.current_tx = active_list[0] if active_list else None
         await self.broadcast({
             "type": "TX_STATE_CHANGE",
-            "data": tx_data
+            "data": self.current_tx,
+            "active_tx_list": active_list
         })
+
+    async def update_tx_state(self, tx_data: Dict = None):
+        if tx_data is None:
+            self.active_streams.clear()
+            self.current_tx = None
+            await self.broadcast({
+                "type": "TX_STATE_CHANGE",
+                "data": None,
+                "active_tx_list": []
+            })
+        else:
+            s_key = tx_data.get("stream_key") or tx_data.get("id") or "default_stream"
+            await self.update_stream(s_key, tx_data)
 
 manager = ConnectionManager()
 

@@ -83,7 +83,7 @@ interface SmsItem {
 }
 
 export default function RadioPocketMode() {
-  const { activeTx, isConnected, incomingAudio, sendJson } = useLiveMonitor();
+  const { activeTx, activeTxList, isConnected, incomingAudio, sendJson } = useLiveMonitor();
 
   // UI Display Mode: Standard 2.4" Cyberdeck Touchscreen vs 1.8" Rugged PoC Radio
   const [deviceSkin, setDeviceSkin] = useState<"standard" | "poc18">("standard");
@@ -492,34 +492,33 @@ export default function RadioPocketMode() {
   const [showDialer, setShowDialer] = useState(false);
   const [dialInput, setDialInput] = useState("");
 
-  // Filter incoming active transmission to only match the tuned Talkgroup & profile constraints
+  // Filter incoming active transmission to match the tuned Talkgroup from multi-stream list
   const relevantActiveTx = useMemo(() => {
-    if (!activeTx) return null;
-
-    // Parrot echo (TG 9990) is always allowed and relevant if dialed/active
-    if (activeTx.talkgroup === 9990 || activeTx.callsign === "PARROT") {
-      return activeTx;
-    }
+    const list = Array.isArray(activeTxList) && activeTxList.length > 0 ? activeTxList : (activeTx ? [activeTx] : []);
+    if (list.length === 0) return null;
 
     const currentChannelTg = callType === "private" ? Number(privateId) : currentTg.id;
 
-    // Condition 1: Must match the currently selected / tuned Talkgroup
-    if (Number(activeTx.talkgroup) !== currentChannelTg) {
-      return null;
-    }
+    // First priority: Parrot echo (TG 9990)
+    const parrot = list.find((t) => t.talkgroup === 9990 || t.callsign === "PARROT");
+    if (parrot) return parrot;
 
-    // Condition 2: Must be within profile's allowed talkgroups constraint (if profile has constraints)
-    if (
-      !activeProfile.isMonitorOnly &&
-      Array.isArray(activeProfile.allowedTalkgroups) &&
-      activeProfile.allowedTalkgroups.length > 0 &&
-      !activeProfile.allowedTalkgroups.includes(Number(activeTx.talkgroup))
-    ) {
-      return null;
-    }
+    // Second priority: Stream matching the tuned Talkgroup
+    const matched = list.find((t) => {
+      if (Number(t.talkgroup) !== currentChannelTg) return false;
+      if (
+        !activeProfile.isMonitorOnly &&
+        Array.isArray(activeProfile.allowedTalkgroups) &&
+        activeProfile.allowedTalkgroups.length > 0 &&
+        !activeProfile.allowedTalkgroups.includes(Number(t.talkgroup))
+      ) {
+        return false;
+      }
+      return true;
+    });
 
-    return activeTx;
-  }, [activeTx, currentTg.id, callType, privateId, activeProfile]);
+    return matched || null;
+  }, [activeTxList, activeTx, currentTg.id, callType, privateId, activeProfile]);
 
   // SMS Modal State
   const [showSmsModal, setShowSmsModal] = useState(false);
