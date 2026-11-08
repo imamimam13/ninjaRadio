@@ -99,20 +99,32 @@ class AppSettingsStore(context: Context) {
         }
 
     // -- Audio & DSP Settings --
-    private val _rxVolume = mutableFloatStateOf(prefs.getFloat(KEY_RX_VOLUME, 1.0f))
+    private val _rxVolume = mutableFloatStateOf(
+        run {
+            val v = prefs.getFloat(KEY_RX_VOLUME, 2.2f)
+            if (v < 1.3f) 2.2f else v
+        }
+    )
     var rxVolume: Float
         get() = _rxVolume.floatValue
         set(value) {
             _rxVolume.floatValue = value
             prefs.edit().putFloat(KEY_RX_VOLUME, value).apply()
+            com.ninjadmr.app.DmrForegroundService.updateAudioGains(_micGain.floatValue, value)
         }
 
-    private val _micGain = mutableFloatStateOf(prefs.getFloat(KEY_MIC_GAIN, 1.0f))
+    private val _micGain = mutableFloatStateOf(
+        run {
+            val m = prefs.getFloat(KEY_MIC_GAIN, 4.0f)
+            if (m < 1.5f) 4.0f else m
+        }
+    )
     var micGain: Float
         get() = _micGain.floatValue
         set(value) {
             _micGain.floatValue = value
             prefs.edit().putFloat(KEY_MIC_GAIN, value).apply()
+            com.ninjadmr.app.DmrForegroundService.updateAudioGains(value, _rxVolume.floatValue)
         }
 
     private val _agcEnabled = mutableStateOf(prefs.getBoolean(KEY_AGC_ENABLED, true))

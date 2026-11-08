@@ -180,9 +180,9 @@ class HomeBrewClient:
 
         self.slot = int(slot)
 
-        self.rx_freq = str(rx_freq).strip()
+        self.rx_freq = str(rx_freq if rx_freq and str(rx_freq).strip() not in ("0", "000000000") else "145500000").strip()
 
-        self.tx_freq = str(tx_freq).strip()
+        self.tx_freq = str(tx_freq if tx_freq and str(tx_freq).strip() not in ("0", "000000000") else "145500000").strip()
 
         self.color_code = int(color_code)
 
@@ -668,7 +668,10 @@ class HomeBrewClient:
 
         desc = desc_str.ljust(19)[:19].encode("utf-8")
 
-        slots = b"2"
+        slots_val = str(getattr(self, "slots_mode", "3") or "3").strip()
+        if slots_val not in ("2", "3", "4"):
+            slots_val = "3"
+        slots = slots_val[:1].encode("ascii")
 
         url = url_str.ljust(124)[:124].encode("utf-8")
 

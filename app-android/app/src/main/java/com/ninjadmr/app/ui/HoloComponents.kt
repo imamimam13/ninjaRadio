@@ -415,3 +415,67 @@ fun HoloStatusRow(label: String, value: String, modifier: Modifier = Modifier, a
         )
     }
 }
+
+
+@Composable
+fun SettingSliderRow(
+    title: String,
+    subtitle: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    valueText: String,
+    accentColor: Color = Holo.cyan,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp, horizontal = 4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = Holo.textPrimary,
+                    ),
+                )
+                Text(
+                    text = subtitle,
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 8.sp,
+                        color = Holo.textDim,
+                    ),
+                )
+            }
+            Text(
+                text = valueText,
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    color = accentColor,
+                ),
+            )
+        }
+        androidx.compose.material3.Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = accentColor,
+                activeTrackColor = accentColor,
+                inactiveTrackColor = accentColor.copy(alpha = 0.25f),
+            ),
+            modifier = Modifier.fillMaxWidth().height(32.dp),
+        )
+    }
+}

@@ -288,6 +288,183 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <!-- Station Mode / Slot Mode (Repeater / Radio / IP) -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Tipe Stasiun / Slot Mode (Dashboard HBLink):"
+                android:textColor="@color/ninja_amber"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:layout_marginTop="5dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:orientation="horizontal"
+                android:layout_marginTop="2dp">
+
+                <Button
+                    android:id="@+id/btnModeRepeater"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="REPEATER\n(TS1+TS2)"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/ninja_cyan"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="2dp" />
+
+                <Button
+                    android:id="@+id/btnModeRadio"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="RADIO / HT\n(Simplex)"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/ninja_text_dim"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="2dp" />
+
+                <Button
+                    android:id="@+id/btnModeIp"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.9"
+                    android:text="IP NET\n(VoIP)"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/ninja_text_dim"
+                    android:background="@drawable/btn_dpad" />
+            </LinearLayout>
+
+            <!-- Frekuensi Default VHF & Color Code -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="5dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginEnd="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Frekuensi RX (MHz):"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etRxFreq"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/ninja_green"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="numberDecimal"
+                        android:singleLine="true"
+                        android:hint="145.5000"
+                        android:textColorHint="#666666" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginStart="2dp"
+                    android:layout_marginEnd="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Frekuensi TX (MHz):"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etTxFreq"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/ninja_amber"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="numberDecimal"
+                        android:singleLine="true"
+                        android:hint="145.5000"
+                        android:textColorHint="#666666" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="0.6"
+                    android:orientation="vertical"
+                    android:layout_marginStart="2dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="CC:"
+                        android:textColor="@color/ninja_text_dim"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                    <EditText
+                        android:id="@+id/etColorCode"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:background="@drawable/edit_text_bg"
+                        android:textColor="@color/white"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:paddingStart="8dp"
+                        android:inputType="number"
+                        android:singleLine="true"
+                        android:hint="1"
+                        android:text="1"
+                        android:textColorHint="#666666" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Quick Preset Freq Buttons -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:orientation="horizontal"
+                android:layout_marginTop="3dp">
+
+                <Button
+                    android:id="@+id/btnPresetVhf"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="⚡ PRESET VHF: 145.500"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/ninja_green"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="3dp" />
+
+                <Button
+                    android:id="@+id/btnPresetUhf"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="⚡ PRESET UHF: 438.800"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/ninja_amber"
+                    android:background="@drawable/btn_dpad" />
+            </LinearLayout>
+
             <!-- Multi TG / RX Group -->
             <TextView
                 android:layout_width="wrap_content"

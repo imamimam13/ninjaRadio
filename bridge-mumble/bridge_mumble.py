@@ -974,6 +974,15 @@ class MumbleGatewayBot:
         self.thread = None
         self.last_rx_play_time = 0.0
         self.tx_pcm_buffer = bytearray()
+        from ambe_dsp import AmbeAudioConditioner
+        self.tx_conditioner = AmbeAudioConditioner(
+            input_rate=48000,
+            lowcut_hz=300.0,
+            highcut_hz=3300.0,
+            filter_order=5,
+            gate_threshold_rms=160.0,
+            peak_ceiling=24000.0,
+        )
 
     def move_to_channel(self, target_channel_name: str, new_tg: int = None, new_slot: int = None):
         """Moves this bot into another channel in real-time without reconnection."""
@@ -1096,19 +1105,14 @@ class MumbleGatewayBot:
                         return
 
                     try:
-                        # Downsample 48kHz -> 8kHz PCM with smooth anti-aliasing filter
-                        samples_48k = np.frombuffer(pcm_48k, dtype=np.int16).astype(np.float32)
-                        n_blocks = len(samples_48k) // 6
-                        if n_blocks > 0:
-                            samples_8k = samples_48k[:n_blocks * 6].reshape(-1, 6).mean(axis=1)
-                            pcm_8k = np.clip(samples_8k, -32768, 32767).astype(np.int16).tobytes()
-                        else:
-                            pcm_8k = samples_48k[::6].astype(np.int16).tobytes()
-
                         # Buffer and send exact 320-byte (20ms) 8kHz mono PCM frames directly to DirectDmrEngine (UDP 32100 NPTT)
                         if not active_mumble_tx:
                             logger.info(f"[MUMBLE-TX] 🔴 DIRECT DMR TRANSMIT from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg} Slot {self.slot}")
                             self.tx_pcm_buffer.clear()
+                            self.tx_conditioner.reset()
+
+                        # Condition 48kHz Opus PCM -> 8kHz AMBE-ready PCM (Polyphase Resampler + 5th-Order Butterworth BPF + Noise Gate + Peak Limiter)
+                        pcm_8k = self.tx_conditioner.process_frame(pcm_48k, return_bytes=True)
 
                         self.tx_pcm_buffer.extend(pcm_8k)
                         call_bytes = (user_callsign or "MUMBLE").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
@@ -1239,8 +1243,9 @@ def ptt_watchdog_loop(usrp_sock):
                     logger.info(f"[MUMBLE-TX] ⏹️ DIRECT DMR RELEASE from {callsign} ({dmr_id}) -> TG {tg} Slot {slot}")
                 except Exception:
                     pass
-                for b in gateway_pool.values():
+                for b in GATEWAY_POOL.values():
                     b.tx_pcm_buffer.clear()
+                    b.tx_conditioner.reset()
                 last_mumble_tx = time.time()
                 active_mumble_tx = None
 

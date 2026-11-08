@@ -1,6 +1,7 @@
 package com.ninjadmr.lite
 
 import android.Manifest
+import android.animation.ArgbEvaluator
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
 import android.animation.ValueAnimator
@@ -21,6 +22,7 @@ import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -77,6 +79,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private var statusPulseAnimator: ObjectAnimator? = null
+    private var callsignPulseAnimator: ValueAnimator? = null
     private var qsoStartMs: Long = 0L
     private var isQsoActive = false
 
@@ -132,6 +135,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         tvCallsignId = findViewById(R.id.tvCallsignId)
         tvCallsignId.isSelected = true
         tvRxInfo = findViewById(R.id.tvRxInfo)
+        tvRxInfo.isSelected = true
         hudWaveform = findViewById(R.id.hudWaveform)
         hudSmeter = findViewById(R.id.hudSmeter)
         pbVuMeter = findViewById(R.id.pbVuMeter)
@@ -199,11 +203,12 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private fun startStatusPulse(enable: Boolean) {
         statusPulseAnimator?.cancel()
         if (enable) {
-            val alphaHolder = PropertyValuesHolder.ofFloat(View.ALPHA, 1.0f, 0.42f)
+            val alphaHolder = PropertyValuesHolder.ofFloat(View.ALPHA, 1.0f, 0.45f)
             statusPulseAnimator = ObjectAnimator.ofPropertyValuesHolder(tvStatus, alphaHolder).apply {
-                duration = 520L
+                duration = 1100L
                 repeatCount = ValueAnimator.INFINITE
                 repeatMode = ValueAnimator.REVERSE
+                interpolator = AccelerateDecelerateInterpolator()
                 start()
             }
         } else {
@@ -291,7 +296,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         }
 
         btnConnect.setOnLongClickListener {
-            showAudioSettingsDialog()
+            showCockpitSettingsDialog("server")
             true
         }
 
@@ -307,15 +312,15 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         }
 
         findViewById<View>(R.id.layoutTopBar)?.setOnClickListener {
-            showAudioSettingsDialog()
+            showCockpitSettingsDialog("audio")
         }
 
         tvCallsignId.setOnClickListener {
-            showCallbookSettingsDialog()
+            showCockpitSettingsDialog("callbook")
         }
 
         tvCallsignId.setOnLongClickListener {
-            showCallbookSettingsDialog()
+            showCockpitSettingsDialog("callbook")
             true
         }
 
@@ -331,7 +336,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
         btnApps.setOnClickListener {
             animatePress(it)
-            openAllApps()
+            showCockpitAppsDialog()
         }
 
         // PTT Touch Listener
@@ -422,6 +427,25 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         }
     }
 
+    private fun startCallsignPulse(baseColor: Int, glowColor: Int) {
+        callsignPulseAnimator?.cancel()
+        tvCallsignId.scaleX = 1.0f
+        tvCallsignId.scaleY = 1.0f
+        callsignPulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 2400L // 2.4s calm breathing rhythm (no rapid flicker)
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = AccelerateDecelerateInterpolator()
+            val evaluator = ArgbEvaluator()
+            addUpdateListener { anim ->
+                val frac = anim.animatedFraction
+                val color = evaluator.evaluate(frac, baseColor, glowColor) as Int
+                tvCallsignId.setTextColor(color)
+            }
+            start()
+        }
+    }
+
     private fun updateProfileDisplay() {
         val p = profileStore.getActiveProfile()
         val (chNum, totalCh) = profileStore.getActiveChannelIndex()
@@ -435,18 +459,19 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             tvSlot.text = "TS ${p.slot}"
             if (lastHeardDisplay.isNotEmpty()) {
                 tvCallsignId.text = lastHeardDisplay
-                tvCallsignId.setTextColor(Color.parseColor("#38BDF8"))
             } else {
                 tvCallsignId.text = "${p.callsign} (${p.dmrId})"
-                tvCallsignId.setTextColor(Color.parseColor("#F8FAFC"))
             }
+            startCallsignPulse(Color.parseColor("#38BDF8"), Color.parseColor("#BAE6FD"))
+            tvRxInfo.text = "${p.name} · TG ${p.talkgroup} · TS ${p.slot} · STANDBY"
         } else {
             tvChannelBadge.text = "CH--"
             tvProfileName.text = "NINJA DMR"
             tvTg.text = "TG ---"
             tvSlot.text = "TS -"
             tvCallsignId.text = "NOCALL (0)"
-            tvCallsignId.setTextColor(Color.parseColor("#64748B"))
+            startCallsignPulse(Color.parseColor("#64748B"), Color.parseColor("#94A3B8"))
+            tvRxInfo.text = "STANDBY · SIAP MEMANCAR"
         }
     }
 
@@ -679,6 +704,356 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             dialog.dismiss()
         }
 
+        dialog.show()
+    }
+
+    private fun showCockpitAppsDialog() {
+        val view = layoutInflater.inflate(R.layout.dialog_cockpit_apps, null)
+        val dialog = AlertDialog.Builder(this)
+            .setView(view)
+            .create()
+
+        view.findViewById<Button>(R.id.btnAppsClose)?.setOnClickListener {
+            dialog.dismiss()
+        }
+        view.findViewById<Button>(R.id.btnAppCallbook)?.setOnClickListener {
+            dialog.dismiss()
+            showCockpitSettingsDialog("callbook")
+        }
+        view.findViewById<Button>(R.id.btnAppAudio)?.setOnClickListener {
+            dialog.dismiss()
+            showCockpitSettingsDialog("audio")
+        }
+        view.findViewById<Button>(R.id.btnAppCalib)?.setOnClickListener {
+            dialog.dismiss()
+            showPttCalibrationDialog()
+        }
+        view.findViewById<Button>(R.id.btnAppChannels)?.setOnClickListener {
+            dialog.dismiss()
+            openProfiles()
+        }
+        view.findViewById<Button>(R.id.btnAppMoreApp)?.setOnClickListener {
+            dialog.dismiss()
+            openAllApps()
+        }
+
+        dialog.show()
+    }
+
+    private fun showCockpitSettingsDialog(initialTab: String = "server") {
+        val view = layoutInflater.inflate(R.layout.dialog_cockpit_full_conn, null)
+
+        val btnTabServer = view.findViewById<Button>(R.id.btnTabServer)
+        val btnTabAudio = view.findViewById<Button>(R.id.btnTabAudio)
+        val btnTabCallbook = view.findViewById<Button>(R.id.btnTabCallbook)
+        val btnSave = view.findViewById<Button>(R.id.btnCockpitSave)
+
+        val layoutTabServer = view.findViewById<View>(R.id.layoutTabServer)
+        val layoutTabAudio = view.findViewById<View>(R.id.layoutTabAudio)
+        val layoutTabCallbook = view.findViewById<View>(R.id.layoutTabCallbook)
+
+        fun selectTab(tab: String) {
+            when (tab) {
+                "server" -> {
+                    layoutTabServer.visibility = View.VISIBLE
+                    layoutTabAudio.visibility = View.GONE
+                    layoutTabCallbook.visibility = View.GONE
+
+                    btnTabServer.setBackgroundResource(R.drawable.badge_pill)
+                    btnTabServer.setTextColor(Color.WHITE)
+                    btnTabAudio.setBackgroundResource(R.drawable.btn_dpad)
+                    btnTabAudio.setTextColor(Color.parseColor("#94A3B8"))
+                    btnTabCallbook.setBackgroundResource(R.drawable.btn_dpad)
+                    btnTabCallbook.setTextColor(Color.parseColor("#94A3B8"))
+                }
+                "audio" -> {
+                    layoutTabServer.visibility = View.GONE
+                    layoutTabAudio.visibility = View.VISIBLE
+                    layoutTabCallbook.visibility = View.GONE
+
+                    btnTabAudio.setBackgroundResource(R.drawable.badge_pill)
+                    btnTabAudio.setTextColor(Color.WHITE)
+                    btnTabServer.setBackgroundResource(R.drawable.btn_dpad)
+                    btnTabServer.setTextColor(Color.parseColor("#94A3B8"))
+                    btnTabCallbook.setBackgroundResource(R.drawable.btn_dpad)
+                    btnTabCallbook.setTextColor(Color.parseColor("#94A3B8"))
+                }
+                "callbook" -> {
+                    layoutTabServer.visibility = View.GONE
+                    layoutTabAudio.visibility = View.GONE
+                    layoutTabCallbook.visibility = View.VISIBLE
+
+                    btnTabCallbook.setBackgroundResource(R.drawable.badge_pill)
+                    btnTabCallbook.setTextColor(Color.WHITE)
+                    btnTabServer.setBackgroundResource(R.drawable.btn_dpad)
+                    btnTabServer.setTextColor(Color.parseColor("#94A3B8"))
+                    btnTabAudio.setBackgroundResource(R.drawable.btn_dpad)
+                    btnTabAudio.setTextColor(Color.parseColor("#94A3B8"))
+                }
+            }
+        }
+
+        btnTabServer.setOnClickListener { selectTab("server") }
+        btnTabAudio.setOnClickListener { selectTab("audio") }
+        btnTabCallbook.setOnClickListener { selectTab("callbook") }
+
+        // --- TAB 1: SERVER DMR ---
+        val etProfileName = view.findViewById<EditText>(R.id.etProfileName)
+        val etMasterHost = view.findViewById<EditText>(R.id.etMasterHost)
+        val etPort = view.findViewById<EditText>(R.id.etPort)
+        val etPassword = view.findViewById<EditText>(R.id.etPassword)
+        val etCallsign = view.findViewById<EditText>(R.id.etCallsign)
+        val etDmrId = view.findViewById<EditText>(R.id.etDmrId)
+        val etEssid = view.findViewById<EditText>(R.id.etEssid)
+        val etTalkgroup = view.findViewById<EditText>(R.id.etTalkgroup)
+        val btnSlotToggle = view.findViewById<Button>(R.id.btnSlotToggle)
+        val etOptions = view.findViewById<EditText>(R.id.etOptions)
+        val etSubscribedTgs = view.findViewById<EditText>(R.id.etSubscribedTgs)
+        val btnQuickSlotMode = view.findViewById<Button>(R.id.btnQuickSlotMode)
+        val etQuickFreq = view.findViewById<EditText>(R.id.etQuickFreq)
+
+        val activeProfile = profileStore.getActiveProfile()
+        var currentSlot = activeProfile?.slot ?: 2
+        fun updateSlotBtn() {
+            btnSlotToggle.text = "TS $currentSlot"
+        }
+        btnSlotToggle.setOnClickListener {
+            currentSlot = if (currentSlot == 1) 2 else 1
+            updateSlotBtn()
+        }
+
+        var currentSlotMode = activeProfile?.slotMode ?: "3"
+        fun updateSlotModeBtn() {
+            when (currentSlotMode) {
+                "4" -> {
+                    btnQuickSlotMode?.text = "MODE: RADIO (SIMP)"
+                    btnQuickSlotMode?.setTextColor(Color.parseColor("#38BDF8"))
+                }
+                "2" -> {
+                    btnQuickSlotMode?.text = "MODE: IP NETWORK"
+                    btnQuickSlotMode?.setTextColor(Color.parseColor("#F59E0B"))
+                }
+                else -> {
+                    btnQuickSlotMode?.text = "MODE: REPEATER (DUP)"
+                    btnQuickSlotMode?.setTextColor(Color.parseColor("#34D399"))
+                }
+            }
+        }
+        updateSlotModeBtn()
+        btnQuickSlotMode?.setOnClickListener {
+            currentSlotMode = when (currentSlotMode) {
+                "3" -> "4"
+                "4" -> "2"
+                else -> "3"
+            }
+            updateSlotModeBtn()
+        }
+
+        if (activeProfile != null) {
+            etProfileName.setText(activeProfile.name)
+            etMasterHost.setText(activeProfile.host)
+            etPort.setText(activeProfile.port.toString())
+            etPassword.setText(activeProfile.password)
+            etCallsign.setText(activeProfile.callsign)
+            etDmrId.setText(if (activeProfile.dmrId > 0) activeProfile.dmrId.toString() else "")
+            etEssid.setText(activeProfile.essid.toString())
+            etTalkgroup.setText(if (activeProfile.talkgroup > 0) activeProfile.talkgroup.toString() else "")
+            updateSlotBtn()
+            etOptions.setText(activeProfile.options)
+            etSubscribedTgs.setText(activeProfile.rxGroup)
+            etQuickFreq?.setText(if (activeProfile.rxFreq.isNotBlank()) activeProfile.rxFreq else "145.5000")
+        }
+
+        // --- TAB 2: AUDIO & HT ---
+        val tvMic = view.findViewById<TextView>(R.id.tvMicGainVal)
+        val tvSpk = view.findViewById<TextView>(R.id.tvSpkGainVal)
+        val btnMicDown = view.findViewById<Button>(R.id.btnMicDown)
+        val btnMicUp = view.findViewById<Button>(R.id.btnMicUp)
+        val btnSpkDown = view.findViewById<Button>(R.id.btnSpkDown)
+        val btnSpkUp = view.findViewById<Button>(R.id.btnSpkUp)
+        val btnTotCycle = view.findViewById<Button>(R.id.btnTotCycle)
+        val btnVoxToggle = view.findViewById<Button>(R.id.btnVoxToggle)
+        val btnJackPriority = view.findViewById<Button>(R.id.btnJackPriority)
+        val btnChirpToggle = view.findViewById<Button>(R.id.btnChirpToggle)
+        val btnPttModeToggle = view.findViewById<Button>(R.id.btnPttModeToggle)
+
+        var curMic = AudioPreferences.getMicGain(this)
+        var curSpk = AudioPreferences.getSpkGain(this)
+        var chirpOn = AudioPreferences.isNinjaChirpEnabled(this)
+        var pttToggleOn = AudioPreferences.isPttToggle(this)
+        var voxOn = AudioPreferences.isVoxEnabled(this)
+        var headsetPrio = AudioPreferences.isHeadsetPriority(this)
+        var totSec = AudioPreferences.getTotSeconds(this)
+
+        fun updateAudioUi() {
+            tvMic.text = "${(curMic * 100).toInt()}%"
+            tvSpk.text = "${(curSpk * 100).toInt()}%"
+            btnChirpToggle.text = if (chirpOn) "CHIRP: ON" else "CHIRP: OFF"
+            btnChirpToggle.setTextColor(if (chirpOn) Color.parseColor("#34D399") else Color.parseColor("#64748B"))
+            btnVoxToggle.text = if (voxOn) "VOX HT: ON" else "VOX HT: OFF"
+            btnVoxToggle.setTextColor(if (voxOn) Color.parseColor("#34D399") else Color.parseColor("#94A3B8"))
+            btnJackPriority.text = if (headsetPrio) "JACK: PRIORITAS" else "JACK: AUTO"
+            btnJackPriority.setTextColor(if (headsetPrio) Color.parseColor("#38BDF8") else Color.parseColor("#94A3B8"))
+            btnPttModeToggle.text = if (pttToggleOn) "PTT: TOGGLE" else "PTT: HOLD"
+            btnPttModeToggle.setTextColor(if (pttToggleOn) Color.parseColor("#34D399") else Color.parseColor("#38BDF8"))
+            btnTotCycle.text = if (totSec == 0) "TOT: OFF" else "TOT: ${totSec}s"
+            btnTotCycle.setTextColor(if (totSec == 0) Color.parseColor("#94A3B8") else Color.parseColor("#38BDF8"))
+        }
+        updateAudioUi()
+
+        btnMicDown.setOnClickListener {
+            curMic = (curMic - 0.25f).coerceAtLeast(0.1f)
+            updateAudioUi()
+            AudioPreferences.setMicGain(this, curMic)
+            dmrService?.updateAudioSettings()
+        }
+        btnMicUp.setOnClickListener {
+            curMic = (curMic + 0.25f).coerceAtMost(5.0f)
+            updateAudioUi()
+            AudioPreferences.setMicGain(this, curMic)
+            dmrService?.updateAudioSettings()
+        }
+        btnSpkDown.setOnClickListener {
+            curSpk = (curSpk - 0.1f).coerceAtLeast(0.1f)
+            updateAudioUi()
+            AudioPreferences.setSpkGain(this, curSpk)
+            dmrService?.updateAudioSettings()
+        }
+        btnSpkUp.setOnClickListener {
+            curSpk = (curSpk + 0.1f).coerceAtMost(3.0f)
+            updateAudioUi()
+            AudioPreferences.setSpkGain(this, curSpk)
+            dmrService?.updateAudioSettings()
+        }
+        btnTotCycle.setOnClickListener {
+            val list = listOf(0, 30, 60, 90, 120, 180, 240, 300)
+            val idx = list.indexOf(totSec)
+            totSec = list[(idx + 1) % list.size]
+            updateAudioUi()
+            AudioPreferences.setTotSeconds(this, totSec)
+        }
+        btnVoxToggle.setOnClickListener {
+            voxOn = !voxOn
+            updateAudioUi()
+            AudioPreferences.setVoxEnabled(this, voxOn)
+            dmrService?.updateAudioSettings()
+            updateAudioModeIndicator()
+        }
+        btnJackPriority.setOnClickListener {
+            headsetPrio = !headsetPrio
+            updateAudioUi()
+            AudioPreferences.setHeadsetPriority(this, headsetPrio)
+            dmrService?.updateAudioSettings()
+        }
+        btnChirpToggle.setOnClickListener {
+            chirpOn = !chirpOn
+            updateAudioUi()
+            AudioPreferences.setNinjaChirpEnabled(this, chirpOn)
+            if (chirpOn) NinjaAudioFx.playSwordClang(this, force = true)
+        }
+        btnPttModeToggle.setOnClickListener {
+            pttToggleOn = !pttToggleOn
+            updateAudioUi()
+            AudioPreferences.setPttToggle(this, pttToggleOn)
+        }
+
+        // --- TAB 3: CALLBOOK ---
+        val tvCbCount = view.findViewById<TextView>(R.id.tvCbCountVal)
+        val etCbUrl = view.findViewById<EditText>(R.id.etCbUrlInput)
+        val btnCbSync = view.findViewById<Button>(R.id.btnCbSyncNow)
+        val btnCbClear = view.findViewById<Button>(R.id.btnCbClearNow)
+        val tvCbMsg = view.findViewById<TextView>(R.id.tvCbProgressMsg)
+
+        fun refreshCbCount() {
+            val cnt = CallbookManager.count(this)
+            tvCbCount.text = "$cnt stasiun"
+        }
+        refreshCbCount()
+        etCbUrl.setText(CallbookManager.getCustomUrl(this))
+
+        btnCbSync.setOnClickListener {
+            val url = etCbUrl.text.toString().trim()
+            if (url.isEmpty()) {
+                Toast.makeText(this, "Masukkan link Callbook", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            CallbookManager.setCustomUrl(this, url)
+            btnCbSync.isEnabled = false
+            tvCbMsg.text = "Menghubungkan & mengunduh..."
+            CallbookManager.importFromUrl(this, url,
+                onProgress = { p -> runOnUiThread { tvCbMsg.text = p } },
+                onComplete = { count, err ->
+                    runOnUiThread {
+                        btnCbSync.isEnabled = true
+                        if (err != null) {
+                            tvCbMsg.text = "Gagal: $err"
+                            Toast.makeText(this, "Gagal mengunduh: $err", Toast.LENGTH_LONG).show()
+                        } else {
+                            refreshCbCount()
+                            tvCbMsg.text = "✓ Selesai! $count stasiun tersimpan"
+                            Toast.makeText(this, "Selesai! $count stasiun terindeks", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            )
+        }
+
+        btnCbClear.setOnClickListener {
+            CallbookManager.clear(this)
+            refreshCbCount()
+            tvCbMsg.text = "Database dikosongkan"
+            Toast.makeText(this, "Database Callbook dikosongkan", Toast.LENGTH_SHORT).show()
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(view)
+            .create()
+
+        btnSave.setOnClickListener {
+            // Save Server Profile if modified
+            if (activeProfile != null) {
+                val newName = etProfileName.text.toString().trim()
+                if (newName.isNotEmpty()) activeProfile.name = newName
+                val newHost = etMasterHost.text.toString().trim()
+                if (newHost.isNotEmpty()) activeProfile.host = newHost
+                val newPort = etPort.text.toString().trim().toIntOrNull()
+                if (newPort != null && newPort > 0) activeProfile.port = newPort
+                activeProfile.password = etPassword.text.toString().trim()
+                val newCall = etCallsign.text.toString().trim().uppercase()
+                if (newCall.isNotEmpty()) activeProfile.callsign = newCall
+                val newId = etDmrId.text.toString().trim().toIntOrNull()
+                if (newId != null && newId > 0) activeProfile.dmrId = newId
+                val newEssid = etEssid.text.toString().trim().toIntOrNull()
+                if (newEssid != null) activeProfile.essid = newEssid
+                val newTg = etTalkgroup.text.toString().trim().toIntOrNull()
+                if (newTg != null) activeProfile.talkgroup = newTg
+                activeProfile.slot = currentSlot
+                activeProfile.options = etOptions.text.toString().trim()
+                activeProfile.rxGroup = etSubscribedTgs.text.toString().trim()
+                activeProfile.slotMode = currentSlotMode
+                val newFreq = etQuickFreq?.text?.toString()?.trim()?.ifBlank { "145.5000" } ?: "145.5000"
+                activeProfile.rxFreq = newFreq
+                activeProfile.txFreq = newFreq
+
+                profileStore.saveOrUpdateProfile(activeProfile)
+                updateProfileDisplay()
+
+                val s = dmrService
+                if (s != null && s.isConnected) {
+                    s.connectWithProfile(activeProfile)
+                }
+            }
+
+            val cbUrl = etCbUrl.text.toString().trim()
+            if (cbUrl.isNotEmpty()) {
+                CallbookManager.setCustomUrl(this, cbUrl)
+            }
+
+            dialog.dismiss()
+            Toast.makeText(this, "Pengaturan Disimpan", Toast.LENGTH_SHORT).show()
+        }
+
+        selectTab(initialTab)
         dialog.show()
     }
 
@@ -1054,7 +1429,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 tvStatus.text = "● RX"
                 tvStatus.setTextColor(Color.parseColor("#34D399"))
                 tvStatus.setBackgroundResource(R.drawable.badge_status_rx)
-                tvModeBadge.text = "◀ RX ON AIR"
+                tvModeBadge.text = "● RX"
                 tvModeBadge.setTextColor(Color.parseColor("#34D399"))
                 startStatusPulse(true)
                 startQsoTimer("#34D399")
@@ -1070,22 +1445,23 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 val knownCall = selfCall ?: CallbookManager.getCallsign(this, srcId)
 
                 val displayLabel = knownCall ?: "$srcId"
-                lastHeardDisplay = "LH: $displayLabel"
-                tvCallsignId.text = "RX: $displayLabel"
-                tvCallsignId.setTextColor(Color.parseColor("#34D399"))
+                lastHeardDisplay = "$displayLabel"
+                tvCallsignId.text = "$displayLabel"
+                startCallsignPulse(Color.parseColor("#10B981"), Color.parseColor("#A7F3D0"))
                 animatePop(tvCallsignId)
-                tvRxInfo.text = if (knownCall != null) "RX ID: $srcId · SUARA MASUK" else "MENCARI CALLSIGN ($srcId)..."
+                val targetTg = if (talkgroup > 0) talkgroup else (p?.talkgroup ?: 0)
+                tvRxInfo.text = if (knownCall != null) "RX ID: $srcId · TG $targetTg · SUARA MASUK" else "MENCARI CALLSIGN ($srcId)..."
                 tvRxInfo.setTextColor(Color.parseColor("#34D399"))
 
                 if (knownCall == null) {
                     CallbookManager.resolveAsync(this, srcId) { resolved ->
-                        lastHeardDisplay = "LH: $resolved"
+                        lastHeardDisplay = "$resolved"
                         if (dmrService?.isRx == true && dmrService?.currentRxSrc == srcId) {
-                            tvCallsignId.text = "RX: $resolved"
-                            tvRxInfo.text = "RX ID: $srcId · SUARA MASUK"
+                            tvCallsignId.text = "$resolved"
+                            tvRxInfo.text = "RX ID: $srcId · TG $targetTg · SUARA MASUK"
                         } else if (dmrService?.isTx != true) {
-                            tvCallsignId.text = "LH: $resolved"
-                            tvCallsignId.setTextColor(Color.parseColor("#38BDF8"))
+                            tvCallsignId.text = "$resolved"
+                            startCallsignPulse(Color.parseColor("#38BDF8"), Color.parseColor("#BAE6FD"))
                         }
                     }
                 }
@@ -1101,7 +1477,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                     tvStatus.text = "● ONLINE"
                     tvStatus.setTextColor(Color.parseColor("#34D399"))
                     tvStatus.setBackgroundResource(R.drawable.badge_status_online)
-                    tvModeBadge.text = "STANDBY"
+                    tvModeBadge.text = "STBY"
                     tvModeBadge.setTextColor(Color.parseColor("#38BDF8"))
                 }
                 val p = profileStore.getActiveProfile()
@@ -1111,10 +1487,10 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 }
                 if (lastHeardDisplay.isNotEmpty()) {
                     tvCallsignId.text = lastHeardDisplay
-                    tvCallsignId.setTextColor(Color.parseColor("#38BDF8"))
                 } else {
                     updateProfileDisplay()
                 }
+                startCallsignPulse(Color.parseColor("#38BDF8"), Color.parseColor("#BAE6FD"))
                 tvRxInfo.text = "STANDBY · SIAP MEMANCAR"
                 tvRxInfo.setTextColor(Color.parseColor("#64748B"))
                 pbVuMeter.progress = 0
@@ -1129,7 +1505,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 tvStatus.text = "● TX"
                 tvStatus.setTextColor(Color.parseColor("#F43F5E"))
                 tvStatus.setBackgroundResource(R.drawable.badge_status_tx)
-                tvModeBadge.text = "▲ TX ON AIR"
+                tvModeBadge.text = "🔥 TX"
                 tvModeBadge.setTextColor(Color.parseColor("#F43F5E"))
                 tvTg.setTextColor(Color.parseColor("#F43F5E"))
                 startStatusPulse(true)
@@ -1138,10 +1514,10 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
                 val p = profileStore.getActiveProfile()
                 val call = p?.callsign?.ifBlank { "ME" } ?: "ME"
-                tvCallsignId.text = "TX: $call (${p?.dmrId ?: 0})"
-                tvCallsignId.setTextColor(Color.parseColor("#F43F5E"))
+                tvCallsignId.text = "$call (${p?.dmrId ?: 0})"
+                startCallsignPulse(Color.parseColor("#EF4444"), Color.parseColor("#FEF08A"))
                 animatePop(tvCallsignId)
-                tvRxInfo.text = "TRANSMITTING KE TG ${p?.talkgroup ?: 0}..."
+                tvRxInfo.text = "TRANSMIT KE TG ${p?.talkgroup ?: 0} · MIC AKTIF"
                 tvRxInfo.setTextColor(Color.parseColor("#F43F5E"))
                 btnPtt.setBackgroundResource(R.drawable.btn_ptt_active)
             } else {
@@ -1156,7 +1532,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                     tvStatus.text = "● ONLINE"
                     tvStatus.setTextColor(Color.parseColor("#34D399"))
                     tvStatus.setBackgroundResource(R.drawable.badge_status_online)
-                    tvModeBadge.text = "STANDBY"
+                    tvModeBadge.text = "STBY"
                     tvModeBadge.setTextColor(Color.parseColor("#38BDF8"))
                 }
                 val p = profileStore.getActiveProfile()
@@ -1166,10 +1542,10 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 }
                 if (lastHeardDisplay.isNotEmpty()) {
                     tvCallsignId.text = lastHeardDisplay
-                    tvCallsignId.setTextColor(Color.parseColor("#38BDF8"))
                 } else {
                     updateProfileDisplay()
                 }
+                startCallsignPulse(Color.parseColor("#38BDF8"), Color.parseColor("#BAE6FD"))
                 tvRxInfo.text = "STANDBY · SIAP MEMANCAR"
                 tvRxInfo.setTextColor(Color.parseColor("#64748B"))
                 btnPtt.setBackgroundResource(R.drawable.btn_ptt)

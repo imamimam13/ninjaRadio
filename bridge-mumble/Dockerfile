@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY ambe_dsp.py .
 COPY bridge_mumble.py .
 
 CMD ["python", "-u", "bridge_mumble.py"]

@@ -4,3 +4,5 @@ aiohttp>=3.9.0
 requests>=2.31.0
 bitarray>=2.9.0
 dmr_utils3>=0.1.31
+numpy>=1.24.0
+scipy>=1.11.0
