@@ -2812,12 +2812,12 @@ usrpAGC = -20,10,100
             stream_id = traffic.get("stream_id", 0)
             if not is_local_origin and data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
-                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33], slot=slot, stream_id=stream_id)
+                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33], tg=dst_tg, slot=slot, stream_id=stream_id)
                 except Exception:
                     pass
             elif data_type == 2 and self.direct_dmr:
                 try:
-                    self.direct_dmr.reset_stream_decoder(slot=slot)
+                    self.direct_dmr.reset_stream_decoder(tg=dst_tg, slot=slot)
                 except Exception:
                     pass
 
@@ -2999,12 +2999,12 @@ usrpAGC = -20,10,100
             stream_id = traffic.get("stream_id", 0)
             if data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
-                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33], slot=slot, stream_id=stream_id)
+                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33], tg=dst_tg, slot=slot, stream_id=stream_id)
                 except Exception:
                     pass
             elif data_type == 2 and self.direct_dmr:
                 try:
-                    self.direct_dmr.reset_stream_decoder(slot=slot)
+                    self.direct_dmr.reset_stream_decoder(tg=dst_tg, slot=slot)
                 except Exception:
                     pass
 

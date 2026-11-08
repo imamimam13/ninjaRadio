@@ -941,11 +941,11 @@ class DirectDmrEngine:
 
         return out_packets
 
-    def decode_dmr_burst(self, burst_33: bytes, slot: int = 2, stream_id: int = 0) -> bytes:
+    def decode_dmr_burst(self, burst_33: bytes, tg: int = 0, slot: int = 2, stream_id: int = 0) -> bytes:
         """Decodes 33-byte DMR AMBE burst into 960 bytes of 8kHz 16-bit PCM with telecom filtering."""
         if not burst_33 or len(burst_33) < BURST_BYTES:
             return b""
-        stream_key = f"slot_{slot}"
+        stream_key = f"tg_{tg}_ts_{slot}" if tg > 0 else f"slot_{slot}"
         raw_pcm = self.vocoder.decode_burst(burst_33, stream_key=stream_key)
         if not raw_pcm or len(raw_pcm) < BURST_PCM_BYTES:
             return raw_pcm
@@ -977,8 +977,8 @@ class DirectDmrEngine:
 
         return struct.pack("<480h", *processed)
 
-    def reset_stream_decoder(self, slot: int = 2):
-        stream_key = f"slot_{slot}"
+    def reset_stream_decoder(self, tg: int = 0, slot: int = 2):
+        stream_key = f"tg_{tg}_ts_{slot}" if tg > 0 else f"slot_{slot}"
         self.vocoder.reset_stream_decoder(stream_key)
         if hasattr(self, "_rx_filters") and stream_key in self._rx_filters:
             hpf, lpf = self._rx_filters[stream_key]
