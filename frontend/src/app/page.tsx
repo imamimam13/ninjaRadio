@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 
 export default function DashboardPage() {
-  const { lastHeard, activeTx, incomingAudio, isConnected } = useLiveMonitor();
+  const { lastHeard, activeTx, activeTxList, incomingAudio, isConnected } = useLiveMonitor();
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const rxAudioCtxRef = useRef<AudioContext | null>(null);
   const rxInputNodeRef = useRef<AudioNode | null>(null);
@@ -289,132 +289,163 @@ export default function DashboardPage() {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-4 py-4 space-y-4">
         
-        {/* Active Transmission Flight Deck Banner (Live RX Monitor) */}
-        {activeTx ? (
-          <div className="relative overflow-hidden bg-gradient-to-r from-emerald-950/90 via-[#0a121e] to-slate-950 border-2 border-emerald-500/80 rounded-2xl p-4 sm:p-6 shadow-[0_0_30px_rgba(16,185,129,0.25)] animate-pulse">
-            <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
-            
-            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative z-10">
-              {/* Left Info */}
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center shadow-[0_0_20px_rgba(52,211,153,0.4)]">
-                  <Radio className="w-8 h-8 text-emerald-400 animate-bounce" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded bg-emerald-400 text-slate-950 font-heading font-black text-xs uppercase tracking-wider shadow-sm">
-                      ● LIVE RX • TRANSMITTING
-                    </span>
-                    <span className="text-xs text-emerald-300 font-mono font-bold px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-800">
-                      {activeTx.mode}
-                    </span>
-                    <span className="text-xs text-cyan-400 font-mono">
-                      SLOT {activeTx.slot}
-                    </span>
-                    <button
-                      onClick={() => {
-                        ensureAudioUnlocked();
-                        setIsMuted(!isMuted);
-                      }}
-                      className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
-                        isMuted 
-                          ? "bg-rose-950/80 border border-rose-500/50 text-rose-300 hover:bg-rose-900" 
-                          : "bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900 shadow-[0_0_10px_rgba(6,182,212,0.3)]"
+        {/* Active Transmissions Flight Deck (Multi-RX Stack: TG A on top, TG B below it, etc.) */}
+        {activeTxList && activeTxList.length > 0 ? (
+          <div className="space-y-3">
+            {activeTxList.map((tx, idx) => (
+              <div
+                key={tx.id || `${tx.dmr_id}_${tx.talkgroup}_${tx.slot}`}
+                className={`relative overflow-hidden rounded-2xl p-4 sm:p-5 transition-all duration-300 border-2 shadow-lg ${
+                  idx === 0
+                    ? "bg-gradient-to-r from-emerald-950/90 via-[#0a121e] to-slate-950 border-emerald-500/80 shadow-[0_0_25px_rgba(16,185,129,0.22)]"
+                    : "bg-gradient-to-r from-cyan-950/85 via-[#09101b] to-slate-950 border-cyan-500/70 shadow-[0_0_20px_rgba(6,182,212,0.18)]"
+                }`}
+              >
+                <div
+                  className={`absolute top-0 right-0 w-80 h-80 rounded-full blur-3xl pointer-events-none ${
+                    idx === 0 ? "bg-emerald-500/10" : "bg-cyan-500/10"
+                  }`}
+                />
+                
+                <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5 relative z-10">
+                  {/* Left Info */}
+                  <div className="flex items-center gap-4">
+                    <div
+                      className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl border-2 flex items-center justify-center shrink-0 ${
+                        idx === 0
+                          ? "bg-emerald-500/20 border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.35)]"
+                          : "bg-cyan-500/20 border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.35)]"
                       }`}
-                      title="Klik untuk Mute / Unmute Audio Live RX di Speaker Browser"
                     >
-                      {isMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />}
-                      <span>{isMuted ? "SPEAKER: MUTE" : "SPEAKER: ON"}</span>
-                    </button>
+                      <Radio
+                        className={`w-7 h-7 sm:w-8 sm:h-8 ${
+                          idx === 0 ? "text-emerald-400 animate-bounce" : "text-cyan-400 animate-pulse"
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`px-2.5 py-0.5 rounded font-heading font-black text-[11px] sm:text-xs uppercase tracking-wider shadow-sm ${
+                            idx === 0
+                              ? "bg-emerald-400 text-slate-950"
+                              : "bg-cyan-400 text-slate-950"
+                          }`}
+                        >
+                          ● RX #{idx + 1} • TRANSMITTING
+                        </span>
+                        <span className="text-xs text-slate-200 font-mono font-bold px-2 py-0.5 rounded bg-slate-900/90 border border-slate-700">
+                          {tx.mode}
+                        </span>
+                        <span className="text-xs text-cyan-300 font-mono">
+                          SLOT {tx.slot}
+                        </span>
+                        <button
+                          onClick={() => {
+                            ensureAudioUnlocked();
+                            setIsMuted(!isMuted);
+                          }}
+                          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
+                            isMuted 
+                              ? "bg-rose-950/80 border border-rose-500/50 text-rose-300 hover:bg-rose-900" 
+                              : "bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900 shadow-[0_0_10px_rgba(6,182,212,0.3)]"
+                          }`}
+                          title="Klik untuk Mute / Unmute Audio Live RX di Speaker Browser"
+                        >
+                          {isMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />}
+                          <span>{isMuted ? "SPEAKER: MUTE" : "SPEAKER: ON"}</span>
+                        </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const newTg = selectedTgFilter === activeTx.talkgroup ? null : activeTx.talkgroup;
-                        setSelectedTgFilter(newTg);
-                        if (newTg) {
-                          beepPlayer?.playTalkGrant();
-                        } else {
-                          beepPlayer?.playRogerBeep();
-                        }
-                      }}
-                      className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all cursor-pointer ${
-                        selectedTgFilter === activeTx.talkgroup
-                          ? "bg-amber-950/80 border border-amber-500/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.35)]"
-                          : "bg-slate-900/80 border border-slate-700 text-slate-300 hover:text-cyan-300 hover:border-cyan-600"
-                      }`}
-                      title={
-                        selectedTgFilter === activeTx.talkgroup
-                          ? "Audio saat ini terkunci di TG ini. Klik untuk membuka kunci (dengarkan semua TG)."
-                          : `Kunci audio hanya pada TG ${activeTx.talkgroup}`
-                      }
-                    >
-                      <span>{selectedTgFilter === activeTx.talkgroup ? "🔒 LOCK TG ACTIVE" : "🔓 LOCK TG"}</span>
-                    </button>
-                  </div>
-                  <div className="flex items-baseline gap-3 mt-1.5">
-                    <h2 className="text-3xl sm:text-4xl font-heading font-black text-white tracking-wider">
-                      {activeTx.callsign}
-                    </h2>
-                    <span className="text-base font-medium text-slate-300 hidden sm:inline">
-                      {activeTx.name}
-                    </span>
-                  </div>
-                  <div className="text-xs font-mono text-emerald-400/90 mt-1 flex items-center gap-3">
-                    <span>DMR ID: {activeTx.dmr_id}</span>
-                    <span>•</span>
-                    <span>RSSI: <strong className="text-emerald-300 font-bold">{activeTx.rssi}</strong></span>
-                    <span>•</span>
-                    <span>LOSS: <strong className="text-emerald-300 font-bold">{activeTx.loss || "0.0%"}</strong></span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Visualizer & TG Target */}
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6 w-full lg:w-auto justify-between border-t lg:border-t-0 border-emerald-800/40 pt-3 lg:pt-0">
-                <div className="text-left sm:text-right">
-                  <div className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-bold">Target Route</div>
-                  <div className="text-xl sm:text-2xl font-mono font-black text-cyan-300 glow-cyan">
-                    TG {activeTx.talkgroup}
-                  </div>
-                  <div className="text-xs font-medium text-slate-300">
-                    {activeTx.tg_name}
-                  </div>
-                </div>
-
-                <div className="w-full sm:w-64 bg-slate-950/70 p-2.5 rounded-xl border border-emerald-800/60 shadow-inner">
-                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1.5">
-                    <span>RF SPECTRUM</span>
-                    <div className="flex gap-1">
-                      <button 
-                        onClick={() => setVizMode("oscilloscope")} 
-                        className={`px-1.5 py-0.5 rounded text-[9px] ${vizMode === "oscilloscope" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"}`}
-                      >
-                        OSC
-                      </button>
-                      <button 
-                        onClick={() => setVizMode("smeter")} 
-                        className={`px-1.5 py-0.5 rounded text-[9px] ${vizMode === "smeter" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"}`}
-                      >
-                        S-MTR
-                      </button>
-                      <button 
-                        onClick={() => setVizMode("bars")} 
-                        className={`px-1.5 py-0.5 rounded text-[9px] ${vizMode === "bars" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"}`}
-                      >
-                        VU
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newTg = selectedTgFilter === tx.talkgroup ? null : tx.talkgroup;
+                            setSelectedTgFilter(newTg);
+                            if (newTg) {
+                              beepPlayer?.playTalkGrant();
+                            } else {
+                              beepPlayer?.playRogerBeep();
+                            }
+                          }}
+                          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                            selectedTgFilter === tx.talkgroup
+                              ? "bg-amber-950/80 border border-amber-500/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.35)]"
+                              : "bg-slate-900/80 border border-slate-700 text-slate-300 hover:text-cyan-300 hover:border-cyan-600"
+                          }`}
+                          title={
+                            selectedTgFilter === tx.talkgroup
+                              ? "Audio saat ini terkunci di TG ini. Klik untuk membuka kunci (dengarkan semua TG)."
+                              : `Kunci audio hanya pada TG ${tx.talkgroup}`
+                          }
+                        >
+                          <span>{selectedTgFilter === tx.talkgroup ? `🔒 LOCK TG ${tx.talkgroup}` : "🔓 LOCK TG"}</span>
+                        </button>
+                      </div>
+                      <div className="flex items-baseline gap-3 mt-1.5">
+                        <h2 className="text-2xl sm:text-4xl font-heading font-black text-white tracking-wider">
+                          {tx.callsign}
+                        </h2>
+                        <span className="text-sm sm:text-base font-medium text-slate-300 hidden sm:inline">
+                          {tx.name}
+                        </span>
+                      </div>
+                      <div className="text-xs font-mono text-emerald-400/90 mt-1 flex items-center gap-3">
+                        <span>DMR ID: {tx.dmr_id}</span>
+                        <span>•</span>
+                        <span>RSSI: <strong className="text-emerald-300 font-bold">{tx.rssi}</strong></span>
+                        <span>•</span>
+                        <span>LOSS: <strong className="text-emerald-300 font-bold">{tx.loss || "0.0%"}</strong></span>
+                      </div>
                     </div>
                   </div>
-                  <AudioVisualizer 
-                    isActive={true} 
-                    mode={vizMode} 
-                    color="bg-emerald-400" 
-                    barsCount={16} 
-                  />
+
+                  {/* Right Visualizer & TG Target */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5 w-full lg:w-auto justify-between border-t lg:border-t-0 border-slate-800/60 pt-3 lg:pt-0">
+                    <div className="text-left sm:text-right">
+                      <div className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-bold">Target Route</div>
+                      <div className={`text-xl sm:text-2xl font-mono font-black ${idx === 0 ? "text-cyan-300 glow-cyan" : "text-emerald-300"}`}>
+                        TG {tx.talkgroup}
+                      </div>
+                      <div className="text-xs font-medium text-slate-300">
+                        {tx.tg_name}
+                      </div>
+                    </div>
+
+                    <div className="w-full sm:w-64 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800 shadow-inner">
+                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1.5">
+                        <span>RF SPECTRUM</span>
+                        <div className="flex gap-1">
+                          <button 
+                            onClick={() => setVizMode("oscilloscope")} 
+                            className={`px-1.5 py-0.5 rounded text-[9px] ${vizMode === "oscilloscope" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"}`}
+                          >
+                            OSC
+                          </button>
+                          <button 
+                            onClick={() => setVizMode("smeter")} 
+                            className={`px-1.5 py-0.5 rounded text-[9px] ${vizMode === "smeter" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"}`}
+                          >
+                            S-MTR
+                          </button>
+                          <button 
+                            onClick={() => setVizMode("bars")} 
+                            className={`px-1.5 py-0.5 rounded text-[9px] ${vizMode === "bars" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"}`}
+                          >
+                            VU
+                          </button>
+                        </div>
+                      </div>
+                      <AudioVisualizer 
+                        isActive={true} 
+                        mode={vizMode} 
+                        color={idx === 0 ? "bg-emerald-400" : "bg-cyan-400"} 
+                        barsCount={16} 
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+            ))}
           </div>
         ) : (
           <div className="bg-[#0b121e]/90 border border-cyan-900/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
