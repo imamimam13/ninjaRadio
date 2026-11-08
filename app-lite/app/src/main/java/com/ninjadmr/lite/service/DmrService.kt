@@ -252,7 +252,11 @@ class DmrService : Service(), HbpClient.Callback {
             hardware = profile.hardware,
             description = profile.description,
             slot = profile.slot,
-            talkgroup = profile.talkgroup
+            talkgroup = profile.talkgroup,
+            slotMode = profile.slotMode,
+            rxFreq = profile.rxFreq,
+            txFreq = profile.txFreq,
+            colorCode = profile.colorCode
         )
         client = hbp
         hbp.start()

@@ -415,7 +415,7 @@ class DmrSession:
 
             self._tx_burst = 0
 
-            self._tx_warmup = 2  # prime the encoder; first frames are quiet
+            self._tx_warmup = 0  # Instant audio: no initial muted frames
 
             self._tx_in_call = True
 

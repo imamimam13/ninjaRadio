@@ -651,7 +651,16 @@ class DirectDmrEngine:
         self.broadcast_fn = dmr_master_broadcast_fn
         self.rpt_id = rpt_id
 
-        # Real-time Telecom Audio Conditioning (300Hz - 3200Hz bandpass)
+        # Real-time Telecom Audio Conditioning (300Hz - 3300Hz 5th-order Butterworth BPF + Noise Gate + Peak Limiter)
+        from ambe_dsp import AmbeAudioConditioner
+        self.tx_conditioner = AmbeAudioConditioner(
+            input_rate=8000,
+            lowcut_hz=300.0,
+            highcut_hz=3300.0,
+            filter_order=5,
+            gate_threshold_rms=150.0,
+            peak_ceiling=24000.0,
+        )
         self.hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
         self.lpf = BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
         self.rx_hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
@@ -737,6 +746,7 @@ class DirectDmrEngine:
                     else:
                         burst_pcm = bytes(self.tx_pcm_buffer).ljust(BURST_PCM_BYTES, b"\x00")
                         self.tx_pcm_buffer.clear()
+                    burst_pcm = self.tx_conditioner.process_frame(burst_pcm, return_bytes=True)
                     burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                     pkt = build_dmrd_packet(
                         src_id=self.current_src_id,
@@ -774,6 +784,7 @@ class DirectDmrEngine:
             self.tx_pcm_buffer.clear()
             self.current_burst_seq = 0
             self.current_emblc = None
+            self.tx_conditioner.reset()
             self.hpf.reset()
             self.lpf.reset()
             self.rx_hpf.reset()
@@ -794,6 +805,7 @@ class DirectDmrEngine:
             self.current_src_id = clean_dmr_id
             self.current_callsign = callsign
             self.tx_pcm_buffer.clear()
+            self.tx_conditioner.reset()
             self.hpf.reset()
             self.lpf.reset()
             self.current_emblc = build_dmr_emblc_fragments(self.current_src_id, self.current_tg)
@@ -831,24 +843,18 @@ class DirectDmrEngine:
                 burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
                 del self.tx_pcm_buffer[:BURST_PCM_BYTES]
 
-                # Professional Broadcast Telecom DSP:
-                # 1. 300Hz HPF: eliminates mic thumps, room rumble, and boomy bass resonance ("membulat")
-                # 2. 3200Hz LPF: eliminates aliasing foldback, piercing sibilance, and harsh noise ("menyelekit")
-                # 3. Sample-by-sample smooth soft-knee limiter: prevents digital clipping without frame gain pumping
-                raw_samples = struct.unpack("<480h", burst_pcm)
-                processed = []
-                for s in raw_samples:
-                    f_val = self.lpf.process(self.hpf.process(float(s)))
-                    sign = 1.0 if f_val >= 0 else -1.0
-                    x = abs(f_val)
-                    if x <= 12000.0:
-                        y = x
-                    else:
-                        y = 12000.0 + 3800.0 * math.tanh((x - 12000.0) / 6000.0)
-                    processed.append(int(sign * y))
-
-                burst_pcm = struct.pack("<480h", *processed)
-                peak = max(abs(p) for p in processed)
+                # AMBE+2 Mastering DSP Conditioning Pipeline (AmbeAudioConditioner):
+                # 1. 5th-order Butterworth Band-Pass (300Hz - 3300Hz): strips proximity bass & high-freq hiss
+                # 2. RMS Noise Gate (Squelch): zeros out room floor to prevent AMBE digital wind noise
+                # 3. Soft Peak Limiter (24000 ceiling): proportional anti-clipping without waveform distortion
+                conditioned_arr = self.tx_conditioner.process_frame(burst_pcm, return_bytes=False)
+                if hasattr(conditioned_arr, "tobytes"):
+                    burst_pcm = conditioned_arr.tobytes()
+                    peak = int(abs(conditioned_arr).max()) if len(conditioned_arr) > 0 else 0
+                else:
+                    burst_pcm = bytes(conditioned_arr)
+                    raw_samples = struct.unpack("<480h", burst_pcm)
+                    peak = max(abs(p) for p in raw_samples)
 
                 burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                 if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):

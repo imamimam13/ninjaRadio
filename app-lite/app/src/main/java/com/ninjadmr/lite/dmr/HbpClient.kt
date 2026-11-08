@@ -22,7 +22,11 @@ class HbpClient(
     val hardware: String = "Android POC",
     val description: String = "NinjaRadio Lite",
     val slot: Int = 2,
-    val talkgroup: Int = 0
+    val talkgroup: Int = 0,
+    val slotMode: String = "3",
+    val rxFreq: String = "145.5000",
+    val txFreq: String = "145.5000",
+    val colorCode: Int = 1
 ) {
     companion object {
         private const val TAG = "HbpClient"
@@ -284,24 +288,46 @@ class HbpClient(
         return true
     }
 
+    private fun parseFreqToHz(freqStr: String, defaultMhz: Double): Long {
+        val clean = freqStr.trim().replace(",", ".")
+        val d = clean.toDoubleOrNull() ?: defaultMhz
+        return if (d > 1_000_000) {
+            d.toLong()
+        } else {
+            (d * 1_000_000).toLong()
+        }
+    }
+
     private fun configPacket(): ByteArray {
         val cleanCall = callsign.ifBlank { "NOCALL" }.uppercase()
         val locStr = location.ifBlank { "Mobile, ID" }
-        val descStr = description.ifBlank { "NinjaDMR" }
-        val softStr = software.ifBlank { "HBLinkAndroid" }
-        val pkgStr = hardware.ifBlank { "HBLinkClient-1.2" }
+        val descStr = description.ifBlank { "NinjaRadio" }
+        val softStr = if (software.isNotBlank() && software != "NinjaRadio Lite") software else "20260911_WPSD"
+        val pkgStr = if (hardware.isNotBlank() && hardware != "Android POC") hardware else "MMDVM_MMDVM_HS_Hat"
+
+        val rxHz = parseFreqToHz(rxFreq, 145.5000)
+        val txHz = parseFreqToHz(txFreq, 145.5000)
+        val rxFreqStr = String.format(java.util.Locale.US, "%09d", rxHz)
+        val txFreqStr = String.format(java.util.Locale.US, "%09d", txHz)
+        val ccStr = String.format(java.util.Locale.US, "%02d", colorCode.coerceIn(1, 15))
+        val modeChar = when (slotMode.trim()) {
+            "3" -> '3' // Duplex Repeater
+            "2" -> '2' // IP Network
+            else -> '4' // Simplex Radio / Hotspot (default)
+        }
+
         return Dmr.ascii("RPTC") + id +
                 Dmr.pad(cleanCall, 8, ' ') +
-                Dmr.pad("000000000", 9, '0') +
-                Dmr.pad("000000000", 9, '0') +
+                Dmr.pad(rxFreqStr, 9, '0') +
+                Dmr.pad(txFreqStr, 9, '0') +
                 Dmr.pad("01", 2, '0') +
-                Dmr.pad("01", 2, '0') +
+                Dmr.pad(ccStr, 2, '0') +
                 Dmr.pad("-06.2088", 8, ' ') +
                 Dmr.pad("+106.8450", 9, ' ') +
                 Dmr.pad("050", 3, '0') +
                 Dmr.pad(locStr, 20, ' ') +
                 Dmr.pad(descStr, 19, ' ') +
-                Dmr.pad("2", 1, ' ') +
+                Dmr.pad(modeChar.toString(), 1, ' ') +
                 Dmr.pad("https://ninjadmr.app", 124, ' ') +
                 Dmr.pad(softStr, 40, ' ') +
                 Dmr.pad(pkgStr, 40, ' ')

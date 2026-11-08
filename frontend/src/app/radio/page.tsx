@@ -852,25 +852,37 @@ export default function RadioPocketMode() {
       const source = ctx.createMediaStreamSource(stream);
       txSourceNodeRef.current = source;
 
-      // 1. High-pass filter (300 Hz): Eliminates microphone plosives, room rumble, CTCSS tones, and DC bias
-      const hpf = ctx.createBiquadFilter();
-      hpf.type = "highpass";
-      hpf.frequency.value = 300;
-      hpf.Q.value = 0.707;
+      // 1. Cascaded 4th-Order Butterworth High-Pass Filter (300 Hz): Strips proximity bass, plosives, CTCSS & DC bias
+      const hpf1 = ctx.createBiquadFilter();
+      hpf1.type = "highpass";
+      hpf1.frequency.value = 300;
+      hpf1.Q.value = 0.541196;
 
-      // 2. Low-pass anti-aliasing filter (3400 Hz): Cuts frequencies above Nyquist before 8kHz downsampling
-      const lpf = ctx.createBiquadFilter();
-      lpf.type = "lowpass";
-      lpf.frequency.value = 3400;
-      lpf.Q.value = 0.707;
+      const hpf2 = ctx.createBiquadFilter();
+      hpf2.type = "highpass";
+      hpf2.frequency.value = 300;
+      hpf2.Q.value = 1.306563;
 
-      source.connect(hpf);
-      hpf.connect(lpf);
+      // 2. Cascaded 4th-Order Butterworth Low-Pass Filter (3300 Hz): Strips high-frequency hiss & prevents aliasing foldback
+      const lpf1 = ctx.createBiquadFilter();
+      lpf1.type = "lowpass";
+      lpf1.frequency.value = 3300;
+      lpf1.Q.value = 0.541196;
+
+      const lpf2 = ctx.createBiquadFilter();
+      lpf2.type = "lowpass";
+      lpf2.frequency.value = 3300;
+      lpf2.Q.value = 1.306563;
+
+      source.connect(hpf1);
+      hpf1.connect(hpf2);
+      hpf2.connect(lpf1);
+      lpf1.connect(lpf2);
 
       const bufferSize = ctx.sampleRate <= 16000 ? 512 : 1024;
       const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
       txProcessorRef.current = processor;
-      lpf.connect(processor);
+      lpf2.connect(processor);
 
       processor.onaudioprocess = (e) => {
         if (!isTxRef.current) return;
@@ -878,28 +890,62 @@ export default function RadioPocketMode() {
         const sampleRateRatio = ctx.sampleRate / 8000;
         const targetLen = Math.floor(inputData.length / sampleRateRatio);
 
-        // High-fidelity linear interpolation resampler (eliminates robotic quantization artifacts)
+        // Polyphase-style anti-aliased decimation (trapezoidal integration across decimation kernel)
         const newSamples: number[] = new Array(targetLen);
         for (let i = 0; i < targetLen; i++) {
-          const origPos = i * sampleRateRatio;
-          const idx0 = Math.floor(origPos);
-          const idx1 = Math.min(idx0 + 1, inputData.length - 1);
-          const frac = origPos - idx0;
-          const s = inputData[idx0] * (1 - frac) + inputData[idx1] * frac;
-          newSamples[i] = Math.max(-1, Math.min(1, s));
+          const startPos = i * sampleRateRatio;
+          const endPos = (i + 1) * sampleRateRatio;
+          const idxStart = Math.floor(startPos);
+          const idxEnd = Math.min(Math.floor(endPos), inputData.length - 1);
+          if (idxStart === idxEnd) {
+            const idxNext = Math.min(idxStart + 1, inputData.length - 1);
+            const frac = startPos - idxStart;
+            newSamples[i] = inputData[idxStart] * (1 - frac) + inputData[idxNext] * frac;
+          } else {
+            let sum = 0;
+            let weightSum = 0;
+            const wFirst = 1 - (startPos - idxStart);
+            sum += inputData[idxStart] * wFirst;
+            weightSum += wFirst;
+            for (let k = idxStart + 1; k < idxEnd; k++) {
+              sum += inputData[k];
+              weightSum += 1;
+            }
+            const wLast = endPos - idxEnd;
+            if (wLast > 0 && idxEnd < inputData.length) {
+              sum += inputData[idxEnd] * wLast;
+              weightSum += wLast;
+            }
+            const s = weightSum > 0 ? sum / weightSum : inputData[idxStart];
+            newSamples[i] = Math.max(-1, Math.min(1, s));
+          }
         }
 
         // Accumulate samples and dispatch ONLY exact 160-sample (20ms / 320-byte) frames
         txAccumulatorRef.current.push(...newSamples);
 
-        const MIC_BOOST = isCableGatewayActive ? cableGain : 1.25; // Clean natural speech pre-amp without digital clipping
+        const MIC_BOOST = isCableGatewayActive ? cableGain : 1.25;
+        const GATE_RMS_THRESHOLD = 150.0; // Squelch quiet room floor to absolute silence
+        const PEAK_CEILING = 24000.0;     // Safe AMBE+2 dynamic ceiling (prevents clipping)
         while (txAccumulatorRef.current.length >= 160) {
           const frame = txAccumulatorRef.current.splice(0, 160);
           const pcm16 = new Int16Array(160);
+          const scaled = new Float32Array(160);
+          let sumSq = 0;
+          let peak = 0;
           for (let i = 0; i < 160; i++) {
-            const boosted = frame[i] * MIC_BOOST;
-            const clamped = boosted > 1 ? 1 : (boosted < -1 ? -1 : boosted);
-            pcm16[i] = clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7FFF);
+            const s = frame[i] * MIC_BOOST * 32767.0;
+            scaled[i] = s;
+            sumSq += s * s;
+            const absS = Math.abs(s);
+            if (absS > peak) peak = absS;
+          }
+          const rms = Math.sqrt(sumSq / 160);
+          if (rms >= GATE_RMS_THRESHOLD) {
+            const limiterScale = peak > PEAK_CEILING ? PEAK_CEILING / peak : 1.0;
+            for (let i = 0; i < 160; i++) {
+              pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(scaled[i] * limiterScale)));
+            }
           }
 
           const uint8 = new Uint8Array(pcm16.buffer);

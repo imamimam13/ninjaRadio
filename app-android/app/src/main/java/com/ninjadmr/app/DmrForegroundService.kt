@@ -117,6 +117,12 @@ class DmrForegroundService : Service() {
         const val EXTRA_SOFTWARE = "software"
         const val EXTRA_DESCRIPTION = "description"
 
+        @Volatile var activeInstance: DmrForegroundService? = null
+
+        fun updateAudioGains(mic: Float, spk: Float) {
+            activeInstance?.audio?.setGains(mic, spk)
+        }
+
     }
 
 
@@ -169,7 +175,7 @@ class DmrForegroundService : Service() {
 
     private val txQueue = ArrayBlockingQueue<ByteArray>(32)
 
-    private val ambeVocoder: AmbeVocoder = AmbeVocoders.create()
+    private var ambeVocoder: AmbeVocoder = AmbeVocoders.create()
     private val txAmbeQueue = ArrayList<ByteArray>()
     private var txVseq = 0
     private var txCall: DmrCall? = null
@@ -312,8 +318,10 @@ class DmrForegroundService : Service() {
     }
 
     override fun onCreate() {
-
         super.onCreate()
+        activeInstance = this
+
+        ambeVocoder = AmbeVocoders.get(this)
 
         contactsStore = com.ninjadmr.app.contacts.ContactsStore(this)
         callbookStore = com.ninjadmr.app.contacts.CallbookStore(this)
@@ -422,10 +430,8 @@ class DmrForegroundService : Service() {
             if (down) {
                 setPtt(true)
             } else {
-                // Debounce release by 150ms to ignore hardware key chatter / contact bounce
-                val r = Runnable { setPtt(false) }
-                pttReleaseRunnable = r
-                pttHandler.postDelayed(r, 150)
+                // Instant release without 150ms delay for zero-latency unkey
+                setPtt(false)
             }
         }
     }
@@ -440,15 +446,12 @@ class DmrForegroundService : Service() {
     }
 
     fun setPtt(enabled: Boolean) {
-
         if (enabled && !running) return
-
         if (ptt == enabled) return
 
         ptt = enabled
 
         if (enabled) {
-
             pttHandler.removeCallbacks(totRunnable)
             val totSec = com.ninjadmr.app.config.AppSettingsStore(this).totSeconds
             if (totSec > 0) {
@@ -459,33 +462,30 @@ class DmrForegroundService : Service() {
             ambeVocoder.resetEncoder()
             txVseq = 0
             synchronized(txAmbeQueue) { txAmbeQueue.clear() }
+            txQueue.clear()
             val srcNum = currentDmrId.filter { it.isDigit() }.toIntOrNull() ?: 1022057
             val tgNum = currentTalkgroup.toIntOrNull() ?: 1025
             txCall = DmrCall(src = srcNum, dst = tgNum, colorCode = 1)
 
-            NinjaAudioFx.playSwordClang(this)
+            // Start audio capture IMMEDIATELY so initial voice is never clipped!
+            if (audio?.isCapturing() != true) {
+                audio?.startCapture()
+            }
 
             try {
-
                 PyBridge.startCall(this)
-
             } catch (exc: Exception) {
-
                 AppLog.add("startCall failed: ${exc.message}")
-
             }
 
-            if (audio?.isCapturing() != true) {
-
-                audio?.startCapture()
-
-            }
+            NinjaAudioFx.playSwordClang(this)
 
             AppLog.add("PTT down — transmitting on TG $currentTalkgroup (Native AMBE=${ambeVocoder.available})")
-
         } else {
             pttHandler.removeCallbacks(totRunnable)
-            NinjaAudioFx.playShuriken(this)
+            // Drop any queued unencoded PCM immediately so transmitter terminates on time
+            txQueue.clear()
+
             synchronized(txAmbeQueue) {
                 if (txAmbeQueue.isNotEmpty()) {
                     while (txAmbeQueue.size < 3) {
@@ -507,18 +507,19 @@ class DmrForegroundService : Service() {
                     }
                 }
             }
+
+            // Immediately send Call Terminator over the wire
             try {
                 PyBridge.endCall(this)
             } catch (exc: Exception) {
                 AppLog.add("endCall failed: ${exc.message}")
             }
             txCall = null
+            NinjaAudioFx.playShuriken(this)
             AppLog.add("PTT up")
-
         }
 
         updateNotification()
-
     }
 
 
@@ -720,9 +721,10 @@ class DmrForegroundService : Service() {
                 AppLog.add("Session error: ${status["error"]}")
             }
 
+            ambeVocoder = AmbeVocoders.get(this)
             if (ambeVocoder.available) {
-                vocoder = "Native AMBE+2"
-                AppLog.add("vocoder: Native AMBE+2 (DVSI libambe.so) active")
+                vocoder = "MD380 DSP (Hardware ROM)"
+                AppLog.add("vocoder: MD380 DSP (Hardware ROM) active - crystal clear 8kHz")
             } else {
                 status["vocoder"]?.let { voc ->
                     vocoder = voc
@@ -773,6 +775,11 @@ class DmrForegroundService : Service() {
             onError = { msg -> AppLog.add("audio: $msg"); statusLine = msg },
 
         )
+
+        val prefs = com.ninjadmr.app.config.AppSettingsStore(this)
+        val mic = prefs.micGain.coerceIn(0.5f, 10.0f)
+        val spk = prefs.rxVolume.coerceIn(0.5f, 5.0f)
+        engine.setGains(mic, spk)
 
         engine.startPlayback()
 
@@ -890,13 +897,18 @@ class DmrForegroundService : Service() {
                     rxCount++
                     busy = true
                     if (ambeVocoder.available) {
-                        val subframes = Dmr.extractAmbe(rawBurst)
-                        val burstPcm = ShortArray(subframes.size * 160)
-                        for (i in subframes.indices) {
-                            val pcm = ambeVocoder.decode(subframes[i])
-                            System.arraycopy(pcm, 0, burstPcm, i * 160, 160)
+                        val burstPcm = ambeVocoder.decode(rawBurst)
+                        if (burstPcm.isNotEmpty()) {
+                            audio?.play(burstPcm)
+                        } else {
+                            val subframes = Dmr.extractAmbe(rawBurst)
+                            val pcmAll = ShortArray(subframes.size * 160)
+                            for (i in subframes.indices) {
+                                val pcm = ambeVocoder.decode(subframes[i])
+                                System.arraycopy(pcm, 0, pcmAll, i * 160, 160)
+                            }
+                            audio?.play(pcmAll)
                         }
-                        audio?.play(burstPcm)
                     }
                 }
 
@@ -1011,7 +1023,11 @@ class DmrForegroundService : Service() {
 
                     }
 
-                    snap["vocoder"]?.let { if (it != vocoder) vocoder = it }
+                    if (!ambeVocoder.available) {
+                        snap["vocoder"]?.let { if (it != vocoder) vocoder = it }
+                    } else {
+                        vocoder = "MD380 DSP (Hardware ROM)"
+                    }
 
                 }
 
@@ -1272,7 +1288,7 @@ class DmrForegroundService : Service() {
 
 
     override fun onDestroy() {
-
+        if (activeInstance == this) activeInstance = null
         stopSession()
 
         unregisterPttBroadcastReceiver()

@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/card_lcd"
+    android:padding="3dp">
+
+    <!-- Title Bar with Close -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="22dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="2dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚙ APPS &amp; UTILITIES"
+            android:textColor="@color/ninja_amber"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnAppsClose"
+            android:layout_width="45dp"
+            android:layout_height="match_parent"
+            android:text="✕"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_red"
+            android:background="@drawable/btn_dpad" />
+    </LinearLayout>
+
+    <!-- Apps List Buttons (Vertical, compact, touch/dpad friendly) -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="95dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="1dp">
+
+            <!-- 1. Callbook Manager -->
+            <Button
+                android:id="@+id/btnAppCallbook"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:text="📖 CALLBOOK MANAGER (SYNC DB)"
+                android:textColor="@color/ninja_cyan"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:background="@drawable/btn_dpad"
+                android:gravity="center_vertical|start"
+                android:paddingStart="6dp"
+                android:layout_marginBottom="1.5dp" />
+
+            <!-- 2. Audio & Hardware HT -->
+            <Button
+                android:id="@+id/btnAppAudio"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:text="🎛 AUDIO, JACK &amp; TOT HT"
+                android:textColor="@color/ninja_green"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:background="@drawable/btn_dpad"
+                android:gravity="center_vertical|start"
+                android:paddingStart="6dp"
+                android:layout_marginBottom="1.5dp" />
+
+            <!-- 3. Kalibrasi Tombol PTT & Knob -->
+            <Button
+                android:id="@+id/btnAppCalib"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:text="🎯 KALIBRASI TOMBOL PTT &amp; KNOB"
+                android:textColor="@color/ninja_amber"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:background="@drawable/btn_dpad"
+                android:gravity="center_vertical|start"
+                android:paddingStart="6dp"
+                android:layout_marginBottom="1.5dp" />
+
+            <!-- 4. Memory Channels -->
+            <Button
+                android:id="@+id/btnAppChannels"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:text="⚡ DAFTAR PROFIL &amp; CHANNELS"
+                android:textColor="@color/white"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:background="@drawable/btn_dpad"
+                android:gravity="center_vertical|start"
+                android:paddingStart="6dp"
+                android:layout_marginBottom="1.5dp" />
+
+            <!-- 5. More Android Apps -->
+            <Button
+                android:id="@+id/btnAppMoreApp"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:text="📱 MORE ANDROID APPS (LAUNCHER)"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:background="@drawable/btn_dpad"
+                android:gravity="center_vertical|start"
+                android:paddingStart="6dp" />
+
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>

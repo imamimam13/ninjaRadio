@@ -1,0 +1,538 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/card_lcd"
+    android:padding="3dp">
+
+    <!-- Header with 3 Tabs & Save Button -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="22dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="2dp">
+
+        <Button
+            android:id="@+id/btnTabServer"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="1. SERVER"
+            android:textSize="9sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:background="@drawable/badge_pill"
+            android:layout_marginEnd="1dp" />
+
+        <Button
+            android:id="@+id/btnTabAudio"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="2. AUDIO"
+            android:textSize="9sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_text_dim"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginEnd="1dp" />
+
+        <Button
+            android:id="@+id/btnTabCallbook"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.1"
+            android:text="3. CALLBOOK"
+            android:textSize="9sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_text_dim"
+            android:background="@drawable/btn_dpad"
+            android:layout_marginEnd="2dp" />
+
+        <Button
+            android:id="@+id/btnCockpitSave"
+            android:layout_width="52dp"
+            android:layout_height="match_parent"
+            android:text="✓ SIMPAN"
+            android:textSize="9sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_green"
+            android:background="@drawable/btn_dpad" />
+    </LinearLayout>
+
+    <!-- Tab 1: SERVER DMR SETTINGS CONTAINER -->
+    <ScrollView
+        android:id="@+id/layoutTabServer"
+        android:layout_width="match_parent"
+        android:layout_height="95dp"
+        android:visibility="visible">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="1dp">
+
+            <!-- Profile Name & Master Host in 2 columns -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="1dp">
+                <EditText
+                    android:id="@+id/etProfileName"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:hint="Nama Profil"
+                    android:textColor="@color/ninja_amber"
+                    android:textColorHint="@color/ninja_text_faint"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp"
+                    android:layout_marginEnd="1dp" />
+                <EditText
+                    android:id="@+id/etMasterHost"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.2"
+                    android:hint="Host / IP"
+                    android:textColor="@color/ninja_cyan"
+                    android:textColorHint="@color/ninja_text_faint"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp" />
+            </LinearLayout>
+
+            <!-- Port & Password -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="1dp">
+                <EditText
+                    android:id="@+id/etPort"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:hint="Port UDP"
+                    android:inputType="number"
+                    android:textColor="@color/white"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp"
+                    android:layout_marginEnd="1dp" />
+                <EditText
+                    android:id="@+id/etPassword"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.2"
+                    android:hint="Password"
+                    android:inputType="textPassword"
+                    android:textColor="@color/white"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp" />
+            </LinearLayout>
+
+            <!-- Callsign, DMR ID & ESSID -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="1dp">
+                <EditText
+                    android:id="@+id/etCallsign"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.1"
+                    android:hint="Callsign"
+                    android:textColor="@color/ninja_cyan"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp"
+                    android:layout_marginEnd="1dp" />
+                <EditText
+                    android:id="@+id/etDmrId"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.2"
+                    android:hint="DMR ID (7d)"
+                    android:inputType="number"
+                    android:textColor="@color/ninja_cyan"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp"
+                    android:layout_marginEnd="1dp" />
+                <EditText
+                    android:id="@+id/etEssid"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.8"
+                    android:hint="ESSID"
+                    android:inputType="number"
+                    android:textColor="@color/ninja_amber"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp" />
+            </LinearLayout>
+
+            <!-- TG, Slot, CC -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="1dp">
+                <EditText
+                    android:id="@+id/etTalkgroup"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.1"
+                    android:hint="TG Aktif"
+                    android:inputType="number"
+                    android:textColor="@color/ninja_green"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp"
+                    android:layout_marginEnd="1dp" />
+                <Button
+                    android:id="@+id/btnSlotToggle"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.9"
+                    android:text="TS 2"
+                    android:textSize="10sp"
+                    android:textColor="@color/ninja_amber"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="1dp" />
+                <EditText
+                    android:id="@+id/etOptions"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.8"
+                    android:hint="Options"
+                    android:textColor="@color/ninja_violet"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp" />
+            </LinearLayout>
+
+            <!-- Subscribed TGs -->
+            <EditText
+                android:id="@+id/etSubscribedTgs"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:hint="Subscribed TGs (pisahkan koma: 5155, 5100, 9990)"
+                android:textColor="@color/ninja_text_primary"
+                android:textColorHint="@color/ninja_text_faint"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:background="@drawable/edit_text_bg"
+                android:paddingStart="4dp" />
+
+            <!-- Station Mode & VHF Freq -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:layout_marginTop="1dp">
+                <Button
+                    android:id="@+id/btnQuickSlotMode"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.2"
+                    android:text="MODE: REPEATER"
+                    android:textSize="9sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/ninja_green"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="1dp" />
+                <EditText
+                    android:id="@+id/etQuickFreq"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:hint="Freq: 145.500"
+                    android:text="145.5000"
+                    android:inputType="numberDecimal"
+                    android:textColor="@color/ninja_cyan"
+                    android:textSize="10sp"
+                    android:singleLine="true"
+                    android:background="@drawable/edit_text_bg"
+                    android:paddingStart="4dp" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Tab 2: AUDIO & HT SETTINGS CONTAINER -->
+    <ScrollView
+        android:id="@+id/layoutTabAudio"
+        android:layout_width="match_parent"
+        android:layout_height="95dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="1dp">
+
+            <!-- Mic Gain Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="1dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="MIC / HT IN:"
+                    android:textColor="@color/ninja_text_primary"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+                <Button
+                    android:id="@+id/btnMicDown"
+                    android:layout_width="26dp"
+                    android:layout_height="match_parent"
+                    android:text="-"
+                    android:textSize="12sp"
+                    android:textColor="@color/ninja_text_primary"
+                    android:background="@drawable/btn_dpad" />
+                <TextView
+                    android:id="@+id/tvMicGainVal"
+                    android:layout_width="44dp"
+                    android:layout_height="wrap_content"
+                    android:text="250%"
+                    android:textColor="@color/ninja_cyan"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:gravity="center" />
+                <Button
+                    android:id="@+id/btnMicUp"
+                    android:layout_width="26dp"
+                    android:layout_height="match_parent"
+                    android:text="+"
+                    android:textSize="12sp"
+                    android:textColor="@color/ninja_cyan"
+                    android:background="@drawable/btn_dpad" />
+            </LinearLayout>
+
+            <!-- Spk Gain Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="1dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="SPK RX OUT:"
+                    android:textColor="@color/ninja_text_primary"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+                <Button
+                    android:id="@+id/btnSpkDown"
+                    android:layout_width="26dp"
+                    android:layout_height="match_parent"
+                    android:text="-"
+                    android:textSize="12sp"
+                    android:textColor="@color/ninja_text_primary"
+                    android:background="@drawable/btn_dpad" />
+                <TextView
+                    android:id="@+id/tvSpkGainVal"
+                    android:layout_width="44dp"
+                    android:layout_height="wrap_content"
+                    android:text="120%"
+                    android:textColor="@color/ninja_cyan"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:gravity="center" />
+                <Button
+                    android:id="@+id/btnSpkUp"
+                    android:layout_width="26dp"
+                    android:layout_height="match_parent"
+                    android:text="+"
+                    android:textSize="12sp"
+                    android:textColor="@color/ninja_cyan"
+                    android:background="@drawable/btn_dpad" />
+            </LinearLayout>
+
+            <!-- TOT, VOX, JACK, CHIRP, PTT MODE -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="1dp">
+                <Button
+                    android:id="@+id/btnTotCycle"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="TOT: 180s"
+                    android:textSize="9sp"
+                    android:textColor="@color/ninja_cyan"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="1dp" />
+                <Button
+                    android:id="@+id/btnVoxToggle"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="VOX: OFF"
+                    android:textSize="9sp"
+                    android:textColor="@color/ninja_text_dim"
+                    android:background="@drawable/btn_dpad" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/btnJackPriority"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="JACK: AUTO"
+                    android:textSize="9sp"
+                    android:textColor="@color/ninja_green"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="1dp" />
+                <Button
+                    android:id="@+id/btnChirpToggle"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.9"
+                    android:text="CHIRP: ON"
+                    android:textSize="9sp"
+                    android:textColor="@color/ninja_green"
+                    android:background="@drawable/btn_dpad"
+                    android:layout_marginEnd="1dp" />
+                <Button
+                    android:id="@+id/btnPttModeToggle"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.9"
+                    android:text="PTT: HOLD"
+                    android:textSize="9sp"
+                    android:textColor="@color/ninja_cyan"
+                    android:background="@drawable/btn_dpad" />
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Tab 3: CALLBOOK SETTINGS CONTAINER -->
+    <LinearLayout
+        android:id="@+id/layoutTabCallbook"
+        android:layout_width="match_parent"
+        android:layout_height="95dp"
+        android:orientation="vertical"
+        android:padding="1dp"
+        android:visibility="gone">
+
+        <!-- Status Database -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="20dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="1dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Status Database:"
+                android:textColor="@color/ninja_text_dim"
+                android:textSize="10sp" />
+            <TextView
+                android:id="@+id/tvCbCountVal"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0 stasiun"
+                android:textColor="@color/ninja_green"
+                android:textSize="11sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- URL Input -->
+        <EditText
+            android:id="@+id/etCbUrlInput"
+            android:layout_width="match_parent"
+            android:layout_height="22dp"
+            android:hint="Link CSV/JSON Callbook"
+            android:textColor="@color/ninja_cyan"
+            android:textColorHint="@color/ninja_text_faint"
+            android:textSize="10sp"
+            android:singleLine="true"
+            android:background="@drawable/edit_text_bg"
+            android:paddingStart="4dp"
+            android:layout_marginBottom="2dp" />
+
+        <!-- Sync & Clear buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="24dp"
+            android:orientation="horizontal"
+            android:layout_marginBottom="2dp">
+            <Button
+                android:id="@+id/btnCbSyncNow"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1.2"
+                android:text="⚡ SYNC / UNDUH"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_green"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginEnd="2dp" />
+            <Button
+                android:id="@+id/btnCbClearNow"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="0.8"
+                android:text="🗑 HAPUS"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_red"
+                android:background="@drawable/btn_dpad" />
+        </LinearLayout>
+
+        <!-- Progress text -->
+        <TextView
+            android:id="@+id/tvCbProgressMsg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Lookup otomatis DMR ID → Callsign &amp; QTH saat RX"
+            android:textColor="@color/ninja_text_faint"
+            android:textSize="9sp"
+            android:gravity="center"
+            android:singleLine="true" />
+    </LinearLayout>
+
+</LinearLayout>

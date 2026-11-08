@@ -17,9 +17,13 @@ data class DmrProfile(
     var options: String = "",
     var rxGroup: String = "", // Multi TG: "*" for All/Promiscuous, or comma-separated e.g. "1025,91,510"
     var location: String = "Mobile, ID",
-    var software: String = "NinjaRadio Lite",
-    var hardware: String = "Android POC",
-    var description: String = "NinjaRadio Lite"
+    var software: String = "20260911_WPSD",
+    var hardware: String = "MMDVM_MMDVM_HS_Hat",
+    var description: String = "NinjaRadio",
+    var slotMode: String = "4", // "4" = Radio/Hotspot Simplex, "3" = Repeater Duplex, "2" = IP Network
+    var rxFreq: String = "145.5000",
+    var txFreq: String = "145.5000",
+    var colorCode: Int = 1
 ) {
     val peerId: Int
         get() = if (dmrId > 0) {
@@ -48,6 +52,10 @@ data class DmrProfile(
         json.put("software", software)
         json.put("hardware", hardware)
         json.put("description", description)
+        json.put("slotMode", slotMode)
+        json.put("rxFreq", rxFreq)
+        json.put("txFreq", txFreq)
+        json.put("colorCode", colorCode)
         return json
     }
 
@@ -67,9 +75,13 @@ data class DmrProfile(
                 options = json.optString("options", ""),
                 rxGroup = json.optString("rxGroup", ""),
                 location = json.optString("location", "Mobile, ID"),
-                software = json.optString("software", "NinjaRadio Lite"),
-                hardware = json.optString("hardware", "Android POC"),
-                description = json.optString("description", "NinjaRadio Lite")
+                software = json.optString("software", "20260911_WPSD"),
+                hardware = json.optString("hardware", "MMDVM_MMDVM_HS_Hat"),
+                description = json.optString("description", "NinjaRadio"),
+                slotMode = json.optString("slotMode", "4"),
+                rxFreq = json.optString("rxFreq", "145.5000"),
+                txFreq = json.optString("txFreq", "145.5000"),
+                colorCode = json.optInt("colorCode", 1)
             )
         }
     }

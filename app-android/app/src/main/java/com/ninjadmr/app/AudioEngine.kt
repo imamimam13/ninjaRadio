@@ -37,15 +37,15 @@ class AudioEngine(
 
     @Volatile private var running = false
 
-    // Clean linear gains (matches NinjaRadio Lite: 250% mic, 120% speaker)
-    @Volatile var micGain: Float = 2.5f
-    @Volatile var spkGain: Float = 1.2f
+    // Linear gains with soft limiter (default: 400% mic boost, 220% speaker boost)
+    @Volatile var micGain: Float = 4.0f
+    @Volatile var spkGain: Float = 2.2f
 
     private val playExec = Executors.newSingleThreadExecutor()
 
     fun setGains(mic: Float, spk: Float) {
-        this.micGain = mic.coerceIn(1.0f, 5.0f)
-        this.spkGain = spk.coerceIn(0.5f, 2.5f)
+        this.micGain = mic.coerceIn(0.5f, 10.0f)
+        this.spkGain = spk.coerceIn(0.5f, 5.0f)
     }
 
     // Jitter buffer with immediate single-frame priming to eliminate dropouts & stuttering
@@ -142,7 +142,14 @@ class AudioEngine(
             val out = ShortArray(FRAME_SAMPLES)
             var sum = 0L
             for (i in 0 until FRAME_SAMPLES) {
-                val s = (frame[i] * micGain).toInt().coerceIn(-32768, 32767).toShort()
+                val raw = frame[i] * micGain
+                val s = if (raw > 32000f) {
+                    (32000 + (raw - 32000) * 0.15f).coerceAtMost(32767f).toInt().toShort()
+                } else if (raw < -32000f) {
+                    (-32000 + (raw + 32000) * 0.15f).coerceAtLeast(-32768f).toInt().toShort()
+                } else {
+                    raw.toInt().toShort()
+                }
                 out[i] = s
                 sum += (s.toLong() * s.toLong())
             }
@@ -195,7 +202,15 @@ class AudioEngine(
             val out = if (spkGain != 1.0f) {
                 val amplified = ShortArray(pcm.size)
                 for (i in pcm.indices) {
-                    amplified[i] = (pcm[i] * spkGain).toInt().coerceIn(-32768, 32767).toShort()
+                    val raw = pcm[i] * spkGain
+                    val s = if (raw > 32000f) {
+                        (32000 + (raw - 32000) * 0.15f).coerceAtMost(32767f).toInt().toShort()
+                    } else if (raw < -32000f) {
+                        (-32000 + (raw + 32000) * 0.15f).coerceAtLeast(-32768f).toInt().toShort()
+                    } else {
+                        raw.toInt().toShort()
+                    }
+                    amplified[i] = s
                 }
                 amplified
             } else {
