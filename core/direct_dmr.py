@@ -314,6 +314,7 @@ class DirectOpenDmrVocoder:
     def __init__(self):
         self.lib = None
         self._dec = None
+        self._decoders = {}  # stream_key -> (decoder_ptr, last_seen_time)
         self._enc = None
         self._pcm_out = (ctypes.c_int16 * PCM_SAMPLES)()
         self._pcm_in = (ctypes.c_int16 * PCM_SAMPLES)()
@@ -451,7 +452,46 @@ class DirectOpenDmrVocoder:
     def is_available(self) -> bool:
         return self._enc is not None and self._dec is not None
 
+    def get_or_create_decoder(self, stream_key: str = "slot_2"):
+        now = time.time()
+        if not self.lib:
+            return None
+        if stream_key not in self._decoders:
+            try:
+                dec = self.lib.opendmr_decoder_create()
+                self._decoders[stream_key] = (dec, now)
+                # Cleanup inactive decoders (prune older than 15s)
+                if len(self._decoders) > 16:
+                    for k, (d, t) in list(self._decoders.items()):
+                        if now - t > 15.0 and k != stream_key:
+                            try:
+                                self.lib.opendmr_decoder_destroy(d)
+                            except Exception:
+                                pass
+                            del self._decoders[k]
+                return dec
+            except Exception as e:
+                logger.debug(f"Failed to create opendmr decoder for {stream_key}: {e}")
+                return self._dec
+        dec, _ = self._decoders[stream_key]
+        self._decoders[stream_key] = (dec, now)
+        return dec
+
+    def reset_stream_decoder(self, stream_key: str = "slot_2"):
+        if stream_key in self._decoders and self.lib:
+            try:
+                dec, _ = self._decoders[stream_key]
+                self.lib.opendmr_decoder_reset(dec)
+            except Exception:
+                pass
+
     def reset_decoder(self):
+        for k, (d, _) in list(self._decoders.items()):
+            if d and self.lib:
+                try:
+                    self.lib.opendmr_decoder_reset(d)
+                except Exception:
+                    pass
         if self._dec and self.lib and hasattr(self.lib, "opendmr_decoder_reset"):
             try:
                 self.lib.opendmr_decoder_reset(self._dec)
@@ -510,13 +550,14 @@ class DirectOpenDmrVocoder:
         f3 = self.encode_frame(pcm_960[640:960])
         return interleave_burst((f1, f2, f3), sync)
 
-    def decode_burst(self, burst_33: bytes) -> bytes:
+    def decode_burst(self, burst_33: bytes, stream_key: str = "slot_2") -> bytes:
         if len(burst_33) < BURST_BYTES:
             return b""
 
-        if self._has_native_burst_dec and self._dec:
+        dec = self.get_or_create_decoder(stream_key) or self._dec
+        if self._has_native_burst_dec and dec:
             buf = (ctypes.c_uint8 * BURST_BYTES).from_buffer_copy(burst_33[:BURST_BYTES])
-            ok = self.lib.opendmr_decode_burst(self._dec, buf, self._pcm_480_out, ctypes.byref(self._errs))
+            ok = self.lib.opendmr_decode_burst(dec, buf, self._pcm_480_out, ctypes.byref(self._errs))
             if ok:
                 return struct.pack("<480h", *self._pcm_480_out)
 
@@ -528,6 +569,13 @@ class DirectOpenDmrVocoder:
         return p1 + p2 + p3
 
     def close(self):
+        for k, (d, _) in list(self._decoders.items()):
+            if d and self.lib:
+                try:
+                    self.lib.opendmr_decoder_destroy(d)
+                except Exception:
+                    pass
+        self._decoders.clear()
         if self._dec:
             self.lib.opendmr_decoder_destroy(self._dec)
             self._dec = None
@@ -893,21 +941,31 @@ class DirectDmrEngine:
 
         return out_packets
 
-    def decode_dmr_burst(self, burst_33: bytes) -> bytes:
+    def decode_dmr_burst(self, burst_33: bytes, slot: int = 2, stream_id: int = 0) -> bytes:
         """Decodes 33-byte DMR AMBE burst into 960 bytes of 8kHz 16-bit PCM with telecom filtering."""
         if not burst_33 or len(burst_33) < BURST_BYTES:
             return b""
-        raw_pcm = self.vocoder.decode_burst(burst_33)
+        stream_key = f"slot_{slot}"
+        raw_pcm = self.vocoder.decode_burst(burst_33, stream_key=stream_key)
         if not raw_pcm or len(raw_pcm) < BURST_PCM_BYTES:
             return raw_pcm
 
-        # Apply telecom de-emphasis / bandpass filter & soft limiter to eliminate harsh "sss", "tt" and vocoder scratch
+        # Isolated telecom filter pair per slot/stream to prevent inter-talker phase distortion
+        if not hasattr(self, "_rx_filters"):
+            self._rx_filters = {}
+        if stream_key not in self._rx_filters:
+            self._rx_filters[stream_key] = (
+                BiquadFilter(HPF_300HZ_B, HPF_300HZ_A),
+                BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
+            )
+        hpf, lpf = self._rx_filters[stream_key]
+
         import math
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
         processed = []
         for s in samples:
             # 1. High-pass (300Hz) & Low-pass (3200Hz)
-            f_val = self.rx_lpf.process(self.rx_hpf.process(float(s)))
+            f_val = lpf.process(hpf.process(float(s)))
             # 2. Transparent soft-knee limiter to prevent digital clipping/kresek on loud voice peaks
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)
@@ -918,3 +976,11 @@ class DirectDmrEngine:
             processed.append(int(sign * y))
 
         return struct.pack("<480h", *processed)
+
+    def reset_stream_decoder(self, slot: int = 2):
+        stream_key = f"slot_{slot}"
+        self.vocoder.reset_stream_decoder(stream_key)
+        if hasattr(self, "_rx_filters") and stream_key in self._rx_filters:
+            hpf, lpf = self._rx_filters[stream_key]
+            hpf.reset()
+            lpf.reset()
