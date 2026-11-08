@@ -143,6 +143,14 @@ export default function DashboardPage() {
         float32[i] = int16[i] / 32768.0;
       }
 
+      // Micro-cosine envelope on chunk boundaries (8 samples = 1ms @ 8kHz) to prevent audio clicks and crackle
+      const fadeLen = Math.min(8, Math.floor(float32.length / 4));
+      for (let i = 0; i < fadeLen; i++) {
+        const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
+        float32[i] *= factor;
+        float32[float32.length - 1 - i] *= factor;
+      }
+
       const now = ctx.currentTime;
       if (!rxNextTimeRef.current || rxNextTimeRef.current < now) {
         rxNextTimeRef.current = now + 0.15;
@@ -175,24 +183,42 @@ export default function DashboardPage() {
     }
   };
 
+  const lastAudibleTgRef = useRef<number | null>(null);
+
   // Real-time Audio Dispatcher (Anti-Collision Priority Gate)
   const playAudioChunk = (audioChunk: AudioRxData) => {
     if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
 
+    let targetAudibleTg: number | null = null;
     // 1. If user locked a specific TG (via filter chips below or LOCK TG button), ONLY play that TG!
     if (selectedTgFilterRef.current !== null) {
       if (audioChunk.tg !== selectedTgFilterRef.current) return;
+      targetAudibleTg = selectedTgFilterRef.current;
     } else {
       // 2. If multiple TGs transmit at the same time and no filter is locked:
       // Hanya stream paling atas (transmisi pertama yang masuk) yang bersuara agar audio tidak tabrakan!
       const list = activeTxListRef.current;
       if (list && list.length > 0) {
         const topTx = list[0];
-        if (topTx && topTx.talkgroup && audioChunk.tg !== topTx.talkgroup) {
-          return; // Drop secondary/overlapping streams so voice stays clean and audible
+        if (topTx && topTx.talkgroup) {
+          if (audioChunk.tg !== topTx.talkgroup) {
+            return; // Drop secondary/overlapping streams so voice stays clean and audible
+          }
+          targetAudibleTg = topTx.talkgroup;
         }
       }
     }
+
+    if (targetAudibleTg === null) {
+      targetAudibleTg = audioChunk.tg || 0;
+    }
+
+    // Seamless stream-switch / unkey recovery: If active audio stream changed, cleanly reset jitter buffer
+    if (lastAudibleTgRef.current !== null && lastAudibleTgRef.current !== targetAudibleTg) {
+      rxNextTimeRef.current = 0;
+      rxSuspendedQueueRef.current = [];
+    }
+    lastAudibleTgRef.current = targetAudibleTg;
 
     try {
       ensureAudioUnlocked();

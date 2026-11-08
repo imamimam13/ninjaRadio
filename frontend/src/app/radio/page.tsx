@@ -693,6 +693,14 @@ export default function RadioPocketMode() {
         float32[i] = int16[i] / 32768.0;
       }
 
+      // Micro-cosine envelope on chunk boundaries (8 samples = 1ms @ 8kHz) to prevent audio clicks and crackle
+      const fadeLen = Math.min(8, Math.floor(float32.length / 4));
+      for (let i = 0; i < fadeLen; i++) {
+        const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
+        float32[i] *= factor;
+        float32[float32.length - 1 - i] *= factor;
+      }
+
       const now = ctx.currentTime;
       const isBurstStart = !rxNextTimeRef.current || rxNextTimeRef.current < now;
 
