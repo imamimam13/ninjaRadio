@@ -4,12 +4,12 @@ from typing import Union, Optional
 
 try:
     import numpy as np
-except ImportError:
+except Exception:
     np = None
 
 try:
     from scipy import signal as scipy_signal
-except ImportError:
+except Exception:
     scipy_signal = None
 
 
