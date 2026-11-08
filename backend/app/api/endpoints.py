@@ -1386,16 +1386,28 @@ async def update_frequency(data: dict):
 
 # ----------------- Dedicated Servers Telemetry: DMR Server, DVSwitch & Mumla -----------------
 
+_last_serverdmr_telemetry = None
+_last_serverdmr_time = 0.0
+
 @router.get("/serverdmr/telemetry")
 async def get_serverdmr_telemetry():
+    global _last_serverdmr_telemetry, _last_serverdmr_time
+    now = time.time()
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             r = await client.get("http://core:5000/api/serverdmr/status")
             if r.status_code == 200:
-                return r.json()
+                data = r.json()
+                _last_serverdmr_telemetry = data
+                _last_serverdmr_time = now
+                return data
     except Exception:
         pass
+
+    # Fallback to last known good telemetry if within 10 seconds grace period (anti flip-flop)
+    if _last_serverdmr_telemetry and (now - _last_serverdmr_time < 10.0):
+        return _last_serverdmr_telemetry
 
     return {
         "online": False,
@@ -1414,16 +1426,27 @@ async def get_serverdmr_telemetry():
         "recent_qsos": []
     }
 
+_last_dvswitch_telemetry = None
+_last_dvswitch_time = 0.0
+
 @router.get("/dvswitch/telemetry")
 async def get_dvswitch_telemetry():
+    global _last_dvswitch_telemetry, _last_dvswitch_time
+    now = time.time()
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             r = await client.get("http://core:5000/api/dvswitch/status")
             if r.status_code == 200:
-                return r.json()
+                data = r.json()
+                _last_dvswitch_telemetry = data
+                _last_dvswitch_time = now
+                return data
     except Exception:
         pass
+
+    if _last_dvswitch_telemetry and (now - _last_dvswitch_time < 10.0):
+        return _last_dvswitch_telemetry
 
     return {
         "online": False,

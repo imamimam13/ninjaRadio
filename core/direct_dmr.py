@@ -652,15 +652,22 @@ class DirectDmrEngine:
         self.rpt_id = rpt_id
 
         # Real-time Telecom Audio Conditioning (300Hz - 3300Hz 5th-order Butterworth BPF + Noise Gate + Peak Limiter)
-        from ambe_dsp import AmbeAudioConditioner
-        self.tx_conditioner = AmbeAudioConditioner(
-            input_rate=8000,
-            lowcut_hz=300.0,
-            highcut_hz=3300.0,
-            filter_order=5,
-            gate_threshold_rms=150.0,
-            peak_ceiling=24000.0,
-        )
+        try:
+            try:
+                from ambe_dsp import AmbeAudioConditioner
+            except (ImportError, ModuleNotFoundError):
+                from core.ambe_dsp import AmbeAudioConditioner
+            self.tx_conditioner = AmbeAudioConditioner(
+                input_rate=8000,
+                lowcut_hz=300.0,
+                highcut_hz=3300.0,
+                filter_order=5,
+                gate_threshold_rms=150.0,
+                peak_ceiling=24000.0,
+            )
+        except Exception as e:
+            logger.warning(f"AmbeAudioConditioner fallback to hardware/biquad: {e}")
+            self.tx_conditioner = None
         self.hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
         self.lpf = BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
         self.rx_hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
@@ -784,7 +791,8 @@ class DirectDmrEngine:
             self.tx_pcm_buffer.clear()
             self.current_burst_seq = 0
             self.current_emblc = None
-            self.tx_conditioner.reset()
+            if getattr(self, "tx_conditioner", None) is not None:
+                self.tx_conditioner.reset()
             self.hpf.reset()
             self.lpf.reset()
             self.rx_hpf.reset()
@@ -805,7 +813,8 @@ class DirectDmrEngine:
             self.current_src_id = clean_dmr_id
             self.current_callsign = callsign
             self.tx_pcm_buffer.clear()
-            self.tx_conditioner.reset()
+            if getattr(self, "tx_conditioner", None) is not None:
+                self.tx_conditioner.reset()
             self.hpf.reset()
             self.lpf.reset()
             self.current_emblc = build_dmr_emblc_fragments(self.current_src_id, self.current_tg)
@@ -847,12 +856,20 @@ class DirectDmrEngine:
                 # 1. 5th-order Butterworth Band-Pass (300Hz - 3300Hz): strips proximity bass & high-freq hiss
                 # 2. RMS Noise Gate (Squelch): zeros out room floor to prevent AMBE digital wind noise
                 # 3. Soft Peak Limiter (24000 ceiling): proportional anti-clipping without waveform distortion
-                conditioned_arr = self.tx_conditioner.process_frame(burst_pcm, return_bytes=False)
-                if hasattr(conditioned_arr, "tobytes"):
-                    burst_pcm = conditioned_arr.tobytes()
-                    peak = int(abs(conditioned_arr).max()) if len(conditioned_arr) > 0 else 0
+                if getattr(self, "tx_conditioner", None) is not None:
+                    conditioned_arr = self.tx_conditioner.process_frame(burst_pcm, return_bytes=False)
+                    if hasattr(conditioned_arr, "tobytes"):
+                        burst_pcm = conditioned_arr.tobytes()
+                        peak = int(abs(conditioned_arr).max()) if len(conditioned_arr) > 0 else 0
+                    else:
+                        burst_pcm = bytes(conditioned_arr)
+                        raw_samples = struct.unpack("<480h", burst_pcm)
+                        peak = max(abs(p) for p in raw_samples)
                 else:
-                    burst_pcm = bytes(conditioned_arr)
+                    if hasattr(self, "hpf"):
+                        burst_pcm = self.hpf.process(burst_pcm)
+                    if hasattr(self, "lpf"):
+                        burst_pcm = self.lpf.process(burst_pcm)
                     raw_samples = struct.unpack("<480h", burst_pcm)
                     peak = max(abs(p) for p in raw_samples)
 
