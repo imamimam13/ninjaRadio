@@ -115,6 +115,11 @@ export default function DashboardPage() {
     activeTxRef.current = activeTx;
   }, [activeTx]);
 
+  const activeTxListRef = useRef(activeTxList);
+  useEffect(() => {
+    activeTxListRef.current = activeTxList;
+  }, [activeTxList]);
+
   const rxSuspendedQueueRef = useRef<AudioRxData[]>([]);
 
   const scheduleDashboardRxChunk = (audioChunk: AudioRxData) => {
@@ -170,11 +175,24 @@ export default function DashboardPage() {
     }
   };
 
-  // Real-time Audio Dispatcher (bypasses React state batching to receive 100% of packets)
+  // Real-time Audio Dispatcher (Anti-Collision Priority Gate)
   const playAudioChunk = (audioChunk: AudioRxData) => {
     if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
-    // Selective Audio Gate: If a specific TG is selected on Dashboard, only play audio matching that TG!
-    if (selectedTgFilterRef.current !== null && audioChunk.tg !== selectedTgFilterRef.current) return;
+
+    // 1. If user locked a specific TG (via filter chips below or LOCK TG button), ONLY play that TG!
+    if (selectedTgFilterRef.current !== null) {
+      if (audioChunk.tg !== selectedTgFilterRef.current) return;
+    } else {
+      // 2. If multiple TGs transmit at the same time and no filter is locked:
+      // Hanya stream paling atas (transmisi pertama yang masuk) yang bersuara agar audio tidak tabrakan!
+      const list = activeTxListRef.current;
+      if (list && list.length > 0) {
+        const topTx = list[0];
+        if (topTx && topTx.talkgroup && audioChunk.tg !== topTx.talkgroup) {
+          return; // Drop secondary/overlapping streams so voice stays clean and audible
+        }
+      }
+    }
 
     try {
       ensureAudioUnlocked();
@@ -292,13 +310,20 @@ export default function DashboardPage() {
         {/* Active Transmissions Flight Deck (Multi-RX Stack: TG A on top, TG B below it, etc.) */}
         {activeTxList && activeTxList.length > 0 ? (
           <div className="space-y-3">
-            {activeTxList.map((tx, idx) => (
+            {activeTxList.map((tx, idx) => {
+              const isCardAudible =
+                !isMuted &&
+                (selectedTgFilter !== null
+                  ? selectedTgFilter === tx.talkgroup
+                  : idx === 0);
+
+              return (
               <div
                 key={tx.id || `${tx.dmr_id}_${tx.talkgroup}_${tx.slot}`}
                 className={`relative overflow-hidden rounded-2xl p-4 sm:p-5 transition-all duration-300 border-2 shadow-lg ${
-                  idx === 0
-                    ? "bg-gradient-to-r from-emerald-950/90 via-[#0a121e] to-slate-950 border-emerald-500/80 shadow-[0_0_25px_rgba(16,185,129,0.22)]"
-                    : "bg-gradient-to-r from-cyan-950/85 via-[#09101b] to-slate-950 border-cyan-500/70 shadow-[0_0_20px_rgba(6,182,212,0.18)]"
+                  isCardAudible
+                    ? "bg-gradient-to-r from-emerald-950/90 via-[#0a121e] to-slate-950 border-emerald-500/80 shadow-[0_0_25px_rgba(16,185,129,0.25)]"
+                    : "bg-gradient-to-r from-slate-950/90 via-[#080d17] to-slate-950 border-slate-700/60 opacity-90 shadow-sm"
                 }`}
               >
                 <div
@@ -343,17 +368,42 @@ export default function DashboardPage() {
                         <button
                           onClick={() => {
                             ensureAudioUnlocked();
-                            setIsMuted(!isMuted);
+                            if (!isCardAudible && selectedTgFilter !== tx.talkgroup) {
+                              // If this card was on standby, clicking it immediately locks audio to this TG!
+                              setSelectedTgFilter(tx.talkgroup);
+                              setIsMuted(false);
+                              beepPlayer?.playTalkGrant();
+                            } else {
+                              setIsMuted(!isMuted);
+                            }
                           }}
                           className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
                             isMuted 
                               ? "bg-rose-950/80 border border-rose-500/50 text-rose-300 hover:bg-rose-900" 
-                              : "bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900 shadow-[0_0_10px_rgba(6,182,212,0.3)]"
+                              : isCardAudible
+                              ? "bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900 shadow-[0_0_10px_rgba(6,182,212,0.3)]"
+                              : "bg-amber-950/60 border border-amber-500/40 text-amber-300 hover:bg-amber-900/60"
                           }`}
-                          title="Klik untuk Mute / Unmute Audio Live RX di Speaker Browser"
+                          title={
+                            isCardAudible
+                              ? "Speaker aktif memainkan audio stream ini. Klik untuk Mute."
+                              : "Audio stream ini sedang ditahan karena stream di atas aktif. Klik untuk mendengarkan TG ini!"
+                          }
                         >
-                          {isMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />}
-                          <span>{isMuted ? "SPEAKER: MUTE" : "SPEAKER: ON"}</span>
+                          {isMuted ? (
+                            <VolumeX className="w-3 h-3 text-rose-400" />
+                          ) : isCardAudible ? (
+                            <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />
+                          ) : (
+                            <VolumeX className="w-3 h-3 text-amber-400" />
+                          )}
+                          <span>
+                            {isMuted
+                              ? "SPEAKER: MUTE"
+                              : isCardAudible
+                              ? "SPEAKER: ON"
+                              : "AUDIO: STANDBY"}
+                          </span>
                         </button>
 
                         <button
@@ -436,16 +486,17 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <AudioVisualizer 
-                        isActive={true} 
+                        isActive={isCardAudible} 
                         mode={vizMode} 
-                        color={idx === 0 ? "bg-emerald-400" : "bg-cyan-400"} 
+                        color={isCardAudible ? "bg-emerald-400" : "bg-slate-500"} 
                         barsCount={16} 
                       />
                     </div>
                   </div>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
         ) : (
           <div className="bg-[#0b121e]/90 border border-cyan-900/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
