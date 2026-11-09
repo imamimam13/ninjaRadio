@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import {
@@ -22,7 +22,13 @@ import {
   Globe,
   Wifi,
   LayoutGrid,
-  ListFilter
+  ListFilter,
+  Pencil,
+  ExternalLink,
+  X,
+  Sparkles,
+  HelpCircle,
+  Sliders
 } from "lucide-react";
 
 import { AdminGuard } from "@/components/AdminGuard";
@@ -107,7 +113,9 @@ export default function SvxLinkPage() {
   const [typeFilter, setTypeFilter] = useState<string>("All");
   const [viewMode, setViewMode] = useState<"detailed" | "compact">("detailed");
 
-  // Add Bot Form State
+  // Add / Edit Bot Form State
+  const [editingBotName, setEditingBotName] = useState<string | null>(null);
+  const botFormRef = useRef<HTMLDivElement>(null);
   const [newBotName, setNewBotName] = useState("");
   const [newBotRoom, setNewBotRoom] = useState("");
   const [newBotTg, setNewBotTg] = useState("510");
@@ -165,6 +173,38 @@ export default function SvxLinkPage() {
     fetchAll();
   };
 
+  const handleEditBot = (bot: SvxBot) => {
+    setEditingBotName(bot.name);
+    setNewBotName(bot.name);
+    setNewBotRoom(bot.channel);
+    setNewBotTg(bot.tg.toString());
+    setNewBotSlot(bot.slot.toString());
+    setEcholinkEnabled(Boolean(bot.echolink_enabled));
+    setEcholinkCallsign(bot.echolink_callsign || "");
+    setEcholinkPassword("");
+    botFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingBotName(null);
+    setNewBotName("");
+    setNewBotRoom("");
+    setNewBotTg("510");
+    setNewBotSlot("2");
+    setEcholinkEnabled(false);
+    setEcholinkCallsign("");
+    setEcholinkPassword("");
+  };
+
+  const handleApplyPreset = (name: string, room: string, tg: number, slot: number) => {
+    setEditingBotName(null);
+    setNewBotName(name);
+    setNewBotRoom(room);
+    setNewBotTg(tg.toString());
+    setNewBotSlot(slot.toString());
+    botFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   const handleAddBot = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBotName.trim() || !newBotRoom.trim()) return;
@@ -174,6 +214,7 @@ export default function SvxLinkPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          original_name: editingBotName,
           name: newBotName.trim().toUpperCase(),
           channel: newBotRoom.trim(),
           tg: parseInt(newBotTg, 10) || 510,
@@ -184,12 +225,18 @@ export default function SvxLinkPage() {
         })
       });
       if (res.ok) {
+        setEditingBotName(null);
         setNewBotName("");
         setNewBotRoom("");
+        setNewBotTg("510");
+        setNewBotSlot("2");
+        setEcholinkEnabled(false);
+        setEcholinkCallsign("");
+        setEcholinkPassword("");
         fetchAll();
       }
     } catch (err) {
-      console.error("Failed to add SvxLink bot:", err);
+      console.error("Failed to add/update SvxLink bot:", err);
     } finally {
       setSavingBot(false);
     }
@@ -621,16 +668,62 @@ export default function SvxLinkPage() {
                         {/* Card Footer */}
                         <div className="px-3.5 py-2 bg-slate-950/80 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
                           <span className="truncate">{node.sw}</span>
-                          <span className="flex items-center gap-1.5 text-[10px] font-bold">
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                node.connected ? "bg-emerald-400" : "bg-amber-400"
-                              }`}
-                            />
-                            <span className={node.connected ? "text-emerald-400" : "text-amber-400"}>
-                              {node.connected ? "ONLINE" : "SYNCING"}
+                          <div className="flex items-center gap-2">
+                            {node.category === "SvxLink" && (() => {
+                              const b = bots.find(item => item.name.toUpperCase() === node.callsign.toUpperCase());
+                              if (b) {
+                                return (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleEditBot(b);
+                                      }}
+                                      className="p-1 rounded bg-slate-800/90 hover:bg-cyan-900/70 text-cyan-400 border border-slate-700 hover:border-cyan-500 transition-colors"
+                                      title={`Edit Bot ${b.name}`}
+                                    >
+                                      <Pencil className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (confirm(`Hapus bot ${b.name}?`)) {
+                                          handleDeleteBot(b.name);
+                                        }
+                                      }}
+                                      className="p-1 rounded bg-slate-800/90 hover:bg-rose-900/70 text-rose-400 border border-slate-700 hover:border-rose-500 transition-colors"
+                                      title={`Hapus Bot ${b.name}`}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
+                            {node.category === "DMR" && (
+                              <a
+                                href="/settings"
+                                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-cyan-300 border border-slate-700 flex items-center gap-1"
+                                title="Edit Peering DMR di Settings"
+                              >
+                                <span>Peering</span>
+                                <ExternalLink className="w-2.5 h-2.5" />
+                              </a>
+                            )}
+                            <span className="flex items-center gap-1.5 text-[10px] font-bold">
+                              <span
+                                className={`w-2 h-2 rounded-full ${
+                                  node.connected ? "bg-emerald-400" : "bg-amber-400"
+                                }`}
+                              />
+                              <span className={node.connected ? "text-emerald-400" : "text-amber-400"}>
+                                {node.connected ? "ONLINE" : "SYNCING"}
+                              </span>
                             </span>
-                          </span>
+                          </div>
                         </div>
                       </div>
                     );
@@ -641,17 +734,92 @@ export default function SvxLinkPage() {
           })()}
 
           {/* Add / Station New SvxLink Multi-TG Bot */}
-          <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 p-5 shadow-xl space-y-4">
-            <div className="flex items-center gap-2">
-              <Plus className="w-5 h-5 text-emerald-400" />
-              <div>
-                <h2 className="font-heading font-bold text-base text-white">
-                  TAMBAH / UPDATE BOT SVXLINK (MULTI-TG SWITCHBOARD)
-                </h2>
-                <p className="text-[11px] text-slate-400 font-mono">
-                  Setiap bot yang ditambahkan akan memonitor 1 Talkgroup di SvxReflector dan menjembataninya secara bi-direksional ke DMR.
-                </p>
+          <div
+            ref={botFormRef}
+            className={`rounded-2xl border p-5 shadow-xl space-y-4 transition-all duration-300 ${
+              editingBotName
+                ? "bg-[#0b1726] border-cyan-500/70 shadow-[0_0_25px_rgba(6,182,212,0.15)]"
+                : "bg-[#0b121e]/80 border-cyan-900/30"
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {editingBotName ? (
+                  <Pencil className="w-5 h-5 text-cyan-400 animate-pulse" />
+                ) : (
+                  <Plus className="w-5 h-5 text-emerald-400" />
+                )}
+                <div>
+                  <h2 className="font-heading font-bold text-base text-white flex items-center gap-2">
+                    {editingBotName ? (
+                      <>
+                        <span>EDIT BOT SVXLINK:</span>
+                        <span className="text-cyan-400 font-mono underline">{editingBotName}</span>
+                      </>
+                    ) : (
+                      "TAMBAH / UPDATE BOT SVXLINK (MULTI-TG SWITCHBOARD)"
+                    )}
+                  </h2>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {editingBotName
+                      ? "Perbarui konfigurasi bot room, mapped TG, dan slot. Simpan untuk menerapkan pembaruan tanpa restart daemon."
+                      : "Setiap bot yang ditambahkan akan memonitor 1 Talkgroup di SvxReflector dan menjembataninya secara bi-direksional ke DMR."}
+                  </p>
+                </div>
               </div>
+              {editingBotName && (
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-300 flex items-center gap-1.5 border border-slate-700 self-start sm:self-center"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Batal Edit</span>
+                </button>
+              )}
+            </div>
+
+            {/* Quick Preset Buttons */}
+            <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-mono">
+              <span className="text-slate-400 flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Preset Cepat:</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => handleApplyPreset("SVX-NASIONAL", "SVX-Nasional", 510, 1)}
+                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-600 text-cyan-300 text-[11px] transition-colors"
+              >
+                + TG 510 (Nasional TS1)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyPreset("SVX-NUSANTARA", "SVX-Nusantara", 5109, 2)}
+                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-600 text-cyan-300 text-[11px] transition-colors"
+              >
+                + TG 5109 (Nusantara TS2)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyPreset("SVX-BRIDI", "SVX-BRIDI", 1025, 2)}
+                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-600 text-cyan-300 text-[11px] transition-colors"
+              >
+                + TG 1025 (Bridi TS2)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyPreset("SVX-TOMBOLPTT", "SVX-TombolPTT", 1023, 1)}
+                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-600 text-cyan-300 text-[11px] transition-colors"
+              >
+                + TG 1023 (TombolPTT TS1)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyPreset("SVX-PARROT", "SVX-Parrot", 9998, 2)}
+                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-600 text-cyan-300 text-[11px] transition-colors"
+              >
+                + TG 9998 (Echo/Parrot)
+              </button>
             </div>
 
             <form onSubmit={handleAddBot} className="grid grid-cols-1 sm:grid-cols-5 gap-3 text-xs font-mono">
@@ -700,9 +868,13 @@ export default function SvxLinkPage() {
                 <button
                   type="submit"
                   disabled={savingBot}
-                  className="w-full py-2 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold shadow-lg transition-all disabled:opacity-50"
+                  className={`w-full py-2 px-4 rounded-xl font-bold shadow-lg transition-all disabled:opacity-50 text-white ${
+                    editingBotName
+                      ? "bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500"
+                      : "bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500"
+                  }`}
                 >
-                  {savingBot ? "MENYIMPAN..." : "+ DEPLOY BOT"}
+                  {savingBot ? "MENYIMPAN..." : editingBotName ? "💾 SIMPAN PERUBAHAN" : "+ DEPLOY BOT"}
                 </button>
               </div>
             </form>
@@ -805,13 +977,28 @@ export default function SvxLinkPage() {
                           </span>
                         </td>
                         <td className="p-3 text-right">
-                          <button
-                            onClick={() => handleDeleteBot(bot.name)}
-                            className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/70 text-rose-400 border border-rose-800/60 transition-colors"
-                            title="Hapus Bot"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleEditBot(bot)}
+                              className="p-1.5 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-400 border border-cyan-800/60 transition-colors"
+                              title={`Edit Bot ${bot.name}`}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Hapus bot ${bot.name} dari pool?`)) {
+                                  handleDeleteBot(bot.name);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 text-rose-400 border border-rose-800/60 transition-colors"
+                              title={`Hapus Bot ${bot.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -896,6 +1083,43 @@ export default function SvxLinkPage() {
                       <Copy className="w-3.5 h-3.5" />
                     )}
                   </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Informational Card: Guide to Managing & Adding Nodes Manually */}
+            <div className="p-4 bg-slate-950/80 rounded-xl border border-cyan-900/40 space-y-3 text-xs font-mono">
+              <div className="flex items-center gap-2 text-cyan-400 font-bold">
+                <HelpCircle className="w-4 h-4 text-cyan-400" />
+                <span>PANDUAN PENGELOLAAN & PENAMBAHAN NODE MANUAL MATRIX:</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] text-slate-300">
+                <div className="p-2.5 rounded-lg bg-[#080e18] border border-slate-800 space-y-1">
+                  <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+                    <Bot className="w-3.5 h-3.5" />
+                    <span>1. Node Bot SvxLink (Local)</span>
+                  </div>
+                  <p className="text-slate-400">
+                    Gunakan form di atas untuk menambah atau mengedit bot. Klik tombol <span className="text-cyan-300 font-bold">[✏️]</span> pada baris tabel untuk memuat konfigurasi bot, lalu klik <span className="text-emerald-400 font-bold">Simpan</span> tanpa restart daemon.
+                  </p>
+                </div>
+                <div className="p-2.5 rounded-lg bg-[#080e18] border border-slate-800 space-y-1">
+                  <div className="font-bold text-cyan-400 flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>2. Node DMR Peering (FreeDMR/BM)</span>
+                  </div>
+                  <p className="text-slate-400">
+                    Kartu seperti <code className="text-cyan-300">DMR-BRIDI</code>, <code className="text-cyan-300">DMR-TOMBOLPTT</code> diatur di menu <a href="/settings" className="text-cyan-400 underline font-bold">Settings</a> (Peering) dan rute TG-nya di menu <a href="/matrix" className="text-cyan-400 underline font-bold">TG Matrix</a>.
+                  </p>
+                </div>
+                <div className="p-2.5 rounded-lg bg-[#080e18] border border-slate-800 space-y-1">
+                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                    <Smartphone className="w-3.5 h-3.5" />
+                    <span>3. Node Client / Mobile Eksternal</span>
+                  </div>
+                  <p className="text-slate-400">
+                    Aplikasi Android SvxLink atau repeater fisik dapat terhubung via Host: <code className="text-amber-300 font-bold">43.173.13.117</code>, Port: <code className="text-amber-300 font-bold">5300</code>, Auth: <code className="text-amber-300 font-bold">ninjaradio_svx</code> (mendukung Protocol 2.0 & 1.0).
+                  </p>
                 </div>
               </div>
             </div>
