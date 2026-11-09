@@ -1861,9 +1861,9 @@ export default function SettingsPage() {
                   <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                   <div>
                     <span className="font-bold text-amber-300 block">
-                      Aturan Firewall Transmit (Callsign Wajib Terdaftar di Callbook Server):
+                      Protokol Otorisasi &amp; Verifikasi Stasiun Terdaftar (TX Firewall):
                     </span>
-                    Sistem ini 100% gratis dan tidak memerlukan verifikasi lisensi amatir eksternal, <strong>TETAPI setiap stasiun QRadioLink / SvxLink / Mumble / DVSwitch yang ingin melakukan Transmit (PTT) WAJIB menggunakan Callsign yang terdaftar di menu Callbook (/callbook) server ini</strong>. Stasiun yang tidak terdaftar otomatis diblokir oleh TX Firewall (hanya bisa Monitor/RX).
+                    Setiap stasiun gateway dan operator (QRadioLink, SvxLink, Mumble, maupun DVSwitch) yang melakukan transmisi (PTT) <strong>wajib menggunakan Callsign resmi yang telah terdaftar dan terverifikasi di pangkalan data Callbook (/callbook) server</strong>. Stasiun yang belum terdaftar secara otomatis dibatasi hanya pada mode Monitor (RX-Only).
                   </div>
                 </div>
               </div>
