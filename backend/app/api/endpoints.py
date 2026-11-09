@@ -2634,6 +2634,7 @@ async def create_or_update_svxlink_bot(payload: dict):
 
     raw_name = str(payload.get("name", "")).strip().upper()
     name = re.sub(r"[^A-Z0-9\-]", "", raw_name)[:15]
+    original_name = str(payload.get("original_name", "")).strip().upper()
     channel = str(payload.get("channel", "")).strip().replace(" ", "-")
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Bot Callsign/Name and target room are required")
@@ -2653,7 +2654,12 @@ async def create_or_update_svxlink_bot(payload: dict):
             data = {}
 
     bots = list(data.get("svxlink_bots", DEFAULT_SVXLINK_BOTS))
-    existing_idx = next((i for i, b in enumerate(bots) if str(b.get("name", "")).upper() == name), None)
+    existing_idx = None
+    if original_name:
+        existing_idx = next((i for i, b in enumerate(bots) if str(b.get("name", "")).upper() == original_name), None)
+    if existing_idx is None:
+        existing_idx = next((i for i, b in enumerate(bots) if str(b.get("name", "")).upper() == name), None)
+
     bot_entry = {
         "name": name,
         "channel": channel,
