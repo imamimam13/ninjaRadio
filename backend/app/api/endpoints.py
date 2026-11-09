@@ -2236,10 +2236,19 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
             continue
         ntg = int(ninfo.get("tg") or 0)
         mon_tgs = ninfo.get("monitoredTGs") or ([ntg] if ntg > 0 else [])
+        is_node_talker = bool(ninfo.get("isTalker"))
         stream = active_streams_by_tg.get(ntg) if ntg > 0 else None
-        is_talking = bool(ninfo.get("isTalker") or stream)
-        talker_call = (stream.get("callsign") if stream else None) or (ncall if is_talking else "")
-        talk_dur = stream.get("duration_sec", 4) if stream else (4 if is_talking else 0)
+        
+        # An external node is ONLY 'talking' if this specific node is keying up itself
+        if is_node_talker:
+            is_talking = True
+            talker_call = ncall
+            talk_dur = 3
+        else:
+            is_talking = False
+            talker_call = stream.get("callsign", "") if stream else ""
+            talk_dur = stream.get("duration_sec", 0) if stream else 0
+
         seen_callsigns.add(ncall)
         unified_nodes.append({
             "id": f"ext_svx_{ncall}",
@@ -2298,17 +2307,19 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
             route_from_str = f"Peer TG {s_tg}"
             route_to_str = f"DMR TG {t_tg} TS{t_slot}"
             primary_ptg = t_tg
-            monitored_tgs = sorted(list(set(sub_tgs + [s_tg, t_tg])))
+            # Isolated local monitoring: only monitor target TG so traffic on source TG (e.g. 1025) from other peers does not hijack this card!
+            monitored_tgs = [t_tg]
         else:
             route_from_str = f"TG {primary_ptg}"
             route_to_str = f"DMR TG {primary_ptg} TS2"
-            monitored_tgs = sub_tgs or [1025]
+            monitored_tgs = sub_tgs or [primary_ptg]
 
         active_st = None
         for t in monitored_tgs:
             if t in active_streams_by_tg:
                 active_st = active_streams_by_tg[t]
-                primary_ptg = t
+                if not mapped_rule:
+                    primary_ptg = t
                 break
 
         unified_nodes.append({
