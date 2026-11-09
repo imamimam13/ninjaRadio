@@ -63,18 +63,19 @@ for db_p in db_paths:
 # 3. Expand mobile/repeater node suffixes (-M, -L, -R, -P, -ND, -1..-3)
 expanded_users = set()
 for u in users:
-    base = re.sub(r"-[A-Za-z0-9]+$", "", u).strip().upper()
-    if not base:
-        continue
-    expanded_users.add(base)
-    expanded_users.add(f"{base}-M")
-    expanded_users.add(f"{base}-L")
-    expanded_users.add(f"{base}-R")
-    expanded_users.add(f"{base}-P")
-    expanded_users.add(f"{base}-ND")
-    expanded_users.add(f"{base}-1")
-    expanded_users.add(f"{base}-2")
-    expanded_users.add(f"{base}-3")
+    expanded_users.add(u)
+    # Also strip standard 1-2 char trailing suffixes if present
+    base = re.sub(r"-[A-Z0-9]{1,2}$", "", u).strip().upper()
+    if base:
+        expanded_users.add(base)
+        expanded_users.add(f"{base}-M")
+        expanded_users.add(f"{base}-L")
+        expanded_users.add(f"{base}-R")
+        expanded_users.add(f"{base}-P")
+        expanded_users.add(f"{base}-ND")
+        expanded_users.add(f"{base}-1")
+        expanded_users.add(f"{base}-2")
+        expanded_users.add(f"{base}-3")
 
 sorted_users = sorted(list(expanded_users))
 
@@ -84,7 +85,7 @@ LISTEN_PORT={listen_port}
 HTTP_SRV_PORT={http_port}
 SQL_TIMEOUT=300
 SQL_TIMEOUT_BLOCKTIME=10
-CODECS=OPUS,GSM,SPEEX,RAW
+CODECS=OPUS
 
 [USERS]
 """
