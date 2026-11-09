@@ -1223,17 +1223,11 @@ DEFAULT_MUMBLE_BOTS = [
 ]
 
 DEFAULT_SVXLINK_ROOMS = [
-    {"id": "svx_1", "name": "SVX-Nasional", "channel": "SVX-Nasional", "targetTg": 510, "tg": 510, "slot": 2, "description": "SvxReflector TG 510 Nasional Indonesia", "isActive": True},
-    {"id": "svx_2", "name": "SVX-Nusantara", "channel": "SVX-Nusantara", "targetTg": 5109, "tg": 5109, "slot": 2, "description": "SvxReflector TG 5109 Nusantara & RAPI", "isActive": True},
-    {"id": "svx_3", "name": "SVX-BRIDI", "channel": "SVX-BRIDI", "targetTg": 1025, "tg": 1025, "slot": 2, "description": "SvxReflector TG 1025 BRIDI", "isActive": True},
-    {"id": "svx_4", "name": "SVX-Parrot", "channel": "SVX-Parrot", "targetTg": 9990, "tg": 9990, "slot": 2, "description": "SvxReflector TG 9990 Parrot Echo Test", "isActive": True}
+    {"id": "svx_gateway", "name": "SvxLink Any-TG Gateway", "channel": "Direct Any-TG", "targetTg": 0, "tg": 0, "slot": 2, "description": "SvxLink Dynamic Direct Any-TG Gateway", "isActive": True}
 ]
 
 DEFAULT_SVXLINK_BOTS = [
-    {"name": "SVX-NASIONAL", "channel": "SVX-Nasional", "tg": 510, "slot": 2, "status": "STATIONED"},
-    {"name": "SVX-NUSANTARA", "channel": "SVX-Nusantara", "tg": 5109, "slot": 2, "status": "STATIONED"},
-    {"name": "SVX-BRIDI", "channel": "SVX-BRIDI", "tg": 1025, "slot": 2, "status": "STATIONED"},
-    {"name": "SVX-PARROT", "channel": "SVX-Parrot", "tg": 9990, "slot": 2, "status": "STATIONED"}
+    {"name": "SVX-GATEWAY", "channel": "Direct Any-TG", "tg": 0, "slot": 2, "status": "ONLINE"}
 ]
 
 def read_config_file() -> dict:
@@ -2292,14 +2286,16 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
     for p in core_peers:
         pname = str(p.get("name") or p.get("host") or "DMR-PEER").upper()
         pcall = f"DMR-{pname[:10]}" if not pname.startswith("DMR") else pname
-        sub_raw = p.get("subscribed_tgs") or []
+        sub_raw = p.get("subscribed_tgs") or p.get("subscribedTgs") or p.get("target_tg") or p.get("targetTg") or p.get("tg") or []
         if isinstance(sub_raw, str):
             sub_tgs = [int(x.strip()) for x in sub_raw.split(",") if x.strip().isdigit()]
         elif isinstance(sub_raw, list):
             sub_tgs = [int(x) for x in sub_raw if str(x).isdigit()]
+        elif isinstance(sub_raw, int) and sub_raw > 0:
+            sub_tgs = [sub_raw]
         else:
-            sub_tgs = [1025]
-        primary_ptg = sub_tgs[0] if sub_tgs else 1025
+            sub_tgs = []
+        primary_ptg = sub_tgs[0] if sub_tgs else 0
 
         # Check if this peer has an active TG Matrix translation rule
         peer_name_clean = str(p.get("name") or pname).strip().lower()
