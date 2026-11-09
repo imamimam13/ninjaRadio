@@ -610,11 +610,15 @@ PREEMPHASIS=0
         if not self.is_transmitting_to_dmr:
             return
         self.is_transmitting_to_dmr = False
-        call_str = self.active_talker_call or self.bot_user
+        call_str = self.active_talker_call or ""
+        if not call_str or call_str.upper().startswith("SVX"):
+            self.tx_pcm_buffer.clear()
+            self.tx_conditioner.reset()
+            return
         dmr_id = self.active_talker_dmr_id or 5109999
         try:
             call_bytes = call_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-            unkey_nptt = struct.pack(">4sIIII?16s", b"NPTT", int(dmr_id), int(self.tg), int(self.slot), 0, False, call_bytes)
+            unkey_nptt = struct.pack(">4sIIII?16s", b"NSVX", int(dmr_id), int(self.tg), int(self.slot), 0, False, call_bytes)
             self.usrp_sock.sendto(unkey_nptt, (USRP_HOST, 32100))
             logger.info(f"[{self.bot_user}] ⏹️ DIRECT DMR RELEASE from {call_str} ({dmr_id}) -> TG {self.tg} Slot {self.slot}")
         except Exception:
@@ -700,7 +704,7 @@ PREEMPHASIS=0
                 while len(self.tx_pcm_buffer) >= 320:
                     chunk = bytes(self.tx_pcm_buffer[:320])
                     self.tx_pcm_buffer = self.tx_pcm_buffer[320:]
-                    nptt_pkt = struct.pack(">4sIIII?16s", b"NPTT", int(user_dmr_id), int(self.tg), int(self.slot), len(chunk), True, call_bytes) + chunk
+                    nptt_pkt = struct.pack(">4sIIII?16s", b"NSVX", int(user_dmr_id), int(self.tg), int(self.slot), len(chunk), True, call_bytes) + chunk
                     self.usrp_sock.sendto(nptt_pkt, (USRP_HOST, 32100))
 
             except socket.timeout:

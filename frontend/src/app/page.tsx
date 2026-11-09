@@ -318,7 +318,13 @@ export default function DashboardPage() {
   const activeTgs = Array.from(new Set(lastHeard.map((item) => item.talkgroup))).filter(Boolean);
 
   const filteredLastHeard = lastHeard.filter((item) => {
-    const matchesMode = filterMode === "ALL" || item.mode.toUpperCase() === filterMode.toUpperCase();
+    const modeUpper = (item.mode || "").toUpperCase();
+    const filterUpper = filterMode.toUpperCase();
+    const matchesMode =
+      filterUpper === "ALL" ||
+      (filterUpper === "SVX/SDR"
+        ? modeUpper.includes("SVX") || modeUpper.includes("SDR")
+        : modeUpper.includes(filterUpper));
     const matchesTg = selectedTgFilter === null || item.talkgroup === selectedTgFilter;
     const matchesSearch =
       item.callsign.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -636,18 +642,20 @@ export default function DashboardPage() {
               </div>
 
               {/* Mode Filters */}
-              <div className="flex items-center gap-1 bg-[#05080f] p-1 rounded-xl border border-cyan-900/60 text-xs font-mono">
-                {["ALL", "DMR", "YSF", "P25", "ANALOG", "CB"].map((mode) => (
+              <div className="flex flex-wrap items-center gap-1 bg-[#05080f] p-1 rounded-xl border border-cyan-900/60 text-xs font-mono">
+                {["ALL", "DMR", "SVX/SDR", "MUMBLE", "DVSWITCH", "ANALOG"].map((mode) => (
                   <button
                     key={mode}
                     onClick={() => setFilterMode(mode)}
                     className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
                       filterMode === mode
-                        ? "bg-cyan-400 text-slate-950 shadow-sm"
+                        ? mode === "SVX/SDR"
+                          ? "bg-amber-400 text-slate-950 shadow-sm"
+                          : "bg-cyan-400 text-slate-950 shadow-sm"
                         : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    {mode}
+                    {mode === "SVX/SDR" ? "📡 SVX/SDR" : mode}
                   </button>
                 ))}
               </div>
@@ -775,21 +783,29 @@ export default function DashboardPage() {
                       </td>
                       <td className="py-2.5 px-3 text-slate-400">TS{item.slot}</td>
                       <td className="py-2.5 px-3">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            item.mode === "DMR"
-                              ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
-                              : item.mode === "YSF"
-                              ? "bg-blue-950 text-blue-300 border border-blue-800"
-                              : item.mode === "P25"
-                              ? "bg-purple-950 text-purple-300 border border-purple-800"
-                              : item.mode === "CB"
-                              ? "bg-amber-950 text-amber-300 border border-amber-800"
-                              : "bg-emerald-950 text-emerald-300 border border-emerald-800"
-                          }`}
-                        >
-                          {item.mode}
-                        </span>
+                        {(() => {
+                          const mUp = (item.mode || "").toUpperCase();
+                          const isSvxSdr = mUp.includes("SVX") || mUp.includes("SDR");
+                          const isMumble = mUp.includes("MUMBLE");
+                          const isDvs = mUp.includes("DVSWITCH") || mUp.includes("USRP");
+                          return (
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1 ${
+                                isSvxSdr
+                                  ? "bg-amber-950/90 text-amber-300 border border-amber-500/70 shadow-[0_0_10px_rgba(245,158,11,0.25)]"
+                                  : isMumble
+                                  ? "bg-purple-950/90 text-purple-300 border border-purple-700"
+                                  : isDvs
+                                  ? "bg-blue-950/90 text-blue-300 border border-blue-700"
+                                  : item.mode === "DMR"
+                                  ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
+                                  : "bg-emerald-950 text-emerald-300 border border-emerald-800"
+                              }`}
+                            >
+                              {isSvxSdr ? "📡 SVX / SDR" : item.mode}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="py-2.5 px-3 text-slate-300 font-bold">{item.duration}</td>
                       <td className="py-2.5 px-3 text-emerald-400 text-[11px] font-bold">
