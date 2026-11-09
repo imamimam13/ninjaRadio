@@ -765,6 +765,25 @@ class DirectDmrEngine:
                 logger.debug(f"[DirectDMR] Pacer loop note: {e}")
                 time.sleep(0.01)
 
+    def _condition_tx_burst(self, burst_pcm: bytes) -> Tuple[bytes, int]:
+        """
+        Continuous telecom biquad filter (300Hz HPF + 3200Hz LPF) with smooth tanh soft limiter.
+        Avoids brick-wall gating cuts and preserves natural speech syllables for the AMBE vocoder.
+        """
+        samples = struct.unpack("<480h", burst_pcm[:BURST_PCM_BYTES])
+        processed = []
+        for s in samples:
+            f_val = self.lpf.process(self.hpf.process(float(s)))
+            sign = 1.0 if f_val >= 0 else -1.0
+            x = abs(f_val)
+            if x <= 16000.0:
+                y = x
+            else:
+                y = 16000.0 + 6000.0 * math.tanh((x - 16000.0) / 8000.0)
+            processed.append(max(-32767, min(32767, int(sign * y))))
+        peak = max(abs(p) for p in processed) if processed else 0
+        return struct.pack("<480h", *processed), peak
+
     def reset_rx_state(self):
         self.rx_hpf.reset()
         self.rx_lpf.reset()
@@ -801,7 +820,7 @@ class DirectDmrEngine:
                     else:
                         burst_pcm = bytes(self.tx_pcm_buffer).ljust(BURST_PCM_BYTES, b"\x00")
                         self.tx_pcm_buffer.clear()
-                    burst_pcm = self.tx_conditioner.process_frame(burst_pcm, return_bytes=True)
+                    burst_pcm, _ = self._condition_tx_burst(burst_pcm)
                     burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                     pkt = build_dmrd_packet(
                         src_id=self.current_src_id,
@@ -900,26 +919,9 @@ class DirectDmrEngine:
                 burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
                 del self.tx_pcm_buffer[:BURST_PCM_BYTES]
 
-                # AMBE+2 Mastering DSP Conditioning Pipeline (AmbeAudioConditioner):
-                # 1. 5th-order Butterworth Band-Pass (300Hz - 3300Hz): strips proximity bass & high-freq hiss
-                # 2. RMS Noise Gate (Squelch): zeros out room floor to prevent AMBE digital wind noise
-                # 3. Soft Peak Limiter (24000 ceiling): proportional anti-clipping without waveform distortion
-                if getattr(self, "tx_conditioner", None) is not None:
-                    conditioned_arr = self.tx_conditioner.process_frame(burst_pcm, return_bytes=False)
-                    if hasattr(conditioned_arr, "tobytes"):
-                        burst_pcm = conditioned_arr.tobytes()
-                        peak = int(abs(conditioned_arr).max()) if len(conditioned_arr) > 0 else 0
-                    else:
-                        burst_pcm = bytes(conditioned_arr)
-                        raw_samples = struct.unpack("<480h", burst_pcm)
-                        peak = max(abs(p) for p in raw_samples)
-                else:
-                    if hasattr(self, "hpf"):
-                        burst_pcm = self.hpf.process(burst_pcm)
-                    if hasattr(self, "lpf"):
-                        burst_pcm = self.lpf.process(burst_pcm)
-                    raw_samples = struct.unpack("<480h", burst_pcm)
-                    peak = max(abs(p) for p in raw_samples)
+                # Continuous telecom Biquad Conditioning Pipeline (300Hz HPF + 3200Hz LPF + smooth tanh soft limiter)
+                # Guarantees zero brick-wall gate cuts and uninterrupted speech cadence for the AMBE vocoder
+                burst_pcm, peak = self._condition_tx_burst(burst_pcm)
 
                 burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
                 if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
