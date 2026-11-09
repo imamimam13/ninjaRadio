@@ -468,22 +468,24 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: l
     routes = _get_cached_bridge_routes()
 
     if routes:
-        active_matches = [
-            (r_id, r_name, s_m, t_m)
-            for r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir in routes
-            if is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg)
-        ]
+        active_matches = []
+        for row in routes:
+            r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir = row[:10]
+            if is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg):
+                active_matches.append((r_id, r_name, s_m, t_m))
+
         if active_matches:
             for _, r_name, s_m, t_m in active_matches:
                 if not peer_upper or peer_upper in str(r_name).upper() or peer_upper in str(s_m).upper() or peer_upper in str(t_m).upper() or str(t_m).upper() in ("DMR", "PEER", "MUMBLE", "WEBRTC", "ALL"):
                     return True
             return True
 
-        disabled_matches = [
-            r_id
-            for r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir in routes
-            if not is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg)
-        ]
+        disabled_matches = []
+        for row in routes:
+            r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir = row[:10]
+            if not is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg):
+                disabled_matches.append(r_id)
+
         if disabled_matches:
             return False
 
