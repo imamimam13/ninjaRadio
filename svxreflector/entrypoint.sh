@@ -18,6 +18,8 @@ import re
 auth_key = os.getenv("SVX_AUTH_KEY", "ninjaradio_svx")
 listen_port = os.getenv("SVX_PORT", "5300")
 http_port = os.getenv("SVX_HTTP_PORT", "8080")
+common_name = os.getenv("SVX_COMMON_NAME", "43.173.13.117")
+alt_names = os.getenv("SVX_CERT_SAN", "DNS:43.173.13.117.sslip.io,DNS:svxreflector,IP:43.173.13.117,IP:127.0.0.1")
 conf_path = "$CONF_PATH"
 
 users = set([
@@ -87,6 +89,10 @@ TG_FOR_V1_CLIENTS=510
 SQL_TIMEOUT=300
 SQL_TIMEOUT_BLOCKTIME=10
 CODECS=OPUS
+
+[SERVER_CERT]
+COMMON_NAME={common_name}
+SUBJECT_ALT_NAME={alt_names}
 
 [USERS]
 """
