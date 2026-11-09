@@ -134,72 +134,59 @@ def resolve_svxlink_identity(callsign_str: str) -> Tuple[int, str]:
 
 def check_svxlink_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> Tuple[bool, str]:
     """
-    Dynamically checks if SvxLink / EchoLink user is permitted to transmit on target_tg.
-    Evaluates callbook overrides, then organizations table.
+    Strictly checks if SvxLink / EchoLink user is registered in the server's Callbook DB
+    and permitted to transmit on target_tg.
     """
-    if target_tg == 9990:
-        return True, "Echo Test"
     db_path = get_db_path()
     if not db_path:
-        return True, "Default (No DB)"
+        return False, "Database Callbook belum siap"
     try:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.5) as conn:
             cursor = conn.cursor()
             call_upper = (callsign or "").strip().upper()
-            if call_upper in ["BD62BOT", "N1NJA", "SUPERUSER", "ADMIN"] or dmr_id in [1022057, 5109999]:
-                return True, "Master Server Operator"
-            cursor.execute("SELECT organization, allowed_tgs_override FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, call_upper))
+            if not call_upper:
+                return False, "Callsign kosong tidak diizinkan transmit"
+            cursor.execute(
+                "SELECT organization, allowed_tgs_override FROM callbook WHERE UPPER(callsign) = ? OR (dmr_id = ? AND dmr_id > 0)",
+                (call_upper, dmr_id)
+            )
             row = cursor.fetchone()
-            if row and row[1]:
+            if not row:
+                return False, f"Callsign '{call_upper}' belum terdaftar di Callbook Server NinjaRadio"
+
+            if target_tg == 9990:
+                return True, "Echo Test (Callbook Verified)"
+
+            if row[1]:
                 override = str(row[1]).strip()
-                if override == "*":
+                if override.upper() in ("*", "ALL"):
                     return True, "User Override (*)"
                 allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
                 if target_tg in allowed:
                     return True, "User Override"
                 return False, f"Hanya diizinkan di TG: {override}"
 
-            org_code = row[0] if (row and row[0]) else None
-            cursor.execute("SELECT code, allowed_tgs, allow_tx, callsign_prefixes FROM organizations")
-            org_rows = cursor.fetchall()
-
-            target_org_row = None
+            org_code = row[0] if row[0] else None
             if org_code:
-                for orow in org_rows:
-                    if str(orow[0]).upper() == org_code.upper():
-                        target_org_row = orow
-                        break
+                cursor.execute("SELECT code, allowed_tgs, allow_tx FROM organizations WHERE UPPER(code) = ?", (str(org_code).upper(),))
+                target_org_row = cursor.fetchone()
+                if target_org_row:
+                    org_c, allowed_tgs, allow_tx = target_org_row
+                    if not allow_tx:
+                        return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
+                    rule = (allowed_tgs or "*").strip()
+                    if rule.upper() in ("*", "ALL", ""):
+                        return True, org_c
+                    allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+                    if target_tg in allowed:
+                        return True, org_c
+                    return False, f"Organisasi {org_c} hanya diizinkan di TG [{rule}]"
 
-            if not target_org_row and org_rows:
-                fallback_org_row = None
-                for orow in org_rows:
-                    raw_prefixes = str(orow[3] or "")
-                    prefixes = [p.strip().upper() for p in raw_prefixes.split(",") if p.strip()]
-                    if "*" in prefixes:
-                        fallback_org_row = orow
-                    if any(call_upper.startswith(p) for p in prefixes if p != "*"):
-                        target_org_row = orow
-                        break
-                if not target_org_row:
-                    target_org_row = fallback_org_row or org_rows[0]
-
-            if not target_org_row:
-                return True, "Default Open"
-
-            org_c, allowed_tgs, allow_tx, _ = target_org_row
-            if not allow_tx:
-                return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
-            rule = (allowed_tgs or "*").strip()
-            if rule == "*":
-                return True, org_c
-            allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
-            if target_tg in allowed:
-                return True, org_c
-            return False, f"Organisasi {org_c} hanya diizinkan di TG [{rule}]"
+            return True, "Callbook Verified"
     except Exception as e:
         logger.debug(f"check_svxlink_tx_permission error: {e}")
-    return True, "Fallback"
+    return False, "Gagal memverifikasi Callbook"
 
 
 def load_room_mappings() -> Dict[str, int]:
@@ -377,13 +364,22 @@ namespace eval ReflectorLogic {
         with open(f"{local_events_dir}/ReflectorLogic.tcl", "w", encoding="utf-8") as wf:
             wf.write(reflector_local_tcl)
 
-        # Write local/SimplexLogic.tcl to disable CW/Voice IDs and Roger Beeps from leaking into DMR
+        # Write local/SimplexLogic.tcl to disable all local startup/link announcements, CW/Voice IDs, and Roger Beeps
         simplex_local_tcl = """
 namespace eval SimplexLogic {
+    proc startup {} {}
     proc send_short_ident {{hour -1} {minute -1}} {}
     proc send_long_ident {{hour -1} {minute -1}} {}
     proc send_rgr_sound {} {}
     proc squelch_open {{rx_id 0} {is_open 0}} {}
+    proc activating_link {name} {}
+    proc deactivating_link {name} {}
+}
+namespace eval Logic {
+    proc startup {} {}
+    proc activating_link {name} {}
+    proc deactivating_link {name} {}
+    proc send_rgr_sound {} {}
 }
 """
         with open(f"{local_events_dir}/SimplexLogic.tcl", "w", encoding="utf-8") as wf:
@@ -649,12 +645,19 @@ PREEMPHASIS=0
                     continue
 
                 # Ignore loopback if DMR RX is currently playing into this bot
-                if self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 0.25):
+                if self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 0.45):
                     continue
 
-                # Ignore our own bot callsign if echoed
-                raw_talker = self.active_talker_call or ""
-                if raw_talker.upper() == self.bot_user.upper():
+                # Strictly require an active external station callsign talking on SvxReflector!
+                # Never transmit when raw_talker is empty (local SimplexLogic tones) or when raw_talker is an internal SVX-* bot.
+                raw_talker = (self.active_talker_call or "").strip().upper()
+                internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
+                if (
+                    not raw_talker
+                    or raw_talker == self.bot_user.upper()
+                    or raw_talker in internal_bot_names
+                    or raw_talker.startswith("SVX")
+                ):
                     continue
 
                 # Check if audio frame is non-zero (ignore zero-fill silence frames)
@@ -662,12 +665,11 @@ PREEMPHASIS=0
                 if len(pcm_16k) == 0:
                     continue
                 rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2)))
-                if rms < 15.0 and not self.is_transmitting_to_dmr:
+                if rms < 25.0 and not self.is_transmitting_to_dmr:
                     continue
 
                 # Resolve caller identity (Carry-Over Callsign from SvxReflector / EchoLink)
-                caller_input = raw_talker if raw_talker else self.bot_user
-                user_dmr_id, user_callsign = resolve_svxlink_identity(caller_input)
+                user_dmr_id, user_callsign = resolve_svxlink_identity(raw_talker)
 
                 is_allowed, reason = check_svxlink_tx_permission(user_dmr_id, user_callsign, self.tg)
                 if not is_allowed:

@@ -40,7 +40,7 @@ import {
 export default function SettingsPage() {
   const { isConnected } = useLiveMonitor();
   const { pttKey, saveCustomKey } = usePhysicalPTT();
-  const [activeTab, setActiveTab] = useState<"general" | "hotspot" | "peering" | "crossmode" | "mumble" | "hardware">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "hotspot" | "peering" | "crossmode" | "mumble" | "qlink" | "hardware">("general");
   const [isListeningKey, setIsListeningKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -973,6 +973,7 @@ export default function SettingsPage() {
             { id: "peering", label: "🌐 Peering FreeDMR / BM", icon: Globe },
             { id: "crossmode", label: "🔀 DVSwitch & Cross-Mode", icon: Layers },
             { id: "mumble", label: "🎙️ Mumble VoIP Server", icon: Radio },
+            { id: "qlink", label: "📡 QRadioLink & SvxLink SDR", icon: Radio },
             { id: "hardware", label: "🎛️ Tombol PTT & Audio", icon: Key },
           ].map((tab) => (
             <button
@@ -1815,6 +1816,140 @@ export default function SettingsPage() {
                   <p>1. Download aplikasi <b>Mumla</b> (Android) dari Google Play / F-Droid, atau <b>Mumble</b> (iOS/PC).</p>
                   <p>2. Tambah Server: <b>Address:</b> <code>{typeof window !== "undefined" ? window.location.hostname : "IP-SERVER"}</code>, <b>Port:</b> <code>64738</code>, <b>Username:</b> Callsign atau Nama Anda.</p>
                   <p>3. Di layar HP, Anda akan melihat semua room di atas! Masuk ke room mana saja yang ingin Anda pantau dan gunakan tombol PTT di layar HP untuk bicara langsung ke HT DMR!</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5B: QRADIOLINK & SVXLINK SDR TRANSCEIVER GATEWAY */}
+          {activeTab === "qlink" && (
+            <div className="space-y-4">
+              {/* Top Overview Banner */}
+              <div className="bg-[#0b121e] border border-emerald-500/40 rounded-2xl p-5 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-xl bg-emerald-500/15 border border-emerald-500/50 flex items-center justify-center">
+                      <Radio className="w-6 h-6 text-emerald-400" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-heading font-black text-base text-white">
+                          QRADIOLINK & SVXLINK SDR TRANSCEIVER GATEWAY
+                        </h3>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                          CALLBOOK TX VERIFIED
+                        </span>
+                      </div>
+                      <p className="text-xs font-mono text-slate-400 mt-0.5">
+                        Integrasi 2-Arah (TX & RX) Perangkat SDR (PlutoSDR, LimeSDR, HackRF, RTL-SDR) ke Multi-TG NinjaRadio
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <a
+                      href="/svxlink"
+                      className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-heading font-black text-xs shadow-lg hover:opacity-90 transition-all"
+                    >
+                      📡 Buka Matrix SvxLink (/svxlink)
+                    </a>
+                  </div>
+                </div>
+
+                {/* Security Policy Notice */}
+                <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/40 text-xs font-mono text-amber-200 flex items-start gap-2.5">
+                  <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-amber-300 block">
+                      Aturan Firewall Transmit (Callsign Wajib Terdaftar di Callbook Server):
+                    </span>
+                    Sistem ini 100% gratis dan tidak memerlukan verifikasi lisensi amatir eksternal, <strong>TETAPI setiap stasiun QRadioLink / SvxLink / Mumble / DVSwitch yang ingin melakukan Transmit (PTT) WAJIB menggunakan Callsign yang terdaftar di menu Callbook (/callbook) server ini</strong>. Stasiun yang tidak terdaftar otomatis diblokir oleh TX Firewall (hanya bisa Monitor/RX).
+                  </div>
+                </div>
+              </div>
+
+              {/* 2 Connection Methods Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
+                {/* Method 1: QRadioLink Built-in VoIP / Mumble Radio Forwarding */}
+                <div className="bg-[#0b121e] border border-cyan-900/40 rounded-2xl p-5 space-y-3 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                    <span className="font-heading font-black text-sm text-cyan-300 flex items-center gap-2">
+                      <Wifi className="w-4 h-4 text-cyan-400" />
+                      JALUR 1: QRADIOLINK NATIVE VOIP FORWARDING (PLUG & PLAY)
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 text-[10px] font-bold">
+                      PORT 64738
+                    </span>
+                  </div>
+
+                  <p className="text-slate-400 leading-relaxed">
+                    Gunakan tab <strong>Network / VoIP</strong> bawaan di aplikasi <strong>QRadioLink</strong> (Linux / Raspberry Pi / Android) untuk langsung menghubungkan modulator/demodulator SDR (FM, NFM, USB, LSB, AM, FreeDV) ke Talkgroup DMR:
+                  </p>
+
+                  <div className="bg-[#05080f] border border-slate-800 rounded-xl p-3 space-y-2 text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">VoIP Server Host:</span>
+                      <span className="text-white font-bold">
+                        {typeof window !== "undefined" ? window.location.hostname : "43.173.13.117"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">VoIP Port:</span>
+                      <span className="text-cyan-400 font-bold">64738</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Username / Callsign:</span>
+                      <span className="text-emerald-400 font-bold">Callsign Terdaftar di Callbook (e.g. {serverCallsign})</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Opsi QRadioLink:</span>
+                      <span className="text-amber-300 font-bold">Aktifkan &quot;VOIP Forwarding&quot; &amp; &quot;Duplex&quot;</span>
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-slate-400 space-y-1 pt-1">
+                    <p>• <strong>RX Udara ➔ Server:</strong> Sinyal RF yang membuka Squelch di QRadioLink otomatis dikirim ke TG room yang dipilih.</p>
+                    <p>• <strong>TX Server ➔ Udara:</strong> Saat user DVSwitch / DMR bicara di TG tersebut, QRadioLink otomatis menekan PTT TX pada SDR (PlutoSDR / LimeSDR / HackRF) ke frekuensi udara.</p>
+                  </div>
+                </div>
+
+                {/* Method 2: QRadioLink + SvxLink UDP Audio & PTY Bridge */}
+                <div className="bg-[#0b121e] border border-emerald-900/40 rounded-2xl p-5 space-y-3 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                    <span className="font-heading font-black text-sm text-emerald-300 flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-emerald-400" />
+                      JALUR 2: QRADIOLINK + SVXLINK UDP AUDIO STREAM (PORT 5300)
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px] font-bold">
+                      UDP 16kHz PCM
+                    </span>
+                  </div>
+
+                  <p className="text-slate-400 leading-relaxed">
+                    Sesuai standar <code className="text-emerald-300">qradiolink.org/docs/svxlink.html</code>, QRadioLink dapat di-pipe via UDP 16kHz (<code className="text-cyan-300">udp:127.0.0.1:10000</code>) ke node SvxLink lokal lalu masuk ke <strong>SvxReflector NinjaRadio (Port 5300)</strong>:
+                  </p>
+
+                  <pre className="p-3 rounded-xl bg-[#05080f] border border-slate-800 text-[10px] text-emerald-300 overflow-x-auto leading-relaxed">
+{`# /etc/svxlink/svxlink.conf (di PC / Raspberry Pi SDR QRadioLink)
+[ReflectorLogic]
+TYPE=Reflector
+HOST=${typeof window !== "undefined" ? window.location.hostname : "43.173.13.117"}
+PORT=5300
+CALLSIGN=${serverCallsign}
+AUTH_KEY="ninjaradio_svx"
+DEFAULT_TG=1025
+MONITOR_TGS=510,1025,5109
+
+[Rx1]
+TYPE=Local
+AUDIO_DEV=udp:127.0.0.1:10000
+SQL_DET=VOX
+
+[Tx1]
+TYPE=Local
+AUDIO_DEV=udp:127.0.0.1:10001
+PTT_TYPE=NONE`}
+                  </pre>
                 </div>
               </div>
             </div>
