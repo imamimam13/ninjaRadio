@@ -16,11 +16,20 @@ for default_call in N1NJA BD62BOT SVX-NASIONAL SVX-NUSANTARA SVX-BRIDI SVX-PARRO
 done
 
 generate_conf() {
-    # Extract any custom bot names from /app/data/config.json if present
+    # 1. Include custom bot names from /app/data/config.json
     if [ -f /app/data/config.json ]; then
         grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' /app/data/config.json | cut -d'"' -f4 | while read -r bname; do
             if [ -n "$bname" ]; then
                 grep -qxF "$bname" "$USERS_FILE" 2>/dev/null || echo "$bname" >> "$USERS_FILE"
+            fi
+        done
+    fi
+
+    # 2. Include all registered operator Callsigns from /app/data/subscriber_ids.csv (synced from Callbook DB)
+    if [ -f /app/data/subscriber_ids.csv ]; then
+        cut -d',' -f2 /app/data/subscriber_ids.csv | tr '[:lower:]' '[:upper:]' | while read -r ccall; do
+            if [ -n "$ccall" ]; then
+                grep -qxF "$ccall" "$USERS_FILE" 2>/dev/null || echo "$ccall" >> "$USERS_FILE"
             fi
         done
     fi
@@ -35,7 +44,6 @@ SQL_TIMEOUT_BLOCKTIME=10
 CODECS=OPUS
 
 [USERS]
-* = NinjaReflectorNodes
 EOF
 
     sort -u "$USERS_FILE" | while read -r ucall; do
@@ -55,24 +63,29 @@ generate_conf
 
 echo "=================================================="
 echo "  Starting NinjaRadio SvxReflector Server"
-echo "  Mode         : Open Callsign (Zero Amateur Check)"
+echo "  Mode         : Callbook Registered Callsigns + SVX Bots"
 echo "  TCP/UDP Port : ${LISTEN_PORT}"
 echo "  Status HTTP  : ${HTTP_PORT}"
 echo "=================================================="
 
 : > "$LOG_FILE"
 
-# Background watcher: auto-registers ANY new callsign (custom bot or external node)
+# Background watcher: auto-allows newly deployed internal SVX-* bots or Callbook-registered callsigns
 (
     tail -n 0 -F "$LOG_FILE" 2>/dev/null | while read -r line; do
         if echo "$line" | grep -q 'Unknown user "'; then
             new_call=$(echo "$line" | sed -n 's/.*Unknown user "\([^"]*\)".*/\1/p')
             if [ -n "$new_call" ]; then
-                if ! grep -qxF "$new_call" "$USERS_FILE" 2>/dev/null; then
-                    echo "🔓 [Auto-Allow Callsign] Registering new node callsign '$new_call'..."
-                    echo "$new_call" >> "$USERS_FILE"
-                    generate_conf
-                    pkill -f "/usr/bin/svxreflector" || true
+                # Allow internal SVX-* bots or callsigns present in subscriber_ids.csv (Callbook DB)
+                if echo "$new_call" | grep -q '^SVX-' || ( [ -f /app/data/subscriber_ids.csv ] && grep -qi ",${new_call}," /app/data/subscriber_ids.csv ); then
+                    if ! grep -qxF "$new_call" "$USERS_FILE" 2>/dev/null; then
+                        echo "🔓 [Callbook-Verified] Registering authorized callsign '$new_call'..."
+                        echo "$new_call" >> "$USERS_FILE"
+                        generate_conf
+                        pkill -f "/usr/bin/svxreflector" || true
+                    fi
+                else
+                    echo "🛑 [Auth-Firewall] Rejected unregistered callsign '$new_call' (not in Callbook)"
                 fi
             fi
         fi

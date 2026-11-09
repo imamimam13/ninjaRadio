@@ -273,8 +273,18 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
     Validates whether the incoming DMR/USRP operator is allowed to transmit on target_tg.
     Returns (is_allowed: bool, reason: str).
     """
-    if target_tg in (9990, 99990, 4000):
-        return True, "Special Service TG"
+    call_upper = (callsign or "").strip().upper()
+    if (
+        not call_upper
+        or call_upper in ["SWL-MONITOR", "MONITOR", "LISTENER", "GUEST", "TAMU", "SVX"]
+        or call_upper.startswith("SVX-")
+        or call_upper.startswith("DMR-")
+        or dmr_id == 0
+    ):
+        return False, f"Identitas bot/monitor '{call_upper}' tidak diizinkan transmit"
+
+    if target_tg == 4000:
+        return True, "Disconnect TG"
     db_path = get_db_path()
     if not db_path:
         return True, "Default (No DB)"
@@ -282,9 +292,6 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tupl
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
-            call_upper = (callsign or "").strip().upper()
-            if not call_upper or call_upper in ["SWL-MONITOR", "MONITOR", "LISTENER", "GUEST", "TAMU"] or dmr_id == 0:
-                return False, "Mode Monitor tidak memiliki izin transmit"
 
             cursor.execute("SELECT organization, allowed_tgs_override, callsign, dmr_id FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, call_upper))
             row = cursor.fetchone()
@@ -2303,6 +2310,12 @@ usrpAGC = -20,10,100
                     session_key = (dmr_id, tg)
                     now = time.time()
                     if is_tx:
+                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg)
+                        if not is_allowed:
+                            if now - getattr(self, "_last_web_fw_alert", 0) > 3.0:
+                                self._last_web_fw_alert = now
+                                logger.warning(f"🛑 [TX-FIREWALL] Blocked Direct PTT from {addr} ({callsign} - {dmr_id}) to TG {tg}: {reason}")
+                            continue
                         self.last_audio_tx_time = now
                         self.last_ptt_heartbeat_time = now
                         self.is_transmitting = True

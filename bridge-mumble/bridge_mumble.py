@@ -683,74 +683,59 @@ last_tx_reject_alerts = {}
 
 def check_mumble_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tuple:
     """
-    Dynamically checks if Mumble user is permitted to transmit on target_tg.
-    Zero hardcoded prefixes: evaluates callbook overrides, then organizations table.
+    Strictly checks if Mumble user is registered in the server's Callbook DB
+    and permitted to transmit on target_tg.
     """
-    if target_tg == 9990:
-        return True, "Echo Test"
     db_path = get_db_path()
     if not db_path:
-        return True, "Default (No DB)"
+        return False, "Database Callbook belum siap"
     try:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.5) as conn:
             cursor = conn.cursor()
             call_upper = (callsign or "").strip().upper()
-            if call_upper in ["BD62BOT", "N1NJA", "SUPERUSER", "ADMIN"] or dmr_id in [1022057, 5109999]:
-                return True, "Master Server Operator / SuperUser"
-            cursor.execute("SELECT organization, allowed_tgs_override FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, call_upper))
+            if not call_upper:
+                return False, "Callsign kosong tidak diizinkan transmit"
+            cursor.execute(
+                "SELECT organization, allowed_tgs_override FROM callbook WHERE UPPER(callsign) = ? OR (dmr_id = ? AND dmr_id > 0)",
+                (call_upper, dmr_id)
+            )
             row = cursor.fetchone()
-            if row and row[1]:
+            if not row:
+                return False, f"Callsign '{call_upper}' belum terdaftar di Callbook Server NinjaRadio"
+
+            if target_tg == 9990:
+                return True, "Echo Test (Callbook Verified)"
+
+            if row[1]:
                 override = str(row[1]).strip()
-                if override == "*":
+                if override.upper() in ("*", "ALL"):
                     return True, "User Override (*)"
                 allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
                 if target_tg in allowed:
                     return True, "User Override"
                 return False, f"Hanya diizinkan di TG: {override}"
 
-            org_code = row[0] if (row and row[0]) else None
-
-            # Fetch organizations to match dynamic callsign prefixes
-            cursor.execute("SELECT code, allowed_tgs, allow_tx, callsign_prefixes FROM organizations")
-            org_rows = cursor.fetchall()
-
-            target_org_row = None
+            org_code = row[0] if row[0] else None
             if org_code:
-                for orow in org_rows:
-                    if str(orow[0]).upper() == org_code.upper():
-                        target_org_row = orow
-                        break
+                cursor.execute("SELECT code, allowed_tgs, allow_tx FROM organizations WHERE UPPER(code) = ?", (str(org_code).upper(),))
+                target_org_row = cursor.fetchone()
+                if target_org_row:
+                    org_c, allowed_tgs, allow_tx = target_org_row
+                    if not allow_tx:
+                        return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
+                    rule = (allowed_tgs or "*").strip()
+                    if rule.upper() in ("*", "ALL", ""):
+                        return True, org_c
+                    allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+                    if target_tg in allowed:
+                        return True, org_c
+                    return False, f"Organisasi {org_c} hanya diizinkan di TG [{rule}]"
 
-            if not target_org_row and org_rows:
-                fallback_org_row = None
-                for orow in org_rows:
-                    raw_prefixes = str(orow[3] or "")
-                    prefixes = [p.strip().upper() for p in raw_prefixes.split(",") if p.strip()]
-                    if "*" in prefixes:
-                        fallback_org_row = orow
-                    if any(call_upper.startswith(p) for p in prefixes if p != "*"):
-                        target_org_row = orow
-                        break
-                if not target_org_row:
-                    target_org_row = fallback_org_row or org_rows[0]
-
-            if not target_org_row:
-                return False, f"Tidak ada aturan organisasi untuk {call_upper}"
-
-            org_c, allowed_tgs, allow_tx, _ = target_org_row
-            if not allow_tx:
-                return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
-            rule = (allowed_tgs or "*").strip()
-            if rule == "*":
-                return True, org_c
-            allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
-            if target_tg in allowed:
-                return True, org_c
-            return False, f"Organisasi {org_c} hanya diizinkan di TG [{rule}]"
+            return True, "Callbook Verified"
     except Exception as e:
         logger.debug(f"check_mumble_tx_permission error: {e}")
-    return True, "Fallback"
+    return False, "Gagal memverifikasi Callbook"
 
 def update_user_permission_in_db(identifier: str, allowed_tgs_str: str) -> bool:
     """Updates or provisions a user in ninjaradio.db with special TG override (invoked by SuperUser)."""
