@@ -520,11 +520,12 @@ class DirectOpenDmrVocoder:
             return bytes(FRAME_BYTES)
         return bytes(self._frame_out)
 
-    def decode_frame(self, frame: bytes) -> bytes:
-        if not self._dec or len(frame) != FRAME_BYTES:
+    def decode_frame(self, frame: bytes, dec=None) -> bytes:
+        d = dec or self._dec
+        if not d or len(frame) != FRAME_BYTES:
             return bytes(PCM_BYTES)
         buf = (ctypes.c_uint8 * FRAME_BYTES).from_buffer_copy(frame)
-        ok = self.lib.opendmr_decode(self._dec, buf, self._pcm_out, ctypes.byref(self._errs))
+        ok = self.lib.opendmr_decode(d, buf, self._pcm_out, ctypes.byref(self._errs))
         if not ok:
             return bytes(PCM_BYTES)
         return struct.pack("<160h", *self._pcm_out)
@@ -561,11 +562,11 @@ class DirectOpenDmrVocoder:
             if ok:
                 return struct.pack("<480h", *self._pcm_480_out)
 
-        # Fallback to Python burst de-interleaver
+        # Fallback to Python burst de-interleaver with stream-isolated decoder
         f1, f2, f3 = deinterleave_burst(burst_33[:BURST_BYTES])
-        p1 = self.decode_frame(f1)
-        p2 = self.decode_frame(f2)
-        p3 = self.decode_frame(f3)
+        p1 = self.decode_frame(f1, dec=dec)
+        p2 = self.decode_frame(f2, dec=dec)
+        p3 = self.decode_frame(f3, dec=dec)
         return p1 + p2 + p3
 
     def close(self):
