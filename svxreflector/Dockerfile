@@ -16,7 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus-dev \
     libspeex-dev \
     libgsm1-dev \
-    libasound2-dev
+    libasound2-dev \
+    libogg-dev \
+    libcurl4-openssl-dev \
+    tcl-dev \
+    tcl
+
+# Create svxlink user required during CMake configuration and install
+RUN useradd -r -g daemon svxlink || true
 
 RUN git clone --depth 1 https://github.com/sm0svx/svxlink.git /src/svxlink
 
@@ -46,6 +53,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libspeex1 \
     libgsm1 \
     libasound2 \
+    libogg0 \
+    libcurl4 \
+    tcl \
     ca-certificates \
     curl \
     sqlite3 \
