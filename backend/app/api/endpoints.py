@@ -1222,6 +1222,20 @@ DEFAULT_MUMBLE_BOTS = [
     {"name": "Ninja-BRIDI-bot", "channel": "NINJA-BRIDI", "tg": 1025, "slot": 2, "status": "STATIONED"}
 ]
 
+DEFAULT_SVXLINK_ROOMS = [
+    {"id": "svx_1", "name": "SVX-Nasional", "channel": "SVX-Nasional", "targetTg": 510, "tg": 510, "slot": 2, "description": "SvxReflector TG 510 Nasional Indonesia", "isActive": True},
+    {"id": "svx_2", "name": "SVX-Nusantara", "channel": "SVX-Nusantara", "targetTg": 5109, "tg": 5109, "slot": 2, "description": "SvxReflector TG 5109 Nusantara & RAPI", "isActive": True},
+    {"id": "svx_3", "name": "SVX-BRIDI", "channel": "SVX-BRIDI", "targetTg": 1025, "tg": 1025, "slot": 2, "description": "SvxReflector TG 1025 BRIDI", "isActive": True},
+    {"id": "svx_4", "name": "SVX-Parrot", "channel": "SVX-Parrot", "targetTg": 9990, "tg": 9990, "slot": 2, "description": "SvxReflector TG 9990 Parrot Echo Test", "isActive": True}
+]
+
+DEFAULT_SVXLINK_BOTS = [
+    {"name": "SVX-NASIONAL", "channel": "SVX-Nasional", "tg": 510, "slot": 2, "status": "STATIONED"},
+    {"name": "SVX-NUSANTARA", "channel": "SVX-Nusantara", "tg": 5109, "slot": 2, "status": "STATIONED"},
+    {"name": "SVX-BRIDI", "channel": "SVX-BRIDI", "tg": 1025, "slot": 2, "status": "STATIONED"},
+    {"name": "SVX-PARROT", "channel": "SVX-Parrot", "tg": 9990, "slot": 2, "status": "STATIONED"}
+]
+
 def read_config_file() -> dict:
     import json
     import os
@@ -1251,7 +1265,9 @@ def read_config_file() -> dict:
         "parrot_delay": 1.2,
         "peering": [],
         "mumble_rooms": DEFAULT_MUMBLE_ROOMS,
-        "mumble_bots": DEFAULT_MUMBLE_BOTS
+        "mumble_bots": DEFAULT_MUMBLE_BOTS,
+        "svxlink_rooms": DEFAULT_SVXLINK_ROOMS,
+        "svxlink_bots": DEFAULT_SVXLINK_BOTS
     }
     for k, v in default_cfg.items():
         if k not in cfg:
@@ -1282,7 +1298,7 @@ async def save_system_config(config: dict):
     import json
     import os
     existing = read_config_file()
-    for k in ["mumble_rooms", "mumble_bots", "parrot_tgs", "parrot_delay", "peering"]:
+    for k in ["mumble_rooms", "mumble_bots", "svxlink_rooms", "svxlink_bots", "parrot_tgs", "parrot_delay", "peering"]:
         if (k not in config or not config[k]) and k in existing and existing[k]:
             config[k] = existing[k]
 
@@ -1339,6 +1355,15 @@ async def save_system_config(config: dict):
             import httpx
             async with httpx.AsyncClient(timeout=6.0) as client:
                 await client.post("http://mumble-bridge:12347/sync")
+        except Exception:
+            pass
+
+    # Notify svxlink-bridge to synchronize Multi-TG bots with SvxReflector
+    if "svxlink_rooms" in config or "svxlink_bots" in config:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                await client.post("http://svxlink-bridge:12349/sync")
         except Exception:
             pass
 
@@ -2081,5 +2106,383 @@ async def save_serverdmr_config(payload: dict):
         "message": "DMR Master configuration saved and applied.",
         "config": cfg
     }
+
+
+# ----------------- SvxLink & SvxReflector Multi-TG Gateway Management -----------------
+
+@router.get("/svxlink/telemetry")
+async def get_svxlink_telemetry():
+    """Returns live SvxReflector & Multi-TG SvxLink Bot Pool telemetry."""
+    import asyncio
+    import httpx
+    import json
+    import os
+
+    svx_host = os.getenv("SVX_HOST", "svxreflector")
+    svx_port = int(os.getenv("SVX_PORT", "5300"))
+    svx_auth_key = os.getenv("SVX_AUTH_KEY", "ninjaradio_svx")
+
+    tcp_connected = False
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(svx_host, svx_port),
+            timeout=1.0
+        )
+        tcp_connected = True
+        writer.close()
+        await writer.wait_closed()
+    except Exception:
+        tcp_connected = False
+
+    reflector_nodes = {}
+    active_bots = []
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            resp = await client.get("http://svxlink-bridge:12349/status")
+            if resp.status_code == 200:
+                bdata = resp.json()
+                reflector_nodes = bdata.get("reflector_nodes", {})
+                active_bots = bdata.get("active_bots", [])
+    except Exception:
+        pass
+
+    mappings = DEFAULT_SVXLINK_ROOMS
+    config_path = "/app/data/config.json"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                if "svxlink_rooms" in cfg and isinstance(cfg["svxlink_rooms"], list) and len(cfg["svxlink_rooms"]) > 0:
+                    mappings = cfg["svxlink_rooms"]
+        except Exception:
+            pass
+
+    return {
+        "online": tcp_connected,
+        "server_host": svx_host,
+        "server_port": svx_port,
+        "auth_key": svx_auth_key,
+        "protocol": "SvxReflector V2 (Opus / Multi-TG Switchboard)",
+        "server_version": "19.09.2-Debian",
+        "tcp_status": "OPEN" if tcp_connected else "CLOSED",
+        "udp_status": "ACTIVE" if tcp_connected else "UNREACHABLE",
+        "connected_nodes": len(reflector_nodes) if reflector_nodes else len(active_bots),
+        "reflector_nodes": reflector_nodes,
+        "active_bots": active_bots,
+        "bridge_bot": {
+            "name": "NinjaRadio-SvxBridge",
+            "status": "RUNNING" if tcp_connected else "IDLE",
+            "audio_transcoding": "PCM 8kHz (Direct DMR) <-> PCM 16kHz / Opus (SvxReflector)",
+            "gateway_port": 12348
+        },
+        "channels": mappings
+    }
+
+
+@router.get("/svxlink/channels")
+async def get_svxlink_channels():
+    """Returns configured SvxReflector talkgroup rooms."""
+    import httpx
+    import json
+    import os
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get("http://svxlink-bridge:12349/channels")
+            if resp.status_code == 200:
+                data = resp.json()
+                chs = data.get("channels", [])
+                if isinstance(chs, list) and len(chs) > 0:
+                    return {"status": "SUCCESS", "source": "svxlink_live", "channels": chs}
+    except Exception:
+        pass
+
+    config_path = "/app/data/config.json"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "svxlink_rooms" in data and isinstance(data["svxlink_rooms"], list) and len(data["svxlink_rooms"]) > 0:
+                    return {"status": "SUCCESS", "source": "config", "channels": data["svxlink_rooms"]}
+        except Exception:
+            pass
+
+    return {"status": "SUCCESS", "source": "default", "channels": DEFAULT_SVXLINK_ROOMS}
+
+
+@router.post("/svxlink/channels")
+async def save_svxlink_channels(payload: dict):
+    """Saves user-defined SvxReflector room to DMR talkgroup mappings and synchronizes bots."""
+    import httpx
+    import json
+    import os
+
+    channels = payload.get("channels", [])
+    if not isinstance(channels, list):
+        raise HTTPException(status_code=400, detail="Invalid channels payload")
+
+    cleaned_channels = []
+    for ch in channels:
+        name = str(ch.get("name") or ch.get("channel") or "").strip().replace(" ", "-")
+        if not name:
+            continue
+        try:
+            tg = int(ch.get("targetTg") if ch.get("targetTg") is not None else ch.get("tg", 510))
+            slot = int(ch.get("slot", 2))
+            if slot not in [1, 2]:
+                slot = 2
+            desc = str(ch.get("description", "")).strip()[:80]
+            cleaned_channels.append({
+                "id": ch.get("id") or f"svx_{name}",
+                "name": name,
+                "channel": name,
+                "targetTg": tg,
+                "tg": tg,
+                "slot": slot,
+                "description": desc or f"SvxReflector TG {tg} (Slot {slot})",
+                "isActive": True
+            })
+        except (ValueError, TypeError):
+            continue
+
+    if not cleaned_channels:
+        raise HTTPException(status_code=400, detail="No valid channels provided")
+
+    config_path = "/app/data/config.json"
+    data = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    data["svxlink_rooms"] = cleaned_channels
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save config: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post("http://svxlink-bridge:12349/sync")
+    except Exception:
+        pass
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Saved {len(cleaned_channels)} SvxReflector Talkgroup rooms.",
+        "channels": cleaned_channels
+    }
+
+
+@router.delete("/svxlink/channels/{channel_name}")
+async def delete_svxlink_channel(channel_name: str):
+    """Deletes an SvxReflector talkgroup room and stops its assigned bot."""
+    import httpx
+    import json
+    import os
+
+    clean_name = channel_name.strip()
+    config_path = "/app/data/config.json"
+    remaining = []
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            rooms = [r for r in data.get("svxlink_rooms", []) if (r.get("name") or r.get("channel")) != clean_name]
+            bots = [b for b in data.get("svxlink_bots", []) if b.get("channel") != clean_name]
+            data["svxlink_rooms"] = rooms
+            data["svxlink_bots"] = bots
+            remaining = rooms
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to update config: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post("http://svxlink-bridge:12349/sync")
+    except Exception:
+        pass
+
+    return {"status": "SUCCESS", "message": f"SvxReflector Room '{clean_name}' removed", "channels": remaining}
+
+
+@router.get("/svxlink/bots")
+async def get_svxlink_bots():
+    """Returns the list of active SvxLink Multi-TG bots and their assigned talkgroups."""
+    import httpx
+    import json
+    import os
+
+    live_map = {}
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            resp = await client.get("http://svxlink-bridge:12349/status")
+            if resp.status_code == 200:
+                for lb in resp.json().get("active_bots", []):
+                    live_map[lb.get("name", "").upper()] = lb
+    except Exception:
+        pass
+
+    bots = DEFAULT_SVXLINK_BOTS
+    config_path = "/app/data/config.json"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "svxlink_bots" in data and isinstance(data["svxlink_bots"], list) and len(data["svxlink_bots"]) > 0:
+                    bots = data["svxlink_bots"]
+        except Exception:
+            pass
+
+    enriched = []
+    for b in bots:
+        b_copy = dict(b)
+        b_up = str(b_copy.get("name", "")).upper()
+        if b_up in live_map:
+            b_copy["connected"] = live_map[b_up].get("connected", False)
+            b_copy["active_talker"] = live_map[b_up].get("active_talker")
+            b_copy["status"] = "CONNECTED" if b_copy["connected"] else "CONNECTING"
+        enriched.append(b_copy)
+
+    return {"bots": enriched}
+
+
+@router.post("/svxlink/bots")
+async def create_or_update_svxlink_bot(payload: dict):
+    """Creates a new SvxLink Multi-TG bot or updates an existing bot."""
+    import httpx
+    import json
+    import os
+    import re
+
+    raw_name = str(payload.get("name", "")).strip().upper()
+    name = re.sub(r"[^A-Z0-9\-]", "", raw_name)[:15]
+    channel = str(payload.get("channel", "")).strip().replace(" ", "-")
+    if not name or not channel:
+        raise HTTPException(status_code=400, detail="Bot Callsign/Name and target room are required")
+    try:
+        tg = int(payload.get("tg", 510))
+        slot = int(payload.get("slot", 2))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid TG or slot")
+
+    config_path = "/app/data/config.json"
+    data = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    bots = list(data.get("svxlink_bots", DEFAULT_SVXLINK_BOTS))
+    existing_idx = next((i for i, b in enumerate(bots) if str(b.get("name", "")).upper() == name), None)
+    bot_entry = {
+        "name": name,
+        "channel": channel,
+        "tg": tg,
+        "slot": slot,
+        "echolink_enabled": bool(payload.get("echolink_enabled", False)),
+        "echolink_callsign": str(payload.get("echolink_callsign", "")).strip().upper(),
+        "echolink_password": str(payload.get("echolink_password", "")).strip(),
+        "status": "STATIONED"
+    }
+    if existing_idx is not None:
+        bots[existing_idx] = bot_entry
+    else:
+        bots.append(bot_entry)
+
+    rooms = list(data.get("svxlink_rooms", DEFAULT_SVXLINK_ROOMS))
+    room_exists = any((r.get("name") == channel or r.get("channel") == channel) for r in rooms)
+    if not room_exists:
+        rooms.append({
+            "id": f"svx_{channel}",
+            "name": channel,
+            "channel": channel,
+            "targetTg": tg,
+            "tg": tg,
+            "slot": slot,
+            "description": f"SvxReflector TG {tg} (Slot {slot})",
+            "isActive": True
+        })
+        data["svxlink_rooms"] = rooms
+
+    data["svxlink_bots"] = bots
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save SvxLink bot: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post("http://svxlink-bridge:12349/sync")
+    except Exception:
+        pass
+
+    return {"status": "SUCCESS", "message": f"SvxLink Bot '{name}' stationed on TG {tg}", "bot": bot_entry}
+
+
+@router.delete("/svxlink/bots/{bot_name}")
+async def delete_svxlink_bot(bot_name: str):
+    """Removes an SvxLink bot from configuration and terminates its daemon."""
+    import httpx
+    import json
+    import os
+
+    clean_name = bot_name.strip().upper()
+    config_path = "/app/data/config.json"
+    data = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    bots = [b for b in data.get("svxlink_bots", DEFAULT_SVXLINK_BOTS) if str(b.get("name", "")).upper() != clean_name]
+    data["svxlink_bots"] = bots
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete SvxLink bot: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post("http://svxlink-bridge:12349/sync")
+    except Exception:
+        pass
+
+    return {"status": "SUCCESS", "message": f"SvxLink Bot '{clean_name}' removed"}
+
+
+@router.get("/svxlink/logs")
+async def get_svxlink_logs():
+    """Returns live logs and bot states from SvxLink Bridge."""
+    import httpx
+    import os
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            resp = await client.get("http://svxlink-bridge:12349/logs")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+
+    log_path = "/app/data/svxlink_bridge.log"
+    logs = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                logs = [l.strip() for l in f.readlines()[-100:]]
+        except Exception as e:
+            logs = [f"Error reading log: {e}"]
+    return {"status": "FALLBACK", "recent_logs": logs}
+
 
 
