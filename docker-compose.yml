@@ -95,6 +95,7 @@ services:
       context: ./svxreflector
       dockerfile: Dockerfile
     container_name: ninjaradio_svxreflector
+    entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
     restart: unless-stopped
     ports:
       - "5300:5300/tcp"

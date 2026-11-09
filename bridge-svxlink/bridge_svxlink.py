@@ -256,46 +256,24 @@ def load_room_mappings() -> Dict[str, int]:
 
 
 def load_configured_bots() -> List[Dict[str, Any]]:
-    """Loads SvxLink bot definitions from config.json, ensuring every room has an active bot."""
-    bots = []
-    seen_channels = set()
-    seen_names = set()
-
+    """Loads SvxLink bot definitions. Operates as a single unified Any-TG Gateway by default."""
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if "svxlink_bots" in data and isinstance(data["svxlink_bots"], list):
-                    for b in data["svxlink_bots"]:
-                        b_name = b.get("name")
-                        b_channel = b.get("channel")
-                        if b_name and b_channel:
-                            bots.append(b)
-                            seen_channels.add(b_channel.strip().lower())
-                            seen_names.add(b_name.strip())
+                if "svxlink_bots" in data and isinstance(data["svxlink_bots"], list) and len(data["svxlink_bots"]) > 0:
+                    return data["svxlink_bots"]
         except Exception as e:
             logger.debug(f"Error loading svxlink_bots from config: {e}")
 
-    for room_name, tg_val in ROOM_MAPPINGS.items():
-        if room_name.strip().lower() not in seen_channels:
-            clean_name = room_name.replace("SVX-", "").replace("NinjaRadio-", "").replace(" ", "-")
-            bot_name = f"SVX-{clean_name}"[:15].upper()
-            cnt = 1
-            while bot_name in seen_names:
-                bot_name = f"SVX-{clean_name}-{cnt}"[:15].upper()
-                cnt += 1
-            fallback_slot = 1 if tg_val in [510, 5108, 91, 1023] else 2
-            bots.append({
-                "name": bot_name,
-                "channel": room_name,
-                "tg": tg_val,
-                "slot": fallback_slot,
-                "echolink_enabled": False
-            })
-            seen_channels.add(room_name.strip().lower())
-            seen_names.add(bot_name)
-
-    return bots
+    # Single Unified Any-TG Gateway
+    return [{
+        "name": "SVX-GATEWAY",
+        "channel": "Direct Any-TG Gateway",
+        "tg": 1025,
+        "slot": 2,
+        "echolink_enabled": False
+    }]
 
 
 class SvxGatewayBot:
@@ -583,6 +561,20 @@ PREEMPHASIS=0
                 except Exception:
                     pass
 
+    def select_talkgroup(self, tg: int):
+        """Switches active SvxReflector talkgroup dynamically via DTMF PTY."""
+        if tg <= 0 or tg == getattr(self, "_current_selected_tg", 0):
+            return
+        self._current_selected_tg = tg
+        if os.path.exists(self.dtmf_pty_path):
+            try:
+                fd = os.open(self.dtmf_pty_path, os.O_WRONLY | os.O_NONBLOCK)
+                os.write(fd, f"9{tg}#\n".encode("ascii"))
+                os.close(fd)
+                logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 9{tg}#)")
+            except Exception:
+                pass
+
     def _set_squelch(self, open_sql: bool):
         """Writes 'O' (open) or 'Z' (close) to SvxLink Rx1 SQL_DET PTY."""
         if self.squelch_is_open == open_sql:
@@ -596,10 +588,10 @@ PREEMPHASIS=0
             except Exception:
                 pass
 
-    def play_pcm_8k(self, pcm_8k: bytes):
+    def play_pcm_8k(self, pcm_8k: bytes, tg: int = None):
         """
         Receives 8kHz 16-bit mono PCM from NinjaRadio DirectDmrEngine (UDP 12348),
-        upsamples 2x to 16kHz S16_LE, opens Rx1 PTY squelch, and feeds SvxLink UDP socket.
+        selects target talkgroup, upsamples 2x to 16kHz S16_LE, opens Rx1 PTY squelch, and feeds SvxLink UDP socket.
         """
         if not self.running or len(pcm_8k) == 0:
             return
@@ -608,6 +600,9 @@ PREEMPHASIS=0
             return
 
         try:
+            if tg and tg > 0:
+                self.select_talkgroup(tg)
+
             self.last_dmr_rx_play = time.time()
             self._set_squelch(True)
 
@@ -902,11 +897,10 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                 talkgroup = struct.unpack(">I", data[16:20])[0]
                 pcm_8k = data[32:]
 
-                target_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
-                if not target_bots and talkgroup > 0:
-                    dyn_bot = get_or_create_dynamic_bot(talkgroup, sock)
-                    if dyn_bot:
-                        target_bots = [dyn_bot]
+                # Route to matching bot or single unified Any-TG gateway
+                target_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup or bot.bot_user == "SVX-GATEWAY"]
+                if not target_bots and gateway_pool:
+                    target_bots = list(gateway_pool.values())
                 if not target_bots:
                     continue
 
@@ -923,7 +917,7 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     logger.info(f"[SvxLink-Bridge] 🔊 Routing DMR RX (TG {talkgroup}) -> {bot_names}")
 
                 for bot in target_bots:
-                    bot.play_pcm_8k(pcm_8k)
+                    bot.play_pcm_8k(pcm_8k, tg=talkgroup)
 
         except Exception:
             time.sleep(0.02)
