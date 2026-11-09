@@ -24,6 +24,7 @@ logger = logging.getLogger("NinjaRadio-Core")
 CONFIG_PATH = os.getenv("CONFIG_PATH", "/app/data/config.json")
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "http://backend:8000/api/internal/dmr_event")
 MUMBLE_BRIDGE_PORT = 12346
+SVXLINK_BRIDGE_PORT = 12348
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 WEB_PTT_PORT = int(os.getenv("WEB_PTT_PORT", 32100))
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
@@ -2145,7 +2146,7 @@ usrpAGC = -20,10,100
                                 "is_transmitting": False,
                                 "data_type": 2
                             }))
-                            # Forward unkey frame to Mumble Bridge
+                            # Forward unkey frame to Mumble Bridge & SvxLink Bridge
                             unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0) + (b"\x00" * 320)
                             try:
                                 self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
@@ -2154,6 +2155,10 @@ usrpAGC = -20,10,100
                                     self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                                 except Exception:
                                     pass
+                            try:
+                                self.bridge_sock.sendto(unkey_mumble, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                            except Exception:
+                                pass
                             # Forward unkey frame to DVSwitch Mobile clients
                             try:
                                 unkey_mobile = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
@@ -2247,7 +2252,7 @@ usrpAGC = -20,10,100
                         except Exception:
                             pass
 
-                        # Forward audio burst to Mumble Bridge so Mumble clients hear DVSwitch Mobile
+                        # Forward audio burst to Mumble Bridge & SvxLink Bridge so clients hear DVSwitch Mobile
                         mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq & 0x7FFFFFFF, 0, 1, target_tg, target_dmr_id, target_slot, 0) + chunk_pcm
                         try:
                             self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
@@ -2256,6 +2261,10 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                             except Exception:
                                 pass
+                        try:
+                            self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                        except Exception:
+                            pass
 
                         # Forward audio burst to Web Audio Player & keep ACTIVE_STREAMS alive
                         traffic_event = {
@@ -2382,6 +2391,10 @@ usrpAGC = -20,10,100
                                                 self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                                             except Exception:
                                                 pass
+                                        try:
+                                            self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                                        except Exception:
+                                            pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "Direct DMR (Mumble/WebRTC)",
                                 "host": f"{addr[0]}:32100",
@@ -2412,6 +2425,10 @@ usrpAGC = -20,10,100
                             mumble_unkey = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0) + (b"\x00" * 320)
                             try:
                                 self.bridge_sock.sendto(mumble_unkey, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                            except Exception:
+                                pass
+                            try:
+                                self.bridge_sock.sendto(mumble_unkey, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                             except Exception:
                                 pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -2913,7 +2930,7 @@ usrpAGC = -20,10,100
                 }
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
-                    # Forward direct PCM frames to Mumble
+                    # Forward direct PCM frames to Mumble & SvxLink Bridge
                     for offset in range(0, len(decoded_pcm), 320):
                         chunk_320 = decoded_pcm[offset:offset + 320]
                         if len(chunk_320) == 320:
@@ -2926,6 +2943,10 @@ usrpAGC = -20,10,100
                                     self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                                 except Exception:
                                     pass
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                            except Exception:
+                                pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_dmr_master_traffic note: {e}")
@@ -3115,7 +3136,7 @@ usrpAGC = -20,10,100
                 }
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
-                    # Forward direct PCM frames to Mumble
+                    # Forward direct PCM frames to Mumble & SvxLink Bridge
                     for offset in range(0, len(decoded_pcm), 320):
                         chunk_320 = decoded_pcm[offset:offset + 320]
                         if len(chunk_320) == 320:
@@ -3128,6 +3149,10 @@ usrpAGC = -20,10,100
                                     self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                                 except Exception:
                                     pass
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                            except Exception:
+                                pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_peer_traffic note: {e}")
