@@ -22,6 +22,12 @@ CODECS=OPUS
 * = NinjaReflectorNodes
 N1NJA = NinjaReflectorNodes
 BD62BOT = NinjaReflectorNodes
+SVX-NASIONAL = NinjaReflectorNodes
+SVX-NUSANTARA = NinjaReflectorNodes
+SVX-BRIDI = NinjaReflectorNodes
+SVX-PARROT = NinjaReflectorNodes
+SVX-DARURAT = NinjaReflectorNodes
+SVX-WORLDWIDE = NinjaReflectorNodes
 
 [PASSWORDS]
 NinjaReflectorNodes = "${AUTH_KEY}"
@@ -34,3 +40,4 @@ echo "  Status HTTP  : ${HTTP_PORT}"
 echo "=================================================="
 
 exec /usr/bin/svxreflector --config="$CONF_PATH"
+

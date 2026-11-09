@@ -763,11 +763,18 @@ PREEMPHASIS=0
                     if not sline:
                         continue
 
-                    if "ReflectorLogic: Connected to" in sline or "ReflectorLogic: Connection established" in sline:
+                    if (
+                        "ReflectorLogic: Connected to" in sline
+                        or "ReflectorLogic: Connection established" in sline
+                        or "ReflectorLogic: Authentication OK" in sline
+                    ):
                         self.connected = True
                         logger.info(f"[{self.bot_user}] ✓ Connected to SvxReflector ({SVX_HOST}:{SVX_PORT}) on TG {self.tg}!")
                     elif "ReflectorLogic: Disconnected" in sline:
                         self.connected = False
+                        logger.warning(f"[{self.bot_user}] ⚠️ Disconnected from SvxReflector: {sline}")
+                    elif "Authentication failed" in sline or "Error" in sline or "WARNING" in sline or "ERROR" in sline:
+                        logger.warning(f"[{self.bot_user}] SvxLink: {sline}")
 
                     # Parse custom Tcl event hooks for Callsign Carry-Over
                     if "NINJA_EVENT:" in sline:
@@ -895,12 +902,24 @@ def sync_gateway_bots(usrp_sock: socket.socket):
 def fetch_svxreflector_status() -> Dict[str, Any]:
     """Queries SvxReflector's built-in HTTP status port (8080) for connected external nodes and active talkers."""
     try:
-        resp = requests.get(f"http://{SVX_HOST}:{SVX_HTTP_PORT}/status", timeout=1.5)
+        resp = requests.get(f"http://{SVX_HOST}:{SVX_HTTP_PORT}/status", timeout=0.6)
         if resp.status_code == 200:
             return resp.json()
     except Exception:
         pass
-    return {"nodes": {}}
+    # Build live fallback matrix from our active bots
+    fallback_nodes = {}
+    for b in GATEWAY_POOL.values():
+        fallback_nodes[b.bot_user] = {
+            "callsign": b.bot_user,
+            "tg": b.tg,
+            "monitoredTGs": [b.tg],
+            "isTalker": bool(b.squelch_is_open or b.active_talker_call),
+            "nodeLocation": f"NinjaRadio DMR TG {b.tg} (TS{b.slot})",
+            "sw": "NinjaRadio-DirectDMR",
+            "swVer": "2.0"
+        }
+    return {"nodes": fallback_nodes}
 
 
 class SvxBridgeApiHandler(BaseHTTPRequestHandler):
