@@ -213,10 +213,29 @@ def load_room_mappings() -> Dict[str, int]:
                             mappings[ch.strip()] = int(tg)
                         except (ValueError, TypeError):
                             pass
-                if mappings:
-                    return mappings
         except Exception as e:
             logger.debug(f"Could not parse config.json for svxlink_rooms: {e}")
+
+    # Also automatically discover active cross-TG translation targets from TG Matrix
+    db_p = get_db_path()
+    if db_p and os.path.exists(db_p):
+        try:
+            import sqlite3
+            with sqlite3.connect(db_p, timeout=1.0) as conn:
+                cur = conn.cursor()
+                rows = cur.execute("SELECT target_tg, source_tg, route_name FROM bridge_routes WHERE is_active = 1").fetchall()
+                for row in rows:
+                    t_tg = int(row[0] or 0)
+                    r_name = str(row[2] or f"TG {t_tg}").strip()
+                    if t_tg > 0:
+                        ch_name = f"SVX-{r_name}".replace(" ", "-")
+                        if ch_name not in mappings:
+                            mappings[ch_name] = t_tg
+        except Exception as e:
+            logger.debug(f"Note reading bridge_routes for svxlink: {e}")
+
+    if mappings:
+        return mappings
 
     mappings = {
         "SVX-Nasional": 510,
@@ -312,6 +331,7 @@ class SvxGatewayBot:
 
         # Active remote talker on SvxReflector / EchoLink
         self.active_talker_call: Optional[str] = None
+        self.active_talker_tg: Optional[int] = None
         self.active_talker_dmr_id: int = 0
         self.active_talker_start: float = 0.0
         self.last_svx_audio_rx: float = 0.0
@@ -344,7 +364,7 @@ class SvxGatewayBot:
 
         events_tcl_path = "/usr/share/svxlink/events.tcl"
 
-        # Write local/ReflectorLogic.tcl to silence audio clutter and report talker_start/stop via stdout/UDP
+        # Write local/ReflectorLogic.tcl to silence all audio announcements, bot voice sounds, and report talker_start/stop
         reflector_local_tcl = """
 namespace eval ReflectorLogic {
     proc talker_start {tg callsign} {
@@ -359,12 +379,17 @@ namespace eval ReflectorLogic {
         puts "NINJA_EVENT:SELECT_TG:$new_tg"
         flush stdout
     }
+    proc activating_tg {tg} {}
+    proc deactivating_tg {tg} {}
+    proc tg_selected {tg} {}
+    proc qsy_pending {} {}
+    proc playMsg {section msg} {}
 }
 """
         with open(f"{local_events_dir}/ReflectorLogic.tcl", "w", encoding="utf-8") as wf:
             wf.write(reflector_local_tcl)
 
-        # Write local/SimplexLogic.tcl to disable all local startup/link announcements, CW/Voice IDs, and Roger Beeps
+        # Write local/SimplexLogic.tcl to disable all local startup/link announcements, CW/Voice IDs, bot voice, and Roger Beeps
         simplex_local_tcl = """
 namespace eval SimplexLogic {
     proc startup {} {}
@@ -374,12 +399,14 @@ namespace eval SimplexLogic {
     proc squelch_open {{rx_id 0} {is_open 0}} {}
     proc activating_link {name} {}
     proc deactivating_link {name} {}
+    proc playMsg {section msg} {}
 }
 namespace eval Logic {
     proc startup {} {}
     proc activating_link {name} {}
     proc deactivating_link {name} {}
     proc send_rgr_sound {} {}
+    proc playMsg {section msg} {}
 }
 """
         with open(f"{local_events_dir}/SimplexLogic.tcl", "w", encoding="utf-8") as wf:
@@ -424,6 +451,12 @@ namespace eval EchoLink {
             with open(f"{local_events_dir}/EchoLink.tcl", "w", encoding="utf-8") as wf:
                 wf.write(echolink_tcl)
 
+        # Build dynamic multi-TG monitoring list so SvxLink immediately hears any configured TG
+        all_tgs = sorted(list(set([self.tg] + list(load_room_mappings().values()))))
+        monitored_tgs_str = ",".join(str(t) for t in all_tgs if t > 0)
+        if not monitored_tgs_str:
+            monitored_tgs_str = f"{self.tg}++"
+
         # Generate svxlink.conf
         # Rx1 receives DMR audio from Python (UDP 16kHz S16_LE).
         # Tx1 sends SvxReflector/EchoLink audio to Python (UDP 16kHz S16_LE).
@@ -457,7 +490,7 @@ PORT={SVX_PORT}
 CALLSIGN={self.bot_user}
 AUTH_KEY="{SVX_AUTH_KEY}"
 DEFAULT_TG={self.tg}
-MONITOR_TGS={self.tg}++
+MONITOR_TGS={monitored_tgs_str}
 AUDIO_CODEC=OPUS
 EVENT_HANDLER={events_tcl_path}
 NODE_INFO_FILE={self.runtime_dir}/node_info.json
@@ -616,15 +649,18 @@ PREEMPHASIS=0
             self.tx_conditioner.reset()
             return
         dmr_id = self.active_talker_dmr_id or 5109999
+        tx_tg = getattr(self, "active_talker_tg", None) or self.tg
+        tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
         try:
             call_bytes = call_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-            unkey_nptt = struct.pack(">4sIIII?16s", b"NSVX", int(dmr_id), int(self.tg), int(self.slot), 0, False, call_bytes)
+            unkey_nptt = struct.pack(">4sIIII?16s", b"NSVX", int(dmr_id), int(tx_tg), int(tx_slot), 0, False, call_bytes)
             self.usrp_sock.sendto(unkey_nptt, (USRP_HOST, 32100))
-            logger.info(f"[{self.bot_user}] ⏹️ DIRECT DMR RELEASE from {call_str} ({dmr_id}) -> TG {self.tg} Slot {self.slot}")
+            logger.info(f"[{self.bot_user}] ⏹️ DIRECT DMR RELEASE from {call_str} ({dmr_id}) -> TG {tx_tg} Slot {tx_slot}")
         except Exception:
             pass
         self.tx_pcm_buffer.clear()
         self.tx_conditioner.reset()
+        self.active_talker_tg = None
 
     def _audio_tx_from_svx_loop(self):
         """
@@ -674,8 +710,10 @@ PREEMPHASIS=0
 
                 # Resolve caller identity (Carry-Over Callsign from SvxReflector / EchoLink)
                 user_dmr_id, user_callsign = resolve_svxlink_identity(raw_talker)
+                tx_tg = getattr(self, "active_talker_tg", None) or self.tg
+                tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
 
-                is_allowed, reason = check_svxlink_tx_permission(user_dmr_id, user_callsign, self.tg)
+                is_allowed, reason = check_svxlink_tx_permission(user_dmr_id, user_callsign, tx_tg)
                 if not is_allowed:
                     continue
 
@@ -688,7 +726,7 @@ PREEMPHASIS=0
                     self.active_talker_dmr_id = user_dmr_id
                     self.tx_pcm_buffer.clear()
                     self.tx_conditioner.reset()
-                    logger.info(f"[{self.bot_user}] 🔴 SVXLINK->DMR TX from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg} Slot {self.slot}")
+                    logger.info(f"[{self.bot_user}] 🔴 SVXLINK->DMR TX from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {tx_tg} Slot {tx_slot}")
 
                 # Downsample 16kHz -> 8kHz (clean 2:1 decimation)
                 n_8k = len(pcm_16k) // 2
@@ -704,7 +742,7 @@ PREEMPHASIS=0
                 while len(self.tx_pcm_buffer) >= 320:
                     chunk = bytes(self.tx_pcm_buffer[:320])
                     self.tx_pcm_buffer = self.tx_pcm_buffer[320:]
-                    nptt_pkt = struct.pack(">4sIIII?16s", b"NSVX", int(user_dmr_id), int(self.tg), int(self.slot), len(chunk), True, call_bytes) + chunk
+                    nptt_pkt = struct.pack(">4sIIII?16s", b"NSVX", int(user_dmr_id), int(tx_tg), int(tx_slot), len(chunk), True, call_bytes) + chunk
                     self.usrp_sock.sendto(nptt_pkt, (USRP_HOST, 32100))
 
             except socket.timeout:
@@ -778,13 +816,19 @@ PREEMPHASIS=0
                         if ev_type in ("TALKER_START", "ECHOLINK_START"):
                             if ev_call and ev_call.upper() != self.bot_user.upper():
                                 self.active_talker_call = ev_call
+                                try:
+                                    parsed_tg = int(ev_tg)
+                                    self.active_talker_tg = parsed_tg if parsed_tg > 0 else self.tg
+                                except Exception:
+                                    self.active_talker_tg = self.tg
                                 dmr_id, resolved_call = resolve_svxlink_identity(ev_call)
                                 self.active_talker_dmr_id = dmr_id
                                 self.active_talker_start = time.time()
-                                logger.info(f"[{self.bot_user}] 🎙️ SvxReflector Talker Active: {ev_call} -> Mapped to DMR {resolved_call} ({dmr_id}) on TG {self.tg}")
+                                logger.info(f"[{self.bot_user}] 🎙️ SvxReflector Talker Active: {ev_call} -> Mapped to DMR {resolved_call} ({dmr_id}) on TG {self.active_talker_tg}")
                         elif ev_type in ("TALKER_STOP", "ECHOLINK_STOP"):
                             if ev_call and ev_call.upper() != self.bot_user.upper():
-                                logger.info(f"[{self.bot_user}] ⏹️ SvxReflector Talker Stopped: {ev_call} on TG {self.tg}")
+                                cur_active_tg = getattr(self, "active_talker_tg", None) or self.tg
+                                logger.info(f"[{self.bot_user}] ⏹️ SvxReflector Talker Stopped: {ev_call} on TG {cur_active_tg}")
                                 self._release_dmr_tx()
                                 self.active_talker_call = None
 
@@ -792,6 +836,11 @@ PREEMPHASIS=0
                     elif "Talker start on TG #" in sline:
                         m = re.search(r"Talker start on TG #(\d+):\s*(\S+)", sline)
                         if m:
+                            try:
+                                parsed_tg = int(m.group(1))
+                                self.active_talker_tg = parsed_tg if parsed_tg > 0 else self.tg
+                            except Exception:
+                                self.active_talker_tg = self.tg
                             t_call = m.group(2).strip()
                             if t_call.upper() != self.bot_user.upper():
                                 self.active_talker_call = t_call
@@ -814,10 +863,27 @@ PREEMPHASIS=0
                 time.sleep(4.0)
 
 
+def get_or_create_dynamic_bot(talkgroup: int, usrp_sock: socket.socket) -> Optional[SvxGatewayBot]:
+    """Ensures a dynamic SvxLink gateway exists on-the-fly for ANY active Talkgroup without manual bot setup."""
+    global GATEWAY_POOL
+    if talkgroup <= 0:
+        return None
+    b_name = f"SVX-TG{talkgroup}"
+    if b_name not in GATEWAY_POOL:
+        slot = 1 if talkgroup in [510, 5108, 91, 1023] else 2
+        room_name = f"SVX-TG{talkgroup}"
+        logger.info(f"[SvxLink-Gateway] ⚡ Stationing dynamic Any-TG SvxLink Gateway for TG {talkgroup} (Slot {slot})...")
+        bot = SvxGatewayBot(room_name, talkgroup, usrp_sock, bot_user=b_name, slot=slot)
+        GATEWAY_POOL[b_name] = bot
+        bot.start()
+        time.sleep(0.3)
+    return GATEWAY_POOL.get(b_name)
+
+
 def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
     """
     Listens for PCM audio frames from Core DirectDmrEngine on UDP port 12348
-    and routes audio exclusively to the SvxLink bot(s) assigned to that Talkgroup.
+    and routes audio dynamically to the SvxLink gateway for ANY Talkgroup.
     """
     global last_dmr_tx
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -837,6 +903,10 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                 pcm_8k = data[32:]
 
                 target_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
+                if not target_bots and talkgroup > 0:
+                    dyn_bot = get_or_create_dynamic_bot(talkgroup, sock)
+                    if dyn_bot:
+                        target_bots = [dyn_bot]
                 if not target_bots:
                     continue
 
