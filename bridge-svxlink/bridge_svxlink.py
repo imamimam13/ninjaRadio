@@ -348,52 +348,31 @@ class SvxGatewayBot:
     def _build_svxlink_environment(self):
         """Creates isolated config & Tcl event overrides so SvxLink reports talker_start/talker_stop to Python."""
         os.makedirs(self.runtime_dir, exist_ok=True)
-        events_dir = f"{self.runtime_dir}/events.d"
-        local_events_dir = f"{events_dir}/local"
+        local_events_dir = "/usr/share/svxlink/events.d/local"
         os.makedirs(local_events_dir, exist_ok=True)
 
-        # Symlink system Tcl scripts into our isolated events_dir
-        sys_events = "/usr/share/svxlink/events.d"
-        if os.path.exists(sys_events):
-            for item in os.listdir(sys_events):
-                if item == "local":
-                    continue
-                src = os.path.join(sys_events, item)
-                dst = os.path.join(events_dir, item)
-                if not os.path.exists(dst):
-                    try:
-                        os.symlink(src, dst)
-                    except Exception:
-                        pass
+        # Ensure /usr/share/svxlink/sounds/en_US exists so SimplexLogic locale initialization succeeds cleanly
+        os.makedirs("/usr/share/svxlink/sounds/en_US/Core", exist_ok=True)
+        os.makedirs("/usr/share/svxlink/sounds/en_US/Default", exist_ok=True)
 
-        # Create root events.tcl pointing to our isolated events.d
-        events_tcl_path = f"{self.runtime_dir}/events.tcl"
-        if os.path.exists("/usr/share/svxlink/events.tcl"):
-            with open("/usr/share/svxlink/events.tcl", "r", encoding="utf-8", errors="ignore") as rf:
-                ev_content = rf.read()
-            ev_content = ev_content.replace("/usr/share/svxlink/events.d", events_dir)
-            with open(events_tcl_path, "w", encoding="utf-8") as wf:
-                wf.write(ev_content)
-        else:
-            with open(events_tcl_path, "w", encoding="utf-8") as wf:
-                wf.write("# Minimal fallback events.tcl\n")
+        events_tcl_path = "/usr/share/svxlink/events.tcl"
 
         # Write local/ReflectorLogic.tcl to silence audio clutter and report talker_start/stop via stdout/UDP
-        reflector_local_tcl = f"""
-namespace eval ReflectorLogic {{
-    proc talker_start {{tg callsign}} {{
+        reflector_local_tcl = """
+namespace eval ReflectorLogic {
+    proc talker_start {tg callsign} {
         puts "NINJA_EVENT:TALKER_START:$tg:$callsign"
         flush stdout
-    }}
-    proc talker_stop {{tg callsign}} {{
+    }
+    proc talker_stop {tg callsign} {
         puts "NINJA_EVENT:TALKER_STOP:$tg:$callsign"
         flush stdout
-    }}
-    proc select_tg {{new_tg}} {{
+    }
+    proc select_tg {new_tg} {
         puts "NINJA_EVENT:SELECT_TG:$new_tg"
         flush stdout
-    }}
-}}
+    }
+}
 """
         with open(f"{local_events_dir}/ReflectorLogic.tcl", "w", encoding="utf-8") as wf:
             wf.write(reflector_local_tcl)
@@ -488,7 +467,7 @@ EVENT_HANDLER={events_tcl_path}
 NODE_INFO_FILE={self.runtime_dir}/node_info.json
 
 [ReflectorLink]
-CONNECT_LOGICS=SimplexLogic:9,ReflectorLogic
+CONNECT_LOGICS=SimplexLogic:9:SVX,ReflectorLogic
 DEFAULT_ACTIVE=1
 TIMEOUT=0
 
@@ -773,7 +752,14 @@ PREEMPHASIS=0
                     elif "ReflectorLogic: Disconnected" in sline:
                         self.connected = False
                         logger.warning(f"[{self.bot_user}] ⚠️ Disconnected from SvxReflector: {sline}")
-                    elif "Authentication failed" in sline or "Error" in sline or "WARNING" in sline or "ERROR" in sline:
+                    elif (
+                        "Authentication failed" in sline
+                        or "Error" in sline
+                        or "WARNING" in sline
+                        or "ERROR" in sline
+                        or "Could not" in sline
+                        or "failed" in sline
+                    ):
                         logger.warning(f"[{self.bot_user}] SvxLink: {sline}")
 
                     # Parse custom Tcl event hooks for Callsign Carry-Over
