@@ -327,6 +327,84 @@ export default function SvxLinkPage() {
             </div>
           </div>
 
+          {/* SvxPortal-Style Live Reflector Node Matrix */}
+          <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 p-5 shadow-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Radio className="w-5 h-5 text-cyan-400" />
+                <div>
+                  <h2 className="font-heading font-bold text-base sm:text-lg text-white">
+                    SVXPORTAL LIVE REFLECTOR MATRIX (CONNECTED STATIONS & NODES)
+                  </h2>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    Matriks real-time seluruh node SvxLink & Gateway yang sedang terhubung di SvxReflector Server.
+                  </p>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-800">
+                {telemetry?.reflector_nodes ? Object.keys(telemetry.reflector_nodes).length : bots.length} ACTIVE NODES
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 font-mono">
+              {(telemetry?.reflector_nodes && Object.keys(telemetry.reflector_nodes).length > 0
+                ? Object.entries(telemetry.reflector_nodes)
+                : bots.map((b) => [
+                    b.name,
+                    {
+                      callsign: b.name,
+                      tg: b.tg,
+                      monitoredTGs: [b.tg],
+                      isTalker: !!b.active_talker,
+                      nodeLocation: b.channel,
+                      sw: "NinjaRadio-DirectDMR"
+                    }
+                  ])
+              ).map(([nodeCall, info]: [string, any]) => {
+                const isTalking = info?.isTalker;
+                const tgNum = info?.tg || 0;
+                const monitored = Array.isArray(info?.monitoredTGs) ? info.monitoredTGs.join(", ") : tgNum;
+                return (
+                  <div
+                    key={nodeCall}
+                    className={`p-3.5 rounded-xl border transition-all ${
+                      isTalking
+                        ? "bg-rose-950/40 border-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)]"
+                        : "bg-slate-950/70 border-slate-800/80 hover:border-cyan-800/60"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-black text-sm text-emerald-300 flex items-center gap-1.5">
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            isTalking ? "bg-rose-500 animate-ping" : "bg-emerald-400"
+                          }`}
+                        />
+                        {nodeCall}
+                      </span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded font-bold ${
+                          isTalking
+                            ? "bg-rose-600 text-white"
+                            : "bg-amber-950/80 text-amber-400 border border-amber-800/60"
+                        }`}
+                      >
+                        {isTalking ? "TX ACTIVE" : `TG #${tgNum}`}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 space-y-1">
+                      <div className="truncate text-slate-300">{info?.nodeLocation || "SvxLink Node"}</div>
+                      <div className="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
+                        <span>Monitor: TG {monitored}</span>
+                        <span className="text-cyan-400">{info?.sw || "SvxLink"}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Add / Station New SvxLink Multi-TG Bot */}
           <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 p-5 shadow-xl space-y-4">
             <div className="flex items-center gap-2">
