@@ -74,4 +74,4 @@ EXPOSE 5300/tcp
 EXPOSE 5300/udp
 EXPOSE 8080/tcp
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]

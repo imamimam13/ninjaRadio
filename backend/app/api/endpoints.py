@@ -2209,19 +2209,30 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
         is_talking = bool(stream or bot_talker)
         talker_call = (stream.get("callsign") if stream else None) or bot_talker or ""
         talk_dur = stream.get("duration_sec", 2) if stream else (3 if bot_talker else 0)
+        if bcall == "SVX-GATEWAY":
+            bridge_lbl = "SvxLink · Direct Any-TG Gateway"
+            route_from_str = "SvxReflector / App"
+            route_to_str = "DMR Core (Any TG)"
+            m_tgs = [1025, 1023, 510, 5109, 5108, 91, 9990]
+        else:
+            bridge_lbl = f"SvxReflector · {broom}"
+            route_from_str = f"SVX TG {btg}"
+            route_to_str = f"DMR TG {btg} TS{bslot}"
+            m_tgs = [btg]
+
         seen_callsigns.add(bcall)
         unified_nodes.append({
             "id": f"svx_{bcall}",
             "callsign": bcall,
             "category": "SvxLink",
             "sourceType": "Local",
-            "bridgeLabel": f"SvxReflector · {broom}",
+            "bridgeLabel": bridge_lbl,
             "hostLabel": f"{svx_host}:{svx_port}",
-            "routeFrom": f"SVX TG {btg}",
-            "routeTo": f"DMR TG {btg} TS{bslot}",
+            "routeFrom": route_from_str,
+            "routeTo": route_to_str,
             "tg": btg,
             "slot": bslot,
-            "monitoredTGs": [btg],
+            "monitoredTGs": m_tgs,
             "isTalking": is_talking,
             "talkerCallsign": talker_call,
             "talkingDurationSec": talk_dur,
