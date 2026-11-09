@@ -2111,7 +2111,7 @@ async def save_serverdmr_config(payload: dict):
 # ----------------- SvxLink & SvxReflector Multi-TG Gateway Management -----------------
 
 @router.get("/svxlink/telemetry")
-async def get_svxlink_telemetry():
+async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
     """Returns live SvxReflector & Multi-TG Unified Switchboard Node Matrix telemetry."""
     import asyncio
     import httpx
@@ -2261,6 +2261,13 @@ async def get_svxlink_telemetry():
             "sw": f"{ninfo.get('sw', 'SvxLink')} {ninfo.get('swVer', '')}".strip()
         })
 
+    # Load TG Matrix cross-TG translation routes
+    matrix_routes = []
+    try:
+        matrix_routes = await BridgeService.get_routes(session)
+    except Exception:
+        matrix_routes = []
+
     # 3. DMR Upstream Peers (e.g. BRIDI, FreeDMR, BrandMeister)
     for p in core_peers:
         pname = str(p.get("name") or p.get("host") or "DMR-PEER").upper()
@@ -2273,12 +2280,37 @@ async def get_svxlink_telemetry():
         else:
             sub_tgs = [1025]
         primary_ptg = sub_tgs[0] if sub_tgs else 1025
+
+        # Check if this peer has an active TG Matrix translation rule
+        peer_name_clean = str(p.get("name") or pname).strip().lower()
+        mapped_rule = None
+        for r in matrix_routes:
+            if getattr(r, "is_active", True) and getattr(r, "peer_name", None):
+                r_peer_clean = r.peer_name.strip().lower()
+                if r_peer_clean in peer_name_clean or peer_name_clean in r_peer_clean:
+                    mapped_rule = r
+                    break
+
+        if mapped_rule:
+            s_tg = mapped_rule.source_tg
+            t_tg = mapped_rule.target_tg
+            t_slot = mapped_rule.target_slot or 2
+            route_from_str = f"Peer TG {s_tg}"
+            route_to_str = f"DMR TG {t_tg} TS{t_slot}"
+            primary_ptg = t_tg
+            monitored_tgs = sorted(list(set(sub_tgs + [s_tg, t_tg])))
+        else:
+            route_from_str = f"TG {primary_ptg}"
+            route_to_str = f"DMR TG {primary_ptg} TS2"
+            monitored_tgs = sub_tgs or [1025]
+
         active_st = None
-        for t in sub_tgs:
+        for t in monitored_tgs:
             if t in active_streams_by_tg:
                 active_st = active_streams_by_tg[t]
                 primary_ptg = t
                 break
+
         unified_nodes.append({
             "id": f"peer_{pname}",
             "callsign": pcall,
@@ -2286,11 +2318,11 @@ async def get_svxlink_telemetry():
             "sourceType": "Network",
             "bridgeLabel": f"DMR Master Peer · {p.get('name', pname)}",
             "hostLabel": f"{p.get('host', '')}:{p.get('port', 62031)}",
-            "routeFrom": f"TG {primary_ptg}",
-            "routeTo": f"DMR TG {primary_ptg} TS2",
+            "routeFrom": route_from_str,
+            "routeTo": route_to_str,
             "tg": primary_ptg,
             "slot": 2,
-            "monitoredTGs": sub_tgs or [1025],
+            "monitoredTGs": monitored_tgs,
             "isTalking": bool(active_st),
             "talkerCallsign": active_st.get("callsign", "") if active_st else "",
             "talkingDurationSec": active_st.get("duration_sec", 0) if active_st else 0,
