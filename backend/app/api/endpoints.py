@@ -632,6 +632,22 @@ async def get_configured_peers():
             })
     return result
 
+@router.delete("/peering/{peer_id_or_name}")
+async def delete_peering_peer(peer_id_or_name: str):
+    """Deletes a peer from config.json by ID or Name."""
+    cfg = read_config_file()
+    peers = cfg.get("peering", [])
+    target = peer_id_or_name.strip().lower()
+    new_peers = [
+        p for p in peers
+        if str(p.get("id", "")).strip().lower() != target
+        and str(p.get("name", "")).strip().lower() != target
+        and str(p.get("host", "")).strip().lower() != target
+    ]
+    cfg["peering"] = new_peers
+    await save_system_config(cfg)
+    return {"status": "SUCCESS", "message": f"Peer '{peer_id_or_name}' deleted successfully", "remaining": len(new_peers)}
+
 @router.get("/matrix", response_model=List[BridgeRouteResponse])
 async def get_matrix_routes(session: AsyncSession = Depends(get_db)):
     return await BridgeService.get_routes(session)
@@ -1292,9 +1308,11 @@ async def save_system_config(config: dict):
     import json
     import os
     existing = read_config_file()
-    for k in ["mumble_rooms", "mumble_bots", "svxlink_rooms", "svxlink_bots", "parrot_tgs", "parrot_delay", "peering"]:
+    for k in ["mumble_rooms", "mumble_bots", "svxlink_rooms", "svxlink_bots", "parrot_tgs", "parrot_delay"]:
         if (k not in config or not config[k]) and k in existing and existing[k]:
             config[k] = existing[k]
+    if "peering" not in config and "peering" in existing:
+        config["peering"] = existing["peering"]
 
     # Normalize mumble_rooms keys (support both name/targetTg and channel/tg)
     if "mumble_rooms" in config and isinstance(config["mumble_rooms"], list):
