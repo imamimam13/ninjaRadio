@@ -49,7 +49,9 @@ export interface RadioTalkgroup {
 }
 
 const ALL_TALKGROUPS: RadioTalkgroup[] = [
-  { id: 1025, name: "Nusantara Link 1", slot: 2, mode: "DMR", category: "Amatir" },
+  { id: 1025, name: "Nusantara Link 1 (Bridi)", slot: 2, mode: "DMR", category: "Amatir" },
+  { id: 1023, name: "TombolPTT Link", slot: 2, mode: "DMR", category: "Amatir" },
+  { id: 555, name: "K2pi Nusantara", slot: 1, mode: "DMR", category: "Amatir" },
   { id: 510, name: "Indo National DMR", slot: 1, mode: "DMR", category: "Amatir" },
   { id: 5101, name: "Jawa Barat Regional", slot: 2, mode: "YSF", category: "Amatir" },
   { id: 5102, name: "Jawa Tengah Regional", slot: 1, mode: "DMR", category: "Amatir" },
@@ -2792,7 +2794,7 @@ export default function RadioPocketMode() {
 
                   let badgeColor = "bg-emerald-500 text-slate-950";
                   let networkTag = "ORARI / BrandMeister";
-                  let allowedTalkgroups = [510, 5101, 5102, 5103, 9990, 91];
+                  let allowedTalkgroups = [1025, 1023, 555, 510, 5101, 5102, 5103, 9990, 91];
 
                   if (authCategory === "RAPI") {
                     badgeColor = "bg-blue-500 text-white";
@@ -2980,7 +2982,7 @@ export default function RadioPocketMode() {
                         callsign: "TEST-OP",
                         displayName: "Operator Test (PIN Verified)",
                         dmrId: 5109999,
-                        allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
+                        allowedTalkgroups: [1025, 1023, 555, 510, 5101, 5102, 5103, 5109, 5108, 5100, 9990, 91],
                         badgeColor: "bg-amber-400 text-slate-950 font-black",
                         networkTag: "Verified Test Operator",
                         isMonitorOnly: false
