@@ -1853,9 +1853,10 @@ usrpAGC = -20,10,100
 
                     hdr_src = dmr_id & 0xFFFFFF
                     hdr_tg = tg if (0 < tg < 16777215) else 0
+                    default_init_tg = int(self.primary_tg or self.config.get("primary_tg", 1025))
                     if 100000 <= hdr_src <= 9999999:
                         if addr not in self.client_metadata:
-                            self.client_metadata[addr] = {}
+                            self.client_metadata[addr] = {"tg": default_init_tg, "slot": 2}
                         self.client_metadata[addr]["src"] = hdr_src
                         if "callsign" not in self.client_metadata[addr]:
                             cb_c = lookup_callbook_callsign(hdr_src, include_name=False)
@@ -1863,7 +1864,6 @@ usrpAGC = -20,10,100
                                 self.client_metadata[addr]["callsign"] = cb_c
                         if hdr_tg > 0:
                             self.client_metadata[addr]["tg"] = hdr_tg
-                        self.client_metadata[addr[0]] = self.client_metadata[addr]
 
                     if is_control_pkt or key_flag == 0 or len(payload) != 320:
                         logger.info(f"🔍 [USRP-RAW] from {addr}: key={key_flag}, type={packet_type}, tg={tg}, dmr_id={dmr_id}, slot={slot}, len={len(payload)}, hex={payload[:64].hex()}")
@@ -1884,31 +1884,26 @@ usrpAGC = -20,10,100
                             if not is_internal:
                                 self.registered_usrp_clients[addr] = time.time()
                                 self.dvswitch_client_addrs.add(addr)
+                            if addr not in self.client_metadata:
+                                self.client_metadata[addr] = {"tg": default_init_tg, "slot": 2}
                             reg_str = payload[4:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
                             if reg_str:
-                                if addr not in self.client_metadata:
-                                    self.client_metadata[addr] = {}
                                 for token in reg_str.split():
                                     if token.isdigit() and len(token) >= 6:
                                         self.client_metadata[addr]["src"] = int(token)
-                                        self.last_dvswitch_identity["src"] = int(token)
                                     elif any(c.isalpha() for c in token) and len(token) >= 3 and token.upper() not in ("DVSWITCH", "CLIENT", "USRP"):
                                         self.client_metadata[addr]["callsign"] = token.upper()
-                                        self.last_dvswitch_identity["callsign"] = token.upper()
                                 # Resolve DMR ID from Callbook if only Callsign was given in REG:
                                 if self.client_metadata[addr].get("callsign") and not self.client_metadata[addr].get("src"):
                                     found_id = lookup_callbook_dmr_id(self.client_metadata[addr]["callsign"]) or lookup_subscriber_csv_id(self.client_metadata[addr]["callsign"])
                                     if found_id:
                                         self.client_metadata[addr]["src"] = found_id
-                                        self.last_dvswitch_identity["src"] = found_id
                                 # Resolve callsign from callbook if only ID was given
                                 if self.client_metadata[addr].get("src") and (not self.client_metadata[addr].get("callsign") or self.client_metadata[addr]["callsign"].isdigit()):
                                     cb_c = lookup_callbook_callsign(self.client_metadata[addr]["src"])
                                     if cb_c:
                                         self.client_metadata[addr]["callsign"] = cb_c
-                                        self.last_dvswitch_identity["callsign"] = cb_c
-                                self.client_metadata[addr[0]] = self.client_metadata[addr]
-                            logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({reg_str})")
+                            logger.info(f"✓ DVSwitch Mobile client REGISTERED from {addr} ({reg_str}) [Isolated Session TG: {self.client_metadata[addr].get('tg', default_init_tg)}]")
                             try:
                                 # Standard registration acknowledgment
                                 self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"REG:OK\x00"), addr)
@@ -1961,36 +1956,29 @@ usrpAGC = -20,10,100
                                 if m_t: c_tg = int(m_t.group(1))
 
                             if addr not in self.client_metadata:
-                                self.client_metadata[addr] = {}
+                                self.client_metadata[addr] = {"tg": default_init_tg, "slot": 2}
                             if c_call and str(c_call).upper() not in ("DVSWITCH", "CLIENT", "USRP"):
                                 c_call_str = str(c_call).strip().upper()
                                 if c_call_str.isdigit() and len(c_call_str) >= 6:
                                     c_src = int(c_call_str)
                                 else:
                                     self.client_metadata[addr]["callsign"] = c_call_str
-                                    self.last_dvswitch_identity["callsign"] = c_call_str
                             if c_src and int(c_src) > 0:
                                 self.client_metadata[addr]["src"] = int(c_src)
-                                self.last_dvswitch_identity["src"] = int(c_src)
                             if c_tg and int(c_tg) > 0:
                                 self.client_metadata[addr]["tg"] = int(c_tg)
-                                self.last_dvswitch_identity["tg"] = int(c_tg)
 
                             # Resolve DMR ID from Callbook if only Callsign was provided
                             if self.client_metadata[addr].get("callsign") and not self.client_metadata[addr].get("src"):
                                 found_id = lookup_callbook_dmr_id(self.client_metadata[addr]["callsign"]) or lookup_subscriber_csv_id(self.client_metadata[addr]["callsign"])
                                 if found_id:
                                     self.client_metadata[addr]["src"] = found_id
-                                    self.last_dvswitch_identity["src"] = found_id
 
                             # Resolve missing callsign/ID from Callbook
                             if self.client_metadata[addr].get("src") and (not self.client_metadata[addr].get("callsign") or self.client_metadata[addr]["callsign"].isdigit()):
                                 cb_c = lookup_callbook_callsign(self.client_metadata[addr]["src"])
                                 if cb_c:
                                     self.client_metadata[addr]["callsign"] = cb_c
-                                    self.last_dvswitch_identity["callsign"] = cb_c
-
-                            self.client_metadata[addr[0]] = self.client_metadata[addr]
                         except Exception:
                             pass
                         continue
@@ -2003,22 +1991,18 @@ usrpAGC = -20,10,100
                             if text_clean.isdigit():
                                 dialed_tg = int(text_clean)
                                 if addr not in self.client_metadata:
-                                    self.client_metadata[addr] = {}
+                                    self.client_metadata[addr] = {"slot": 2}
                                 self.client_metadata[addr]["tg"] = dialed_tg
-                                self.last_dvswitch_identity["tg"] = dialed_tg
-                                self.client_metadata[addr[0]] = self.client_metadata[addr]
-                                logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {dialed_tg} via DTMF/Send ('{text_clean}')")
+                                logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {dialed_tg} via DTMF/Send ('{text_clean}') [Per-Client Isolated]")
                                 continue
                             elif text_clean.startswith("*"):
                                 digits = "".join([c for c in text_clean if c.isdigit()])
                                 if digits:
                                     dialed_tg = int(digits)
                                     if addr not in self.client_metadata:
-                                        self.client_metadata[addr] = {}
+                                        self.client_metadata[addr] = {"slot": 2}
                                     self.client_metadata[addr]["tg"] = dialed_tg
-                                    self.last_dvswitch_identity["tg"] = dialed_tg
-                                    self.client_metadata[addr[0]] = self.client_metadata[addr]
-                                    logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {dialed_tg} via DTMF *{digits}")
+                                    logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {dialed_tg} via DTMF *{digits} [Per-Client Isolated]")
                                     continue
                                 elif text_clean.upper() in ["*DMR", "*YSF", "*DSTAR", "*P25"]:
                                     logger.info(f"📱 DVSwitch Mobile ({addr}) mode selection: {text_clean}")
@@ -2034,11 +2018,9 @@ usrpAGC = -20,10,100
                         if tune_val > 0:
                             self.dvswitch_client_addrs.add(addr)
                             if addr not in self.client_metadata:
-                                self.client_metadata[addr] = {}
+                                self.client_metadata[addr] = {"slot": 2}
                             self.client_metadata[addr]["tg"] = tune_val
-                            self.last_dvswitch_identity["tg"] = tune_val
-                            self.client_metadata[addr[0]] = self.client_metadata[addr]
-                            logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {tune_val} via TLV_TAG_TG_TUNE")
+                            logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {tune_val} via TLV_TAG_TG_TUNE [Per-Client Isolated]")
                             continue
                     elif is_control_pkt and (payload.startswith(b"txTg=") or payload.startswith(b"*")):
                         cmd_str = payload.decode("ascii", errors="ignore").strip()
@@ -2050,22 +2032,18 @@ usrpAGC = -20,10,100
                             if val_part.isdigit():
                                 new_tg = int(val_part)
                                 if addr not in self.client_metadata:
-                                    self.client_metadata[addr] = {}
+                                    self.client_metadata[addr] = {"slot": 2}
                                 self.client_metadata[addr]["tg"] = new_tg
-                                self.last_dvswitch_identity["tg"] = new_tg
-                                self.client_metadata[addr[0]] = self.client_metadata[addr]
-                                logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {new_tg} via remote command '{cmd_str}'")
+                                logger.info(f"📱 DVSwitch Mobile ({addr}) tuned to TG {new_tg} via remote command '{cmd_str}' [Per-Client Isolated]")
                                 continue
                         elif cmd_str.startswith("*"):
                             digits = "".join([c for c in cmd_str if c.isdigit()])
                             if digits:
                                 new_tg = int(digits)
                                 if addr not in self.client_metadata:
-                                    self.client_metadata[addr] = {}
+                                    self.client_metadata[addr] = {"slot": 2}
                                 self.client_metadata[addr]["tg"] = new_tg
-                                self.last_dvswitch_identity["tg"] = new_tg
-                                self.client_metadata[addr[0]] = self.client_metadata[addr]
-                                logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {new_tg} via keypad '{cmd_str}'")
+                                logger.info(f"📱 DVSwitch Mobile ({addr}) dialed TG {new_tg} via keypad '{cmd_str}' [Per-Client Isolated]")
                                 continue
 
                     # Handle TLV SET_INFO (Identity carry-over from DVSwitch Mobile or internal bridge)
@@ -2074,9 +2052,9 @@ usrpAGC = -20,10,100
                         if tlv_info:
                             if not is_internal:
                                 self.dvswitch_client_addrs.add(addr)
-                            existing = self.client_metadata.get(addr) or self.client_metadata.get(addr[0], {})
+                            existing = self.client_metadata.get(addr, {})
                             if tlv_info.get("tg", 0) == 0:
-                                tlv_info["tg"] = existing.get("tg", 0) or self.last_dvswitch_identity.get("tg", 0) or self.primary_tg or int(self.config.get("primary_tg", 1025))
+                                tlv_info["tg"] = existing.get("tg", 0) or default_init_tg
                             if tlv_info.get("slot") not in (1, 2):
                                 tlv_info["slot"] = 2
 
@@ -2106,16 +2084,7 @@ usrpAGC = -20,10,100
                                 if cb_c:
                                     tlv_info["callsign"] = cb_c
 
-                            # Strictly protect DVSwitch Mobile identity: update last_dvswitch_identity when genuine DVSwitch client
-                            if addr in self.dvswitch_client_addrs:
-                                if tlv_info.get("src", 0) > 0:
-                                    self.last_dvswitch_identity["src"] = tlv_info["src"]
-                                if tlv_info.get("callsign"):
-                                    self.last_dvswitch_identity["callsign"] = tlv_info["callsign"]
-                                if tlv_info.get("tg", 0) > 0:
-                                    self.last_dvswitch_identity["tg"] = tlv_info["tg"]
-                            self.client_metadata[addr] = tlv_info
-                            self.client_metadata[addr[0]] = tlv_info
+                            self.client_metadata[addr] = dict(tlv_info)
                             self.registered_usrp_clients[addr] = time.time()
                             logger.info(f"📱 Client identity recorded from {addr}: {tlv_info['callsign']} (ID: {tlv_info['src']}, TG: {tlv_info['tg']}, Slot: {tlv_info['slot']})")
                         continue
@@ -2125,10 +2094,11 @@ usrpAGC = -20,10,100
                         default_fallback_tg = int(self.primary_tg or self.config.get("default_tg", 510))
                         default_server_id = int(self.config.get("server_dmr_id", 5109999))
                         if self.is_transmitting or self.tx_identity_sent:
-                            client_meta_unkey = self.client_metadata.get(addr) or self.client_metadata.get(addr[0], {})
+                            client_meta_unkey = self.client_metadata.get(addr, {})
                             active_tg = self.current_tx_tg or tg or client_meta_unkey.get("tg") or default_fallback_tg
                             active_slot = self.current_tx_slot or slot or client_meta_unkey.get("slot") or 2
-                            active_id = self.current_tx_dmr_id or client_meta_unkey.get("src") or dmr_id or self.last_dvswitch_identity.get("src") or self.current_operator_dmr_id or default_server_id
+                            active_id = self.current_tx_dmr_id or client_meta_unkey.get("src") or dmr_id or self.current_operator_dmr_id or default_server_id
+                            active_call = client_meta_unkey.get("callsign") or self.current_tx_callsign or lookup_callbook_callsign(active_id) or self.current_operator_callsign or "BD62BOT"
                             self.is_transmitting = False
                             self.tx_identity_sent = False
                             self.active_tx_client_addr = None
@@ -2181,7 +2151,7 @@ usrpAGC = -20,10,100
                         hdr_slot = slot if slot in [1, 2] else 2
                         hdr_dmr_id = dmr_id if (1000 < dmr_id < 16777215 and dmr_id != (USRP_TYPE_TEXT << 24) and packet_type == 0) else 0
 
-                        client_meta = self.client_metadata.get(addr) or self.client_metadata.get(addr[0], {})
+                        client_meta = self.client_metadata.get(addr, {})
                         meta_slot = client_meta.get("slot", 2)
                         if meta_slot not in (1, 2):
                             meta_slot = 2
@@ -2191,22 +2161,21 @@ usrpAGC = -20,10,100
                             resolved_src = lookup_callbook_dmr_id(client_meta["callsign"]) or lookup_subscriber_csv_id(client_meta["callsign"])
                             if resolved_src:
                                 client_meta["src"] = resolved_src
-                                self.last_dvswitch_identity["src"] = resolved_src
 
                         if client_meta and (not hdr_dmr_id or client_meta.get("src") == hdr_dmr_id):
-                            target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or self.last_dvswitch_identity.get("src", 0) or self.current_operator_dmr_id or 1022057
-                            target_call = client_meta.get("callsign") or lookup_callbook_callsign(target_dmr_id) or self.last_dvswitch_identity.get("callsign") or self.current_operator_callsign or "BD62BOT"
-                            target_tg = hdr_tg or client_meta.get("tg", 0) or self.last_dvswitch_identity.get("tg", 0) or default_fallback_tg
+                            target_dmr_id = client_meta.get("src", 0) or hdr_dmr_id or self.current_operator_dmr_id or 1022057
+                            target_call = client_meta.get("callsign") or lookup_callbook_callsign(target_dmr_id) or self.current_operator_callsign or "BD62BOT"
+                            target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
                             target_slot = hdr_slot if hdr_tg else meta_slot
                         elif hdr_dmr_id:
                             target_dmr_id = hdr_dmr_id
-                            target_call = lookup_callbook_callsign(target_dmr_id) or self.last_dvswitch_identity.get("callsign") or self.current_operator_callsign or f"ID-{target_dmr_id}"
-                            target_tg = hdr_tg or self.last_dvswitch_identity.get("tg", 0) or default_fallback_tg
+                            target_call = lookup_callbook_callsign(target_dmr_id) or client_meta.get("callsign") or self.current_operator_callsign or f"ID-{target_dmr_id}"
+                            target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
                             target_slot = hdr_slot
                         else:
-                            target_dmr_id = self.last_dvswitch_identity.get("src", 0) or self.current_operator_dmr_id or 1022057
-                            target_call = self.last_dvswitch_identity.get("callsign") or self.current_operator_callsign or lookup_callbook_callsign(target_dmr_id) or "BD62BOT"
-                            target_tg = hdr_tg or self.last_dvswitch_identity.get("tg", 0) or default_fallback_tg
+                            target_dmr_id = client_meta.get("src", 0) or self.current_operator_dmr_id or 1022057
+                            target_call = client_meta.get("callsign") or self.current_operator_callsign or lookup_callbook_callsign(target_dmr_id) or "BD62BOT"
+                            target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
                             target_slot = hdr_slot
 
                         # Server-Side TX Firewall check
@@ -2293,19 +2262,16 @@ usrpAGC = -20,10,100
                 continue
             if client_addr[0] == "127.0.0.1" or client_addr == exclude_addr:
                 continue
-            # Strictly prevent echoing audio back to the transmitting device (matching IP)
-            if exclude_addr and client_addr[0] == exclude_addr[0]:
-                continue
 
             # Exclude internal docker container sockets (e.g. backend / bridge-mumble)
             if client_addr not in self.dvswitch_client_addrs:
                 if client_addr[0].startswith("172.") and client_addr[0] not in ("172.17.0.1", "172.18.0.1", "172.20.0.1"):
                     continue
 
-            # Talkgroup filter: only broadcast if client is tuned to this talkgroup
+            # Talkgroup filter: only broadcast if this specific (IP, Port) client is tuned to this talkgroup
             if tg is not None and tg > 0:
-                client_meta = self.client_metadata.get(client_addr) or self.client_metadata.get(client_addr[0], {})
-                client_tg = client_meta.get("tg", 0) or self.last_dvswitch_identity.get("tg", 0) or int(self.primary_tg or self.config.get("primary_tg", 1025))
+                client_meta = self.client_metadata.get(client_addr, {})
+                client_tg = client_meta.get("tg", 0) or int(self.primary_tg or self.config.get("primary_tg", 1025))
                 if client_tg != tg:
                     continue
 
