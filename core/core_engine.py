@@ -351,10 +351,18 @@ def _get_cached_bridge_routes() -> list:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name, is_active, source_mode, source_tg, source_slot, target_mode, target_tg, target_slot, bidirectional
-                FROM bridge_routes
-            """)
+            cursor.execute("PRAGMA table_info(bridge_routes)")
+            cols = [col[1] for col in cursor.fetchall()]
+            if "peer_name" in cols:
+                cursor.execute("""
+                    SELECT id, name, is_active, source_mode, source_tg, source_slot, target_mode, target_tg, target_slot, bidirectional, peer_name
+                    FROM bridge_routes
+                """)
+            else:
+                cursor.execute("""
+                    SELECT id, name, is_active, source_mode, source_tg, source_slot, target_mode, target_tg, target_slot, bidirectional, NULL
+                    FROM bridge_routes
+                """)
             _BRIDGE_ROUTES_CACHE["rows"] = cursor.fetchall()
             _BRIDGE_ROUTES_CACHE["time"] = now
     except Exception as e:
@@ -362,33 +370,57 @@ def _get_cached_bridge_routes() -> list:
     return _BRIDGE_ROUTES_CACHE["rows"]
 
 
-def get_matrix_translated_targets(tg: int, slot: int = 2, source_mode: str = "DMR") -> List[dict]:
+def get_matrix_translated_targets(tg: int, slot: int = 2, source_mode: str = "DMR", peer_name: str = "") -> List[dict]:
     """
     Queries active bridge_routes in TG Matrix to find all mapped / patched cross-TG targets for `(tg, slot)`.
-    Supports manual cross-TG mapping (e.g., Local TG 1025 TS2 <-> Peer TG 510 TS1)
-    without duplicating the same TG onto multiple slots.
+    Supports per-peer binding (e.g., Peer B TG 1025 TS2 <-> Local TG 1026 TS2).
     """
     targets = []
-    for _, r_name, is_active, s_mode, s_tg, s_slot, t_mode, t_tg, t_slot, bidir in _get_cached_bridge_routes():
+    peer_norm = (peer_name or "").strip().lower()
+    for row in _get_cached_bridge_routes():
+        r_id = row[0]
+        r_name = row[1]
+        is_active = row[2]
+        s_mode = row[3]
+        s_tg = int(row[4] or 0)
+        s_slot = int(row[5] or 2)
+        t_mode = row[6]
+        t_tg = int(row[7] or 0)
+        t_slot = int(row[8] or 2)
+        bidir = bool(row[9])
+        r_peer = str(row[10] or "").strip() if len(row) > 10 and row[10] else ""
+        r_peer_norm = r_peer.lower()
+
         if not is_active:
             continue
-        s_tg = int(s_tg or 0)
-        t_tg = int(t_tg or 0)
-        s_slot = int(s_slot or 2)
-        t_slot = int(t_slot or 2)
+
+        has_peer_binding = bool(r_peer_norm and r_peer_norm not in ("all", "semua peer", "*"))
+
+        if peer_norm:
+            # Incoming traffic from a peer:
+            # If this rule is bound to a specific peer, it MUST match peer_norm!
+            if has_peer_binding and r_peer_norm != peer_norm and r_peer_norm not in peer_norm and peer_norm not in r_peer_norm:
+                continue
+
+        # Direction 1: Forward (Source -> Target)
         if s_tg == tg and t_tg > 0 and (t_tg != tg or t_slot != slot):
             targets.append({
                 "rule_name": r_name,
                 "mode": str(t_mode or "DMR").upper(),
                 "tg": t_tg,
-                "slot": t_slot
+                "slot": t_slot,
+                "peer_bound": has_peer_binding,
+                "peer_name": r_peer
             })
+        # Direction 2: Reverse (Target -> Source) if Bidirectional
         elif bidir and t_tg == tg and s_tg > 0 and (s_tg != tg or s_slot != slot):
             targets.append({
                 "rule_name": r_name,
                 "mode": str(s_mode or "DMR").upper(),
                 "tg": s_tg,
-                "slot": s_slot
+                "slot": s_slot,
+                "peer_bound": has_peer_binding,
+                "peer_name": r_peer
             })
     return targets
 
@@ -2453,16 +2485,17 @@ usrpAGC = -20,10,100
         if self.dmr_master_server:
             self.dmr_master_server.mark_local_transmission(p_src, p_dst, p_slot)
 
-        # 2. Build list of (target_tg, target_slot, packet_bytes) including TG Matrix cross-TG mappings
-        packets_to_route = [(p_dst, p_slot, pkt)]
+        # 2. Build list of (target_tg, target_slot, packet_bytes, target_peer) including TG Matrix cross-TG mappings
+        packets_to_route = [(p_dst, p_slot, pkt, None)]
         seen_targets = {(p_dst, p_slot)}
         for mt in get_matrix_translated_targets(p_dst, p_slot):
             t_tg = mt["tg"]
             t_slot = mt["slot"]
+            t_peer = mt.get("peer_name") if mt.get("peer_bound") else None
             if t_tg > 0 and (t_tg, t_slot) not in seen_targets:
                 seen_targets.add((t_tg, t_slot))
                 translated_pkt = rewrite_dmrd_tg_and_slot(pkt, t_tg, t_slot)
-                packets_to_route.append((t_tg, t_slot, translated_pkt))
+                packets_to_route.append((t_tg, t_slot, translated_pkt, t_peer))
                 # Also broadcast the translated TG to local hotspots on our DMR Master Server
                 if self.dmr_master_server:
                     self.dmr_master_server.broadcast_dmrd(translated_pkt)
@@ -2476,17 +2509,32 @@ usrpAGC = -20,10,100
             for peer_key, client in list(self.peer_clients.items()):
                 if client.state == "CONNECTED":
                     sub_tgs = getattr(client, "subscribed_tgs", [])
-                    sent = False
-                    if sub_tgs:
-                        for r_tg, r_slot, r_pkt in packets_to_route:
+                    c_name = getattr(client, "name", "").strip().lower()
+                    for r_item in packets_to_route:
+                        r_tg, r_slot, r_pkt = r_item[0], r_item[1], r_item[2]
+                        r_peer = (r_item[3] or "").strip().lower() if len(r_item) > 3 and r_item[3] else ""
+
+                        # Peer isolation: if packet is tagged for a specific peer, ONLY send to matching peer!
+                        if r_peer and r_peer not in ("all", "*"):
+                            if r_peer != c_name and r_peer not in c_name and c_name not in r_peer:
+                                continue
+
+                        # Peer isolation: if untagged original packet, check if this client has a per-peer remapped rule for r_tg
+                        if not r_peer:
+                            has_remapped_rule = any(
+                                row[2] and row[10] and row[10].strip().lower() in c_name and int(row[4] or 0) == r_tg
+                                for row in _get_cached_bridge_routes() if len(row) > 10
+                            )
+                            if has_remapped_rule:
+                                continue
+
+                        if sub_tgs:
                             if r_tg in sub_tgs and is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                 client.send_raw_dmrd(r_pkt)
                                 if p_dtype == 0x21:  # Log on header packet to avoid spamming 60ms voice bursts
                                     logger.info(f"🚀 [DIRECT-DMR-PEER] Web/PCM TG {p_dst}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {p_src})")
-                                sent = True
                                 break
-                    elif not sub_tgs:
-                        for r_tg, r_slot, r_pkt in packets_to_route:
+                        elif not sub_tgs:
                             if is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                 client.send_raw_dmrd(r_pkt)
                                 if p_dtype == 0x21:
@@ -2759,17 +2807,18 @@ usrpAGC = -20,10,100
                 }
 
             raw_packet = traffic.get("raw_packet")
-            # Build list of (target_tg, target_slot, packet_bytes) including manual TG Matrix cross-TG mappings
-            packets_to_route = [(dst_tg, slot, raw_packet)]
+            # Build list of (target_tg, target_slot, packet_bytes, target_peer) including manual TG Matrix cross-TG mappings
+            packets_to_route = [(dst_tg, slot, raw_packet, None)]
             seen_targets = {(dst_tg, slot)}
             if raw_packet:
                 for mt in get_matrix_translated_targets(dst_tg, slot):
                     t_tg = mt["tg"]
                     t_slot = mt["slot"]
+                    t_peer = mt.get("peer_name") if mt.get("peer_bound") else None
                     if t_tg > 0 and (t_tg, t_slot) not in seen_targets:
                         seen_targets.add((t_tg, t_slot))
                         translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
-                        packets_to_route.append((t_tg, t_slot, translated_pkt))
+                        packets_to_route.append((t_tg, t_slot, translated_pkt, t_peer))
                         self.active_talkers_by_tg[t_tg] = {
                             "src": src_id,
                             "callsign": callsign,
@@ -2786,17 +2835,32 @@ usrpAGC = -20,10,100
                 for peer_key, client in list(self.peer_clients.items()):
                     if client.state == "CONNECTED":
                         sub_tgs = getattr(client, "subscribed_tgs", [])
-                        sent = False
-                        if sub_tgs:
-                            for r_tg, r_slot, r_pkt in packets_to_route:
+                        c_name = getattr(client, "name", "").strip().lower()
+                        for r_item in packets_to_route:
+                            r_tg, r_slot, r_pkt = r_item[0], r_item[1], r_item[2]
+                            r_peer = (r_item[3] or "").strip().lower() if len(r_item) > 3 and r_item[3] else ""
+
+                            # Peer isolation: if packet is tagged for a specific peer, ONLY send to matching peer!
+                            if r_peer and r_peer not in ("all", "*"):
+                                if r_peer != c_name and r_peer not in c_name and c_name not in r_peer:
+                                    continue
+
+                            # Peer isolation: if untagged original packet, check if this client has a per-peer remapped rule for r_tg
+                            if not r_peer:
+                                has_remapped_rule = any(
+                                    row[2] and row[10] and row[10].strip().lower() in c_name and int(row[4] or 0) == r_tg
+                                    for row in _get_cached_bridge_routes() if len(row) > 10
+                                )
+                                if has_remapped_rule:
+                                    continue
+
+                            if sub_tgs:
                                 if r_tg in sub_tgs and is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                     client.send_raw_dmrd(r_pkt)
                                     if traffic.get("data_type") == 0:
                                         logger.info(f"🚀 [BRIDGE-FORWARD] TG {dst_tg}->TG {r_tg} (TS{r_slot}) forwarded to upstream peer '{client.name}' (Src: {src_id} {callsign})")
-                                    sent = True
                                     break
-                        elif not sub_tgs:
-                            for r_tg, r_slot, r_pkt in packets_to_route:
+                            elif not sub_tgs:
                                 if is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                     client.send_raw_dmrd(r_pkt)
                                     if traffic.get("data_type") == 0:
@@ -2976,12 +3040,23 @@ usrpAGC = -20,10,100
             # 3. Forward DMRD frame (and any TG Matrix translated frames) to our local DMR Master Server
             # so all connected local hotspots hear it!
             routed_tgs = [(dst_tg, slot)]
+            matrix_targets = get_matrix_translated_targets(dst_tg, slot, peer_name=network_name)
+
+            # Check if this peer is explicitly remapped to another TG/Slot by a per-peer rule:
+            # If so, do NOT broadcast raw_packet to dst_tg (prevents collision with other peers on dst_tg)!
+            is_remapped_peer = any(
+                mt.get("peer_bound", False) and mt.get("tg") != dst_tg
+                for mt in matrix_targets
+            )
+
             if self.dmr_master_server and raw_packet:
-                self.dmr_master_server.broadcast_dmrd(raw_packet)
-                for mt in get_matrix_translated_targets(dst_tg, slot):
+                if not is_remapped_peer:
+                    self.dmr_master_server.broadcast_dmrd(raw_packet)
+
+                for mt in matrix_targets:
                     t_tg = mt["tg"]
                     t_slot = mt["slot"]
-                    if t_tg > 0 and t_tg != dst_tg:
+                    if t_tg > 0 and (t_tg != dst_tg or t_slot != slot):
                         translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
                         self.active_talkers_by_tg[t_tg] = {
                             "src": src_id,
@@ -2992,6 +3067,9 @@ usrpAGC = -20,10,100
                         self.dmr_master_server.broadcast_dmrd(translated_pkt)
                         if (t_tg, t_slot) not in routed_tgs:
                             routed_tgs.append((t_tg, t_slot))
+
+            if is_remapped_peer:
+                routed_tgs = [rt for rt in routed_tgs if rt[0] != dst_tg]
 
             # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
             decoded_pcm = b""
