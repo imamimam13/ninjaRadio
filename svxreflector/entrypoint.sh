@@ -151,6 +151,7 @@ TIMESTAMP_FORMAT="%Y-%m-%d %H:%M:%S"
 LISTEN_PORT={listen_port}
 HTTP_SRV_PORT={http_port}
 TG_FOR_V1_CLIENTS=510
+ACCEPT_CALLSIGN=.*
 SQL_TIMEOUT=300
 SQL_TIMEOUT_BLOCKTIME=10
 CODECS=OPUS
@@ -160,6 +161,7 @@ COMMON_NAME={common_name}
 SUBJECT_ALT_NAME={alt_names}
 
 [USERS]
+* = NinjaReflectorNodes
 """
 
 for u in sorted_users:
