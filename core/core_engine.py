@@ -471,14 +471,19 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: l
         active_matches = []
         for row in routes:
             r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir = row[:10]
+            r_peer = str(row[10] or "").strip() if len(row) > 10 and row[10] else ""
             if is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg):
-                active_matches.append((r_id, r_name, s_m, t_m))
+                active_matches.append((r_id, r_name, s_m, t_m, r_peer))
 
         if active_matches:
-            for _, r_name, s_m, t_m in active_matches:
+            for _, r_name, s_m, t_m, r_peer in active_matches:
+                r_peer_upper = r_peer.upper()
+                if r_peer_upper and r_peer_upper not in ("ALL", "SEMUA PEER", "*"):
+                    if peer_upper and (r_peer_upper in peer_upper or peer_upper in r_peer_upper):
+                        return True
+                    continue
                 if not peer_upper or peer_upper in str(r_name).upper() or peer_upper in str(s_m).upper() or peer_upper in str(t_m).upper() or str(t_m).upper() in ("DMR", "PEER", "MUMBLE", "WEBRTC", "ALL"):
                     return True
-            return True
 
         disabled_matches = []
         for row in routes:
@@ -2568,10 +2573,11 @@ usrpAGC = -20,10,100
             if "parrot_tgs" in self.config and isinstance(self.config["parrot_tgs"], list):
                 self.dmr_master_server.parrot_tgs = [int(x) for x in self.config["parrot_tgs"]]
         if bool(self.config.get("enable_legacy_ab_daemons", True)):
-            self.stop_bridge_daemons()
-            self.generate_configs()
-            time.sleep(0.3)
-            self.start_daemons()
+            ab_running = self.ab_proc is not None and self.ab_proc.poll() is None
+            mmdvm_running = self.mmdvm_proc is not None and self.mmdvm_proc.poll() is None
+            if not ab_running or not mmdvm_running:
+                self.generate_configs()
+                self.start_daemons()
         await self.sync_peer_clients()
         logger.info("✓ Configuration reloaded.")
 
