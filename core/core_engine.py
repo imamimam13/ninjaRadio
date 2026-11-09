@@ -3033,68 +3033,78 @@ usrpAGC = -20,10,100
 
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
-            # Update live RX metadata immediately
-            self.current_rx_src = src_id
-            self.current_rx_tg = dst_tg
-            self.current_rx_slot = slot
-            self.current_rx_call = callsign
-            self.current_rx_time = now
-            self.current_rx_active = True
-            self.last_rx_src = src_id
-            if dst_tg > 0 and src_id > 0:
-                self.active_talkers_by_tg[dst_tg] = {
-                    "src": src_id,
-                    "callsign": callsign,
-                    "slot": slot,
-                    "time": now
-                }
-
-            # 3. Forward DMRD frame (and any TG Matrix translated frames) to our local DMR Master Server
-            # so all connected local hotspots hear it!
-            routed_tgs = [(dst_tg, slot)]
+            # 3. Apply TG Matrix translation FIRST:
+            # Per-peer rules map external Peer TG directly to our internal Server DMR Core TG (e.g. TombolPTT TG 1025 -> TG 1023)
             matrix_targets = get_matrix_translated_targets(dst_tg, slot, peer_name=network_name)
-
-            # Check if this peer is explicitly remapped to another TG/Slot by a per-peer rule:
-            # If so, do NOT broadcast raw_packet to dst_tg (prevents collision with other peers on dst_tg)!
             is_remapped_peer = any(
                 mt.get("peer_bound", False) and mt.get("tg") != dst_tg
                 for mt in matrix_targets
             )
 
-            if self.dmr_master_server and raw_packet:
-                if not is_remapped_peer:
-                    self.dmr_master_server.broadcast_dmrd(raw_packet)
-
+            if is_remapped_peer:
+                primary_target = next(mt for mt in matrix_targets if mt.get("peer_bound", False) and mt.get("tg") != dst_tg)
+                effective_tg = primary_target["tg"]
+                effective_slot = primary_target["slot"]
+                routed_tgs = [(effective_tg, effective_slot)]
+            else:
+                effective_tg = dst_tg
+                effective_slot = slot
+                routed_tgs = [(dst_tg, slot)]
                 for mt in matrix_targets:
                     t_tg = mt["tg"]
                     t_slot = mt["slot"]
                     if t_tg > 0 and (t_tg != dst_tg or t_slot != slot):
-                        translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
-                        self.active_talkers_by_tg[t_tg] = {
-                            "src": src_id,
-                            "callsign": callsign,
-                            "slot": t_slot,
-                            "time": now
-                        }
-                        self.dmr_master_server.broadcast_dmrd(translated_pkt)
                         if (t_tg, t_slot) not in routed_tgs:
                             routed_tgs.append((t_tg, t_slot))
 
-            if is_remapped_peer:
-                routed_tgs = [rt for rt in routed_tgs if rt[0] != dst_tg]
+            # Update live RX metadata for Server DMR Core with effective_tg and original caller callsign/DMR ID (100% Callsign Carry-Over):
+            self.current_rx_src = src_id
+            self.current_rx_tg = effective_tg
+            self.current_rx_slot = effective_slot
+            self.current_rx_call = callsign
+            self.current_rx_time = now
+            self.current_rx_active = True
+            self.last_rx_src = src_id
+            if effective_tg > 0 and src_id > 0:
+                self.active_talkers_by_tg[effective_tg] = {
+                    "src": src_id,
+                    "callsign": callsign,
+                    "slot": effective_slot,
+                    "time": now
+                }
 
-            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
+            # Forward translated DMRD frame(s) to our local DMR Master Server (MMDVM / Hotspots)
+            if self.dmr_master_server and raw_packet:
+                if is_remapped_peer:
+                    translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, effective_tg, effective_slot)
+                    self.dmr_master_server.broadcast_dmrd(translated_pkt)
+                else:
+                    self.dmr_master_server.broadcast_dmrd(raw_packet)
+                    for mt in matrix_targets:
+                        t_tg = mt["tg"]
+                        t_slot = mt["slot"]
+                        if t_tg > 0 and (t_tg != dst_tg or t_slot != slot):
+                            translated_pkt = rewrite_dmrd_tg_and_slot(raw_packet, t_tg, t_slot)
+                            self.active_talkers_by_tg[t_tg] = {
+                                "src": src_id,
+                                "callsign": callsign,
+                                "slot": t_slot,
+                                "time": now
+                            }
+                            self.dmr_master_server.broadcast_dmrd(translated_pkt)
+
+            # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, DVSwitch Mobile, and SvxLink
             decoded_pcm = b""
             data_type = traffic.get("data_type", 1)
             stream_id = traffic.get("stream_id", 0)
             if data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
-                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33], tg=dst_tg, slot=slot, stream_id=stream_id)
+                    decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33], tg=effective_tg, slot=effective_slot, stream_id=stream_id)
                 except Exception:
                     pass
             elif data_type == 2 and self.direct_dmr:
                 try:
-                    self.direct_dmr.reset_stream_decoder(tg=dst_tg, slot=slot)
+                    self.direct_dmr.reset_stream_decoder(tg=effective_tg, slot=effective_slot)
                 except Exception:
                     pass
 
