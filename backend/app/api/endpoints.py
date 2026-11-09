@@ -2112,7 +2112,7 @@ async def save_serverdmr_config(payload: dict):
 
 @router.get("/svxlink/telemetry")
 async def get_svxlink_telemetry():
-    """Returns live SvxReflector & Multi-TG SvxLink Bot Pool telemetry."""
+    """Returns live SvxReflector & Multi-TG Unified Switchboard Node Matrix telemetry."""
     import asyncio
     import httpx
     import json
@@ -2121,12 +2121,13 @@ async def get_svxlink_telemetry():
     svx_host = os.getenv("SVX_HOST", "svxreflector")
     svx_port = int(os.getenv("SVX_PORT", "5300"))
     svx_auth_key = os.getenv("SVX_AUTH_KEY", "ninjaradio_svx")
+    now = time.time()
 
     tcp_connected = False
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(svx_host, svx_port),
-            timeout=1.0
+            timeout=0.8
         )
         tcp_connected = True
         writer.close()
@@ -2136,15 +2137,253 @@ async def get_svxlink_telemetry():
 
     reflector_nodes = {}
     active_bots = []
-    try:
-        async with httpx.AsyncClient(timeout=2.5) as client:
-            resp = await client.get("http://svxlink-bridge:12349/status")
-            if resp.status_code == 200:
-                bdata = resp.json()
-                reflector_nodes = bdata.get("reflector_nodes", {})
-                active_bots = bdata.get("active_bots", [])
-    except Exception:
-        pass
+    mumble_bots = []
+    core_peers = []
+    core_hotspots = []
+    usrp_clients = []
+
+    async with httpx.AsyncClient(timeout=1.5) as client:
+        results = await asyncio.gather(
+            client.get("http://svxlink-bridge:12349/status"),
+            client.get("http://mumble-bridge:12347/status"),
+            client.get("http://core:5000/api/status"),
+            client.get("http://core:5000/api/dvswitch/status"),
+            return_exceptions=True
+        )
+        if not isinstance(results[0], Exception) and results[0].status_code == 200:
+            bdata = results[0].json()
+            reflector_nodes = bdata.get("reflector_nodes", {})
+            active_bots = bdata.get("active_bots", [])
+        if not isinstance(results[1], Exception) and results[1].status_code == 200:
+            mdata = results[1].json()
+            mumble_bots = mdata.get("active_bots", [])
+        if not isinstance(results[2], Exception) and results[2].status_code == 200:
+            cdata = results[2].json()
+            core_peers = cdata.get("peers", [])
+            core_hotspots = cdata.get("master_server", {}).get("hotspots", [])
+        if not isinstance(results[3], Exception) and results[3].status_code == 200:
+            ddata = results[3].json()
+            usrp_clients = ddata.get("connected_usrp_clients", [])
+
+    # Build active talkers per TG from ACTIVE_STREAMS + manager.current_tx
+    active_streams_by_tg = {}
+    for _, sinfo in list(ACTIVE_STREAMS.items()):
+        stg = int(sinfo.get("talkgroup") or 0)
+        if stg > 0:
+            dur_s = max(1, int(now - float(sinfo.get("start_time", now))))
+            active_streams_by_tg[stg] = {
+                "callsign": sinfo.get("callsign", "N1NJA"),
+                "name": sinfo.get("name", ""),
+                "dmr_id": sinfo.get("dmr_id", 0),
+                "tg": stg,
+                "slot": sinfo.get("slot", 2),
+                "mode": sinfo.get("mode", "DMR"),
+                "duration_sec": dur_s
+            }
+    if manager.current_tx:
+        ctx = manager.current_tx
+        ctg = int(ctx.get("talkgroup") or 0)
+        if ctg > 0 and ctg not in active_streams_by_tg:
+            active_streams_by_tg[ctg] = {
+                "callsign": ctx.get("callsign", "N1NJA"),
+                "name": ctx.get("name", ""),
+                "dmr_id": ctx.get("dmr_id", 0),
+                "tg": ctg,
+                "slot": ctx.get("slot", 2),
+                "mode": ctx.get("mode", "DMR"),
+                "duration_sec": 3
+            }
+
+    # Build Unified Node Cards (SvxReflector Dashboard Style)
+    unified_nodes = []
+    seen_callsigns = set()
+
+    # 1. SvxLink Multi-TG Gateway Bots
+    for b in active_bots:
+        bcall = b.get("name", "SVX-NODE")
+        btg = int(b.get("tg") or 0)
+        bslot = int(b.get("slot") or 2)
+        broom = b.get("channel") or f"TG {btg}"
+        stream = active_streams_by_tg.get(btg)
+        bot_talker = b.get("active_talker")
+        is_talking = bool(stream or bot_talker)
+        talker_call = (stream.get("callsign") if stream else None) or bot_talker or ""
+        talk_dur = stream.get("duration_sec", 2) if stream else (3 if bot_talker else 0)
+        seen_callsigns.add(bcall)
+        unified_nodes.append({
+            "id": f"svx_{bcall}",
+            "callsign": bcall,
+            "category": "SvxLink",
+            "sourceType": "Local",
+            "bridgeLabel": f"SvxReflector · {broom}",
+            "hostLabel": f"{svx_host}:{svx_port}",
+            "routeFrom": f"SVX TG {btg}",
+            "routeTo": f"DMR TG {btg} TS{bslot}",
+            "tg": btg,
+            "slot": bslot,
+            "monitoredTGs": [btg],
+            "isTalking": is_talking,
+            "talkerCallsign": talker_call,
+            "talkingDurationSec": talk_dur,
+            "connected": bool(b.get("connected", True)),
+            "sysop": "NINJARADIO · SVX MULTI-TG CORE",
+            "sw": "SvxLink_Bridge 1.9 (DirectDMR)"
+        })
+
+    # 2. External SvxReflector Nodes (Repeaters / Simplex / EchoLink connected to port 5300)
+    for ncall, ninfo in reflector_nodes.items():
+        if ncall in seen_callsigns:
+            continue
+        ntg = int(ninfo.get("tg") or 0)
+        mon_tgs = ninfo.get("monitoredTGs") or ([ntg] if ntg > 0 else [])
+        stream = active_streams_by_tg.get(ntg) if ntg > 0 else None
+        is_talking = bool(ninfo.get("isTalker") or stream)
+        talker_call = (stream.get("callsign") if stream else None) or (ncall if is_talking else "")
+        talk_dur = stream.get("duration_sec", 4) if stream else (4 if is_talking else 0)
+        seen_callsigns.add(ncall)
+        unified_nodes.append({
+            "id": f"ext_svx_{ncall}",
+            "callsign": ncall,
+            "category": "SvxLink",
+            "sourceType": "Ext SVX",
+            "bridgeLabel": ninfo.get("nodeLocation") or "External SvxLink Repeater",
+            "hostLabel": f"svxreflector:{svx_port}",
+            "routeFrom": f"RF / Analog Node",
+            "routeTo": f"SVX TG {ntg or 'Standby'}",
+            "tg": ntg,
+            "slot": 2,
+            "monitoredTGs": mon_tgs,
+            "isTalking": is_talking,
+            "talkerCallsign": talker_call,
+            "talkingDurationSec": talk_dur,
+            "connected": True,
+            "sysop": ninfo.get("sysop") or "EXTERNAL REPEATER NODE",
+            "sw": f"{ninfo.get('sw', 'SvxLink')} {ninfo.get('swVer', '')}".strip()
+        })
+
+    # 3. DMR Upstream Peers (e.g. BRIDI, FreeDMR, BrandMeister)
+    for p in core_peers:
+        pname = str(p.get("name") or p.get("host") or "DMR-PEER").upper()
+        pcall = f"DMR-{pname[:10]}" if not pname.startswith("DMR") else pname
+        sub_raw = p.get("subscribed_tgs") or []
+        if isinstance(sub_raw, str):
+            sub_tgs = [int(x.strip()) for x in sub_raw.split(",") if x.strip().isdigit()]
+        elif isinstance(sub_raw, list):
+            sub_tgs = [int(x) for x in sub_raw if str(x).isdigit()]
+        else:
+            sub_tgs = [1025]
+        primary_ptg = sub_tgs[0] if sub_tgs else 1025
+        active_st = None
+        for t in sub_tgs:
+            if t in active_streams_by_tg:
+                active_st = active_streams_by_tg[t]
+                primary_ptg = t
+                break
+        unified_nodes.append({
+            "id": f"peer_{pname}",
+            "callsign": pcall,
+            "category": "DMR",
+            "sourceType": "Network",
+            "bridgeLabel": f"DMR Master Peer · {p.get('name', pname)}",
+            "hostLabel": f"{p.get('host', '')}:{p.get('port', 62031)}",
+            "routeFrom": f"TG {primary_ptg}",
+            "routeTo": f"DMR TG {primary_ptg} TS2",
+            "tg": primary_ptg,
+            "slot": 2,
+            "monitoredTGs": sub_tgs or [1025],
+            "isTalking": bool(active_st),
+            "talkerCallsign": active_st.get("callsign", "") if active_st else "",
+            "talkingDurationSec": active_st.get("duration_sec", 0) if active_st else 0,
+            "connected": p.get("state") == "CONNECTED",
+            "sysop": f"NINJARADIO · {p.get('callsign', 'BD62BOT')}",
+            "sw": "DMR_Bridge 2.0 (HomeBrew)"
+        })
+
+    # 4. Mumble Multi-TG Bots
+    for mb in mumble_bots:
+        mcall = mb.get("name", "MUM-BOT")
+        mtg = int(mb.get("tg") or 0)
+        mslot = int(mb.get("slot") or 2)
+        mchan = mb.get("channel") or f"TG {mtg}"
+        stream = active_streams_by_tg.get(mtg)
+        mtalker = mb.get("active_talker")
+        is_talking = bool(stream or mtalker)
+        talker_call = (stream.get("callsign") if stream else None) or mtalker or ""
+        talk_dur = stream.get("duration_sec", 2) if stream else (3 if mtalker else 0)
+        unified_nodes.append({
+            "id": f"mumble_{mcall}",
+            "callsign": mcall,
+            "category": "Mumble",
+            "sourceType": "Local",
+            "bridgeLabel": f"Mumble · {mchan}",
+            "hostLabel": "mumble:64738",
+            "routeFrom": f"TG {mtg}",
+            "routeTo": f"MUMBLE {mchan}",
+            "tg": mtg,
+            "slot": mslot,
+            "monitoredTGs": [mtg],
+            "isTalking": is_talking,
+            "talkerCallsign": talker_call,
+            "talkingDurationSec": talk_dur,
+            "connected": bool(mb.get("connected", True)),
+            "sysop": "NINJARADIO · MUMBLE SERVER",
+            "sw": "Mumble_Bridge 1.4"
+        })
+
+    # 5. Connected DVSwitch Mobile Clients (Per-User Isolated Sessions)
+    for uc in usrp_clients:
+        if not uc.get("is_active", True):
+            continue
+        ucall = (uc.get("callsign") or f"DVS-{uc.get('dmr_id') or uc.get('port')}").upper()
+        utg = int(uc.get("tg") or 1025)
+        uid = uc.get("dmr_id") or 0
+        stream = active_streams_by_tg.get(utg)
+        is_talking = bool(uc.get("is_transmitting") or stream)
+        talker_call = ucall if uc.get("is_transmitting") else (stream.get("callsign", "") if stream else "")
+        talk_dur = stream.get("duration_sec", 2) if stream else (2 if is_talking else 0)
+        unified_nodes.append({
+            "id": f"dvs_{uc.get('ip')}_{uc.get('port')}",
+            "callsign": ucall,
+            "category": "DVSwitch",
+            "sourceType": "Network",
+            "bridgeLabel": f"DVSwitch Mobile (ID: {uid or 'USRP'})",
+            "hostLabel": f"{uc.get('ip')}:{uc.get('port')}",
+            "routeFrom": f"USRP 32345",
+            "routeTo": f"TG {utg} TS2",
+            "tg": utg,
+            "slot": 2,
+            "monitoredTGs": [utg],
+            "isTalking": is_talking,
+            "talkerCallsign": talker_call,
+            "talkingDurationSec": talk_dur,
+            "connected": True,
+            "sysop": f"DVSWITCH MOBILE · {ucall}",
+            "sw": "DVSwitch_USRP Isolated"
+        })
+
+    # 6. Connected Local MMDVM Hotspots
+    for hs in core_hotspots:
+        hcall = str(hs.get("callsign") or "HOTSPOT").upper()
+        hid = hs.get("dmr_id") or 0
+        unified_nodes.append({
+            "id": f"hs_{hs.get('addr', hcall)}",
+            "callsign": hcall,
+            "category": "Hotspot",
+            "sourceType": "Network",
+            "bridgeLabel": f"MMDVM RF Hotspot ({hid})",
+            "hostLabel": str(hs.get("addr", "62031")),
+            "routeFrom": "RF Hotspot",
+            "routeTo": "DMR Master 62031",
+            "tg": 1025,
+            "slot": 2,
+            "monitoredTGs": [510, 1025, 5109],
+            "isTalking": False,
+            "talkerCallsign": "",
+            "talkingDurationSec": 0,
+            "connected": hs.get("state") == "CONNECTED",
+            "sysop": f"RF HOTSPOT · {hcall}",
+            "sw": "MMDVM_Host"
+        })
 
     mappings = DEFAULT_SVXLINK_ROOMS
     config_path = "/app/data/config.json"
@@ -2166,8 +2405,10 @@ async def get_svxlink_telemetry():
         "server_version": "19.09.2-Debian",
         "tcp_status": "OPEN" if tcp_connected else "CLOSED",
         "udp_status": "ACTIVE" if tcp_connected else "UNREACHABLE",
-        "connected_nodes": len(reflector_nodes) if reflector_nodes else len(active_bots),
+        "connected_nodes": len(unified_nodes),
         "reflector_nodes": reflector_nodes,
+        "unified_nodes": unified_nodes,
+        "active_streams_by_tg": active_streams_by_tg,
         "active_bots": active_bots,
         "bridge_bot": {
             "name": "NinjaRadio-SvxBridge",

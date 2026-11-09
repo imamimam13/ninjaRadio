@@ -15,7 +15,14 @@ import {
   Trash2,
   Terminal,
   Activity,
-  Server
+  Server,
+  Mic,
+  Smartphone,
+  Headphones,
+  Globe,
+  Wifi,
+  LayoutGrid,
+  ListFilter
 } from "lucide-react";
 
 import { AdminGuard } from "@/components/AdminGuard";
@@ -43,6 +50,26 @@ interface SvxBot {
   status: string;
 }
 
+interface UnifiedNode {
+  id: string;
+  callsign: string;
+  category: "SvxLink" | "DMR" | "DVSwitch" | "Mumble" | "Hotspot";
+  sourceType: "Local" | "Network" | "Ext SVX";
+  bridgeLabel: string;
+  hostLabel: string;
+  routeFrom: string;
+  routeTo: string;
+  tg: number;
+  slot: number;
+  monitoredTGs: number[];
+  isTalking: boolean;
+  talkerCallsign: string;
+  talkingDurationSec: number;
+  connected: boolean;
+  sysop: string;
+  sw: string;
+}
+
 interface SvxTelemetry {
   online: boolean;
   server_host: string;
@@ -54,6 +81,8 @@ interface SvxTelemetry {
   udp_status: string;
   connected_nodes: number;
   reflector_nodes: Record<string, any>;
+  unified_nodes?: UnifiedNode[];
+  active_streams_by_tg?: Record<string, any>;
   active_bots: SvxBot[];
   bridge_bot: {
     name: string;
@@ -72,6 +101,11 @@ export default function SvxLinkPage() {
   const [logs, setLogs] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Node Matrix Filters & View Mode
+  const [sourceFilter, setSourceFilter] = useState<string>("All");
+  const [typeFilter, setTypeFilter] = useState<string>("All");
+  const [viewMode, setViewMode] = useState<"detailed" | "compact">("detailed");
 
   // Add Bot Form State
   const [newBotName, setNewBotName] = useState("");
@@ -327,83 +361,284 @@ export default function SvxLinkPage() {
             </div>
           </div>
 
-          {/* SvxPortal-Style Live Reflector Node Matrix */}
-          <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Radio className="w-5 h-5 text-cyan-400" />
-                <div>
-                  <h2 className="font-heading font-bold text-base sm:text-lg text-white">
-                    SVXPORTAL LIVE REFLECTOR MATRIX (CONNECTED STATIONS & NODES)
-                  </h2>
-                  <p className="text-[11px] text-slate-400 font-mono">
-                    Matriks real-time seluruh node SvxLink & Gateway yang sedang terhubung di SvxReflector Server.
-                  </p>
-                </div>
-              </div>
-              <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-800">
-                {telemetry?.reflector_nodes ? Object.keys(telemetry.reflector_nodes).length : bots.length} ACTIVE NODES
-              </span>
-            </div>
+          {/* SvxReflector Tactical Unified Node Matrix (SVXReflector Dashboard Style in NinjaRadio UI) */}
+          {(() => {
+            const fallbackNodes: UnifiedNode[] = bots.map((b) => ({
+              id: `svx_${b.name}`,
+              callsign: b.name,
+              category: "SvxLink",
+              sourceType: "Local",
+              bridgeLabel: `SvxReflector · ${b.channel}`,
+              hostLabel: `svxreflector:${telemetry?.server_port || 5300}`,
+              routeFrom: `SVX TG ${b.tg}`,
+              routeTo: `DMR TG ${b.tg} TS${b.slot}`,
+              tg: b.tg,
+              slot: b.slot,
+              monitoredTGs: [b.tg],
+              isTalking: !!b.active_talker,
+              talkerCallsign: b.active_talker || "",
+              talkingDurationSec: b.active_talker ? 3 : 0,
+              connected: !!b.connected,
+              sysop: "NINJARADIO · SVX MULTI-TG CORE",
+              sw: "SvxLink_Bridge 1.9 (DirectDMR)"
+            }));
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 font-mono">
-              {(telemetry?.reflector_nodes && Object.keys(telemetry.reflector_nodes).length > 0
-                ? Object.entries(telemetry.reflector_nodes)
-                : bots.map((b) => [
-                    b.name,
-                    {
-                      callsign: b.name,
-                      tg: b.tg,
-                      monitoredTGs: [b.tg],
-                      isTalker: !!b.active_talker,
-                      nodeLocation: b.channel,
-                      sw: "NinjaRadio-DirectDMR"
-                    }
-                  ])
-              ).map(([nodeCall, info]: [string, any]) => {
-                const isTalking = info?.isTalker;
-                const tgNum = info?.tg || 0;
-                const monitored = Array.isArray(info?.monitoredTGs) ? info.monitoredTGs.join(", ") : tgNum;
-                return (
-                  <div
-                    key={nodeCall}
-                    className={`p-3.5 rounded-xl border transition-all ${
-                      isTalking
-                        ? "bg-rose-950/40 border-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)]"
-                        : "bg-slate-950/70 border-slate-800/80 hover:border-cyan-800/60"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-black text-sm text-emerald-300 flex items-center gap-1.5">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            isTalking ? "bg-rose-500 animate-ping" : "bg-emerald-400"
-                          }`}
-                        />
-                        {nodeCall}
+            const allNodes: UnifiedNode[] =
+              telemetry?.unified_nodes && telemetry.unified_nodes.length > 0
+                ? telemetry.unified_nodes
+                : fallbackNodes;
+
+            const filteredNodes = allNodes.filter((n) => {
+              if (sourceFilter !== "All" && n.sourceType !== sourceFilter) return false;
+              if (typeFilter !== "All" && n.category !== typeFilter) return false;
+              return true;
+            });
+
+            const totalCount = allNodes.length;
+            const activeCount = allNodes.filter((n) => n.connected).length;
+            const talkingCount = allNodes.filter((n) => n.isTalking).length;
+
+            const getCategoryIcon = (cat: string, talking: boolean) => {
+              const cls = `w-4 h-4 ${talking ? "text-emerald-400 animate-pulse" : "text-cyan-400"}`;
+              if (cat === "DVSwitch") return <Smartphone className={cls} />;
+              if (cat === "Mumble") return <Headphones className={cls} />;
+              if (cat === "DMR") return <Globe className={cls} />;
+              if (cat === "Hotspot") return <Wifi className={cls} />;
+              return <Radio className={cls} />;
+            };
+
+            return (
+              <div className="bg-[#0b121e]/90 rounded-2xl border border-cyan-900/40 p-5 shadow-2xl space-y-4">
+                {/* Top Header Bar with Live Counters */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-3 border-b border-slate-800/80">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <Radio className="w-5 h-5 text-emerald-400" />
+                      <h2 className="font-heading font-black text-base sm:text-lg text-white tracking-wide">
+                        SVXREFLECTOR <span className="text-cyan-400">NINJARADIO</span>
+                      </h2>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                      <span className="px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-300 font-bold">
+                        📡 <strong className="text-white">{totalCount}</strong> Nodes
+                      </span>
+                      <span className="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-800/60 text-cyan-300 font-bold">
+                        ⚡ <strong className="text-cyan-200">{activeCount}</strong> Active
                       </span>
                       <span
-                        className={`text-[10px] px-2 py-0.5 rounded font-bold ${
-                          isTalking
-                            ? "bg-rose-600 text-white"
-                            : "bg-amber-950/80 text-amber-400 border border-amber-800/60"
+                        className={`px-2.5 py-1 rounded-lg border font-bold ${
+                          talkingCount > 0
+                            ? "bg-emerald-950/90 border-emerald-500 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.3)] animate-pulse"
+                            : "bg-slate-900/90 border-slate-800 text-slate-400"
                         }`}
                       >
-                        {isTalking ? "TX ACTIVE" : `TG #${tgNum}`}
+                        🎙️ <strong className="text-emerald-400">{talkingCount}</strong> Talking
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-400 space-y-1">
-                      <div className="truncate text-slate-300">{info?.nodeLocation || "SvxLink Node"}</div>
-                      <div className="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
-                        <span>Monitor: TG {monitored}</span>
-                        <span className="text-cyan-400">{info?.sw || "SvxLink"}</span>
-                      </div>
-                    </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
+
+                  {/* View Mode Toggle */}
+                  <div className="flex items-center gap-1.5 self-start lg:self-auto bg-slate-950/90 p-1 rounded-xl border border-slate-800 text-xs font-mono">
+                    <button
+                      onClick={() => setViewMode("detailed")}
+                      className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all ${
+                        viewMode === "detailed"
+                          ? "bg-cyan-950 text-cyan-300 border border-cyan-700/70 shadow"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      Detailed
+                    </button>
+                    <button
+                      onClick={() => setViewMode("compact")}
+                      className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all ${
+                        viewMode === "compact"
+                          ? "bg-cyan-950 text-cyan-300 border border-cyan-700/70 shadow"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <ListFilter className="w-3.5 h-3.5" />
+                      Compact
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter Bar: SOURCE & TYPE (SVXReflector Dashboard Style) */}
+                <div className="flex flex-col md:flex-row md:items-center gap-3 text-xs font-mono bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                      SOURCE:
+                    </span>
+                    {["All", "Local", "Network", "Ext SVX"].map((src) => (
+                      <button
+                        key={src}
+                        onClick={() => setSourceFilter(src)}
+                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                          sourceFilter === src
+                            ? "bg-cyan-600/20 text-cyan-300 border border-cyan-500/60 shadow-[0_0_10px_rgba(6,182,212,0.2)]"
+                            : "bg-slate-900/70 text-slate-400 border border-slate-800 hover:text-slate-200"
+                        }`}
+                      >
+                        {src}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="hidden md:block w-[1px] h-5 bg-slate-800 mx-1" />
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                      TYPE:
+                    </span>
+                    {["All", "SvxLink", "DMR", "DVSwitch", "Mumble", "Hotspot"].map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setTypeFilter(t)}
+                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                          typeFilter === t
+                            ? "bg-emerald-600/20 text-emerald-300 border border-emerald-500/60 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+                            : "bg-slate-900/70 text-slate-400 border border-slate-800 hover:text-slate-200"
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Node Cards Grid */}
+                <div
+                  className={`grid gap-4 font-mono ${
+                    viewMode === "detailed"
+                      ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3"
+                      : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+                  }`}
+                >
+                  {filteredNodes.map((node) => {
+                    const isTalking = node.isTalking;
+                    return (
+                      <div
+                        key={node.id}
+                        className={`rounded-xl border transition-all duration-200 flex flex-col justify-between overflow-hidden ${
+                          isTalking
+                            ? "bg-[#091f1a]/90 border-emerald-400 shadow-[0_0_24px_rgba(16,185,129,0.28)]"
+                            : "bg-[#0a101d]/90 border-slate-800/90 hover:border-cyan-700/60 shadow-lg"
+                        }`}
+                      >
+                        {/* Card Top Header */}
+                        <div className="p-3.5 space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div
+                                className={`w-7 h-7 rounded-lg flex items-center justify-center border ${
+                                  isTalking
+                                    ? "bg-emerald-950 border-emerald-500/60"
+                                    : "bg-slate-900 border-slate-800"
+                                }`}
+                              >
+                                {isTalking ? (
+                                  <Mic className="w-4 h-4 text-emerald-400 animate-bounce" />
+                                ) : (
+                                  getCategoryIcon(node.category, false)
+                                )}
+                              </div>
+                              <span className="font-black text-sm sm:text-base text-white tracking-wide truncate">
+                                {node.callsign}
+                              </span>
+                            </div>
+
+                            <span
+                              className={`text-[11px] px-2.5 py-0.5 rounded-md font-black tracking-wide shrink-0 ${
+                                isTalking
+                                  ? "bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.6)]"
+                                  : "bg-blue-600/90 text-white border border-blue-400/40"
+                              }`}
+                            >
+                              {isTalking ? `TALKING · TG ${node.tg}` : `TG ${node.tg}`}
+                            </span>
+                          </div>
+
+                          {/* Active Transmitting Banner */}
+                          {isTalking && (
+                            <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs">
+                              <span className="font-bold truncate flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                                TRANSMITTING · {node.talkerCallsign || `TG ${node.tg}`}
+                              </span>
+                              <span className="text-[11px] font-mono text-emerald-200 shrink-0 ml-2">
+                                {node.talkingDurationSec || 1}s
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Detailed Metadata Rows */}
+                          {viewMode === "detailed" && (
+                            <div className="space-y-2 pt-1 text-xs">
+                              {/* Bridge Type & Location */}
+                              <div className="flex items-center gap-2 text-slate-300">
+                                <span className="text-cyan-400 font-bold">(({node.category}))</span>
+                                <span className="truncate text-slate-400">{node.bridgeLabel}</span>
+                              </div>
+
+                              {/* Route Pill: host [RouteFrom ⇆ RouteTo] */}
+                              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                <span className="text-slate-400 truncate max-w-[130px]">{node.hostLabel}</span>
+                                <span className="px-2 py-0.5 rounded bg-slate-900/90 border border-slate-700/80 text-slate-200 font-semibold">
+                                  {node.routeFrom} <span className="text-cyan-400">⇆</span> {node.routeTo}
+                                </span>
+                              </div>
+
+                              {/* Monitored TGs Pills */}
+                              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                <span className="text-slate-500">TGs:</span>
+                                {(node.monitoredTGs && node.monitoredTGs.length > 0
+                                  ? node.monitoredTGs
+                                  : [node.tg]
+                                ).map((t) => (
+                                  <span
+                                    key={t}
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      t === node.tg && isTalking
+                                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/50"
+                                        : "bg-blue-950/70 text-blue-300 border border-blue-800/60"
+                                    }`}
+                                  >
+                                    {t}
+                                  </span>
+                                ))}
+                              </div>
+
+                              {/* Sysop / Network Info */}
+                              <div className="text-[11px] text-slate-400 truncate pt-0.5">
+                                👤 {node.sysop}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Card Footer */}
+                        <div className="px-3.5 py-2 bg-slate-950/80 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+                          <span className="truncate">{node.sw}</span>
+                          <span className="flex items-center gap-1.5 text-[10px] font-bold">
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                node.connected ? "bg-emerald-400" : "bg-amber-400"
+                              }`}
+                            />
+                            <span className={node.connected ? "text-emerald-400" : "text-amber-400"}>
+                              {node.connected ? "ONLINE" : "SYNCING"}
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Add / Station New SvxLink Multi-TG Bot */}
           <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 p-5 shadow-xl space-y-4">
