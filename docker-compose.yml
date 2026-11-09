@@ -104,6 +104,8 @@ services:
       - SVX_HTTP_PORT=8080
       - SVX_AUTH_KEY=${SVX_AUTH_KEY:-ninjaradio_svx}
     volumes:
+      - ./svxreflector/entrypoint.sh:/app/entrypoint.sh
+      - ./svxreflector/svxreflector.conf:/etc/svxlink/svxreflector.conf
       - ninjaradio_data:/app/data
     networks:
       - ninjaradio_net
