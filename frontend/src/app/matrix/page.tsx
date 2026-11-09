@@ -39,6 +39,7 @@ interface RouteItem {
   target_slot: number;
   is_active: boolean;
   bidirectional: boolean;
+  peer_name?: string | null;
 }
 
 interface BridgeWorker {
@@ -96,6 +97,8 @@ export default function MatrixPage() {
   const [targetSlot, setTargetSlot] = useState(1);
   const [bidirectional, setBidirectional] = useState(true);
   const [autoSpawnWorker, setAutoSpawnWorker] = useState(false);
+  const [peers, setPeers] = useState<{ id?: any; name: string }[]>([]);
+  const [selectedPeer, setSelectedPeer] = useState<string>("");
 
   // Edit Route State
   const [editingRoute, setEditingRoute] = useState<RouteItem | null>(null);
@@ -107,6 +110,7 @@ export default function MatrixPage() {
   const [editTargetTg, setEditTargetTg] = useState(51000);
   const [editTargetSlot, setEditTargetSlot] = useState(1);
   const [editBidirectional, setEditBidirectional] = useState(true);
+  const [editPeerName, setEditPeerName] = useState<string>("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   const fetchRoutes = () => {
@@ -143,6 +147,16 @@ export default function MatrixPage() {
 
     fetchRoutes();
     fetchWorkers();
+    const fetchPeers = async () => {
+      try {
+        const res = await fetch("/api/peers");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) setPeers(data);
+        }
+      } catch {}
+    };
+    fetchPeers();
     const interval = setInterval(fetchWorkers, 10000);
     return () => {
       clearInterval(interval);
@@ -258,6 +272,7 @@ export default function MatrixPage() {
           target_slot: Number(targetSlot),
           is_active: true,
           bidirectional,
+          peer_name: selectedPeer || null,
         }),
       });
       if (res.ok) {
@@ -279,6 +294,7 @@ export default function MatrixPage() {
           } catch {}
         }
         setName("");
+        setSelectedPeer("");
         fetchRoutes();
         beepPlayer?.playTalkGrant();
       }
@@ -301,6 +317,7 @@ export default function MatrixPage() {
     setEditTargetTg(route.target_tg);
     setEditTargetSlot(route.target_slot || 1);
     setEditBidirectional(route.bidirectional ?? true);
+    setEditPeerName(route.peer_name || "");
   };
 
   const handleSaveEditRoute = async (e: React.FormEvent) => {
@@ -320,6 +337,7 @@ export default function MatrixPage() {
           target_tg: Number(editTargetTg),
           target_slot: Number(editTargetSlot),
           bidirectional: editBidirectional,
+          peer_name: editPeerName || null,
         }),
       });
       if (res.ok) {
@@ -582,15 +600,33 @@ export default function MatrixPage() {
 
           <form onSubmit={handleCreateRoute} className="space-y-3">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
-              <div className="lg:col-span-3">
+              <div className="lg:col-span-2">
                 <label className="text-[10px] font-mono text-slate-400 uppercase block mb-1">Nama Rule / Jembatan</label>
                 <input
                   type="text"
-                  placeholder="Otomatis jika dikosongkan (misal: DMR TG 1025 <-> DMR TG 510)"
+                  placeholder="Otomatis (misal: TG 1025 <-> TG 1026)"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-400"
                 />
+              </div>
+
+              <div className="lg:col-span-2">
+                <label className="text-[10px] font-mono text-purple-400 font-bold uppercase block mb-1">
+                  🌐 Filter Peer
+                </label>
+                <select
+                  value={selectedPeer}
+                  onChange={(e) => setSelectedPeer(e.target.value)}
+                  className="w-full px-2.5 py-2 bg-[#05080f] border border-purple-900/60 rounded-xl text-xs text-purple-300 font-mono font-bold focus:outline-none focus:border-purple-400"
+                >
+                  <option value="">Semua Peer (Global)</option>
+                  {peers.map((p, idx) => (
+                    <option key={idx} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* SOURCE */}
@@ -722,9 +758,18 @@ export default function MatrixPage() {
               }`}
             >
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0 pr-2">
+                <div className="flex items-center gap-2 min-w-0 pr-2 flex-wrap">
                   <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${route.is_active ? "bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" : "bg-slate-600"}`} />
                   <span className="font-heading font-black text-sm text-white truncate">{route.name}</span>
+                  {route.peer_name ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-950/80 text-purple-300 border border-purple-800 flex items-center gap-1">
+                      🌐 Peer: {route.peer_name}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-900 text-slate-400 border border-slate-800">
+                      🌐 Global
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <button
@@ -1161,6 +1206,24 @@ export default function MatrixPage() {
                   className="w-full px-3 py-2 bg-[#05080f] border border-cyan-900/60 rounded-xl text-xs text-white font-mono focus:border-cyan-400 outline-none"
                   required
                 />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-mono text-purple-400 font-bold block mb-1">
+                  🌐 Filter Peer Sumber:
+                </label>
+                <select
+                  value={editPeerName}
+                  onChange={(e) => setEditPeerName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-purple-900/60 rounded-xl text-xs text-purple-300 font-mono font-bold focus:border-purple-400 outline-none"
+                >
+                  <option value="">Semua Peer (Global)</option>
+                  {peers.map((p, idx) => (
+                    <option key={idx} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

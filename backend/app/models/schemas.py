@@ -60,6 +60,7 @@ class BridgeRouteBase(BaseModel):
     target_slot: int = 1
     is_active: bool = True
     bidirectional: bool = True
+    peer_name: Optional[str] = None
 
 class BridgeRouteCreate(BridgeRouteBase):
     pass
@@ -74,6 +75,7 @@ class BridgeRouteUpdate(BaseModel):
     target_slot: Optional[int] = None
     is_active: Optional[bool] = None
     bidirectional: Optional[bool] = None
+    peer_name: Optional[str] = None
 
 class BridgeRouteResponse(BridgeRouteBase):
     id: int

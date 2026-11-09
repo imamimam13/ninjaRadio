@@ -615,6 +615,23 @@ async def delete_bridge_worker(worker_id: str):
 
 # ----------------- Matrix Talkgroup Router -----------------
 
+@router.get("/peers")
+async def get_configured_peers():
+    cfg = read_config_file()
+    peers = cfg.get("peering", [])
+    result = []
+    for p in peers:
+        p_name = str(p.get("name") or "").strip()
+        if p_name:
+            result.append({
+                "id": p.get("id"),
+                "name": p_name,
+                "host": p.get("host", ""),
+                "port": p.get("port", 62031),
+                "isActive": p.get("isActive", True)
+            })
+    return result
+
 @router.get("/matrix", response_model=List[BridgeRouteResponse])
 async def get_matrix_routes(session: AsyncSession = Depends(get_db)):
     return await BridgeService.get_routes(session)

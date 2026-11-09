@@ -60,6 +60,7 @@ class BridgeRoute(Base):
     target_slot: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     bidirectional: Mapped[bool] = mapped_column(Boolean, default=True)
+    peer_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
 
 class Organization(Base):
     __tablename__ = "organizations"
@@ -92,6 +93,10 @@ async def init_db():
             pass
         try:
             await conn.execute(text("ALTER TABLE organizations ADD COLUMN callsign_prefixes VARCHAR(255) DEFAULT ''"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE bridge_routes ADD COLUMN peer_name VARCHAR(64) DEFAULT NULL"))
         except Exception:
             pass
         try:
