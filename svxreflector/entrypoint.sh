@@ -14,13 +14,78 @@ import os
 import json
 import sqlite3
 import re
+import urllib.request
+import socket
+import shutil
 
 auth_key = os.getenv("SVX_AUTH_KEY", "ninjaradio_svx")
 listen_port = os.getenv("SVX_PORT", "5300")
 http_port = os.getenv("SVX_HTTP_PORT", "8080")
-common_name = os.getenv("SVX_COMMON_NAME", "43.173.13.117")
-alt_names = os.getenv("SVX_CERT_SAN", "DNS:43.173.13.117.sslip.io,DNS:svxreflector,IP:43.173.13.117,IP:127.0.0.1")
 conf_path = "$CONF_PATH"
+
+# Auto-detect server public IP dynamically (pindah server tidak akan macet)
+detected_ip = ""
+for url in ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]:
+    try:
+        with urllib.request.urlopen(url, timeout=2.5) as resp:
+            ip_str = resp.read().decode("utf-8").strip()
+            if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", ip_str):
+                detected_ip = ip_str
+                break
+    except Exception:
+        continue
+
+if not detected_ip:
+    try:
+        # Fallback to local outbound interface IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        detected_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        detected_ip = "127.0.0.1"
+
+common_name = (os.getenv("SVX_COMMON_NAME") or "").strip() or detected_ip
+print(f"✓ Detected Server Common Name / IP: {common_name}")
+
+# Build SAN list dynamically
+sans = set([
+    f"IP:{detected_ip}",
+    f"DNS:{detected_ip}.sslip.io",
+    "DNS:svxreflector",
+    "IP:127.0.0.1",
+    "DNS:localhost"
+])
+if common_name and common_name != detected_ip:
+    if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", common_name):
+        sans.add(f"IP:{common_name}")
+        sans.add(f"DNS:{common_name}.sslip.io")
+    else:
+        sans.add(f"DNS:{common_name}")
+
+custom_san = os.getenv("SVX_CERT_SAN")
+if custom_san:
+    for s in custom_san.split(","):
+        s_clean = s.strip()
+        if s_clean:
+            sans.add(s_clean)
+
+alt_names = ",".join(sorted(list(sans)))
+
+# Auto-refresh PKI certificate if server IP or Common Name changed
+pki_cn_file = "/var/lib/svxlink/pki/.last_common_name"
+try:
+    if os.path.exists(pki_cn_file):
+        with open(pki_cn_file, "r") as f:
+            last_cn = f.read().strip()
+        if last_cn and last_cn != common_name:
+            print(f"⚠️ Server IP / Host berubah dari {last_cn} ke {common_name}. Mereset sertifikat PKI...")
+            shutil.rmtree("/var/lib/svxlink/pki", ignore_errors=True)
+    os.makedirs("/var/lib/svxlink/pki", exist_ok=True)
+    with open(pki_cn_file, "w") as f:
+        f.write(common_name)
+except Exception as e:
+    print(f"Note PKI check: {e}")
 
 users = set([
     "N1NJA", "BD62BOT", "SVX", "SVXLINK",
