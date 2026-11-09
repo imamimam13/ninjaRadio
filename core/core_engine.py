@@ -2303,12 +2303,14 @@ usrpAGC = -20,10,100
         while self.running:
             try:
                 data, addr = await loop.sock_recvfrom(self.web_ptt_sock, 4096)
-                if len(data) >= 37 and data.startswith(b"NPTT"):
+                if len(data) >= 37 and data[:4] in (b"NPTT", b"NSVX"):
+                    is_svx = data[:4] == b"NSVX"
                     dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
                     session_key = (dmr_id, tg)
                     now = time.time()
+                    net_label = "SVX / SDR" if is_svx else ("Direct DMR (Mumble)" if addr[0] not in ("127.0.0.1", "localhost") else "Direct DMR (WebRTC)")
                     if is_tx:
                         is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg)
                         if not is_allowed:
@@ -2330,7 +2332,7 @@ usrpAGC = -20,10,100
                             active_tx_sessions.add(session_key)
                             self.current_tx_start_time = now
                             pkt_count = 0
-                            logger.info(f"🎙️ [WebPTT-Ingress] 🔴 Keyed up from {addr}: ID {dmr_id} ({callsign}) -> TG {tg} (TS{slot}, pcm={len(pcm_chunk)}B)")
+                            logger.info(f"🎙️ [WebPTT-Ingress] 🔴 Keyed up from {addr} [{net_label}]: ID {dmr_id} ({callsign}) -> TG {tg} (TS{slot}, pcm={len(pcm_chunk)}B)")
                             # Broadcast caller info to DVSwitch Mobile clients
                             try:
                                 fwd_tlv = build_set_info_tlv(dmr_id, int(self.config.get("server_dmr_id", 5109999)), tg, slot, 1, callsign)
@@ -2338,8 +2340,8 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
                             asyncio.create_task(self.dispatch_event_to_backend({
-                                "network": "Direct DMR (WebRTC)",
-                                "host": "webrtc:32100",
+                                "network": net_label,
+                                "host": f"{addr[0]}:32100",
                                 "src_id": dmr_id,
                                 "dst_tg": tg,
                                 "slot": slot,
@@ -2352,17 +2354,17 @@ usrpAGC = -20,10,100
                         if pkt_count % 100 == 0:
                             logger.info(f"🎙️ [WebPTT-Ingress] Streaming audio from {callsign}: {pkt_count} frames processed")
 
-                        # Forward pristine 8kHz PCM directly to DVSwitch Mobile and Mumble clients
+                        # Forward pristine 8kHz PCM directly to DVSwitch Mobile, Mumble, and SvxLink clients
                         if pcm_chunk and len(pcm_chunk) >= 320:
-                            is_from_mumble = addr[0] not in ("127.0.0.1", "localhost")
+                            is_from_mumble = (not is_svx) and (addr[0] not in ("127.0.0.1", "localhost"))
                             for offset in range(0, len(pcm_chunk), 320):
                                 frame_pcm = pcm_chunk[offset:offset + 320]
                                 if len(frame_pcm) == 320:
                                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                                     usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, frame_pcm)
                                     self.broadcast_to_usrp_clients(usrp_pkt, tg=tg)
+                                    mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0) + frame_pcm
                                     if not is_from_mumble:
-                                        mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0) + frame_pcm
                                         try:
                                             self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
                                         except Exception:
@@ -2370,12 +2372,13 @@ usrpAGC = -20,10,100
                                                 self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
                                             except Exception:
                                                 pass
+                                    if not is_svx:
                                         try:
                                             self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                                         except Exception:
                                             pass
                             asyncio.create_task(self.dispatch_event_to_backend({
-                                "network": "Direct DMR (Mumble/WebRTC)",
+                                "network": net_label,
                                 "host": f"{addr[0]}:32100",
                                 "src_id": dmr_id,
                                 "dst_tg": tg,
@@ -2397,7 +2400,7 @@ usrpAGC = -20,10,100
                             self.current_tx_tg = 0
                             self.current_tx_slot = 0
                             self.current_tx_dmr_id = 0
-                            logger.info(f"🎙️ [WebPTT-Ingress] ⏹️ Unkeyed from {addr}: ID {dmr_id} ({callsign}) -> TG {tg} (total frames: {pkt_count})")
+                            logger.info(f"🎙️ [WebPTT-Ingress] ⏹️ Unkeyed from {addr} [{net_label}]: ID {dmr_id} ({callsign}) -> TG {tg} (total frames: {pkt_count})")
                             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                             unkey_usrp = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
                             self.broadcast_to_usrp_clients(unkey_usrp, tg=tg)
@@ -2406,13 +2409,14 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(mumble_unkey, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
                             except Exception:
                                 pass
-                            try:
-                                self.bridge_sock.sendto(mumble_unkey, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                            except Exception:
-                                pass
+                            if not is_svx:
+                                try:
+                                    self.bridge_sock.sendto(mumble_unkey, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                                except Exception:
+                                    pass
                             asyncio.create_task(self.dispatch_event_to_backend({
-                                "network": "Direct DMR (WebRTC)",
-                                "host": "webrtc:32100",
+                                "network": net_label,
+                                "host": f"{addr[0]}:32100",
                                 "src_id": dmr_id,
                                 "dst_tg": tg,
                                 "slot": slot,
