@@ -1111,8 +1111,18 @@ class MumbleGatewayBot:
                             self.tx_pcm_buffer.clear()
                             self.tx_conditioner.reset()
 
-                        # Condition 48kHz Opus PCM -> 8kHz AMBE-ready PCM (Polyphase Resampler + 5th-Order Butterworth BPF + Noise Gate + Peak Limiter)
-                        pcm_8k = self.tx_conditioner.process_frame(pcm_48k, return_bytes=True)
+                        # Downsample 48kHz Opus PCM to 8kHz PCM using clean 6:1 block decimation
+                        # (Zero boundary attenuation, zero latency, avoids brick-wall gating cuts)
+                        pcm_arr = np.frombuffer(pcm_48k, dtype=np.int16).astype(np.float32)
+                        n_8k = len(pcm_arr) // 6
+                        if n_8k > 0:
+                            pcm_8k_arr = pcm_arr[:n_8k * 6].reshape(-1, 6).mean(axis=1)
+                            peak = float(np.max(np.abs(pcm_8k_arr))) if len(pcm_8k_arr) > 0 else 0
+                            if peak > 24000.0:
+                                pcm_8k_arr = pcm_8k_arr * (24000.0 / peak)
+                            pcm_8k = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
+                        else:
+                            pcm_8k = b""
 
                         self.tx_pcm_buffer.extend(pcm_8k)
                         call_bytes = (user_callsign or "MUMBLE").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
@@ -1204,7 +1214,7 @@ def run_usrp_listener(gateway_pool):
     while IS_BRIDGING:
         try:
             data, addr = sock.recvfrom(2048)
-            if len(data) >= 32 and (time.time() - last_mumble_tx > 0.35):
+            if len(data) >= 32 and (time.time() - last_mumble_tx > 0.65):
                 last_dmr_tx = time.time()
                 pcm_8k = data[32:]
 
@@ -1234,7 +1244,7 @@ def ptt_watchdog_loop(usrp_sock):
         time.sleep(0.05)
         if active_mumble_tx:
             user_info, tg, slot, dmr_id, callsign, last_seen, bot_sock = active_mumble_tx
-            if time.time() - last_seen > 0.35:
+            if time.time() - last_seen > 0.65:
                 try:
                     target_sock = bot_sock or usrp_sock
                     call_bytes = (callsign or "MUMBLE").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")

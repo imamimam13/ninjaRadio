@@ -43,7 +43,7 @@ class AmbeAudioConditioner:
         lowcut_hz: float = 300.0,
         highcut_hz: float = 3300.0,
         filter_order: int = 5,
-        gate_threshold_rms: float = 160.0,
+        gate_threshold_rms: float = 0.0,
         peak_ceiling: float = 24000.0,
         pre_gain: float = 1.0,
     ) -> None:
@@ -217,10 +217,11 @@ class AmbeAudioConditioner:
             buf = self._sosfilt_fallback_numpy(buf)
 
         # --- Step 3: Noise Gate (Squelch) ---
-        rms = float(np.sqrt(np.dot(buf, buf) / buf.size))
-        if rms < self.gate_threshold_rms:
-            out_silent = np.zeros(buf.shape, dtype=np.int16)
-            return out_silent.tobytes() if return_bytes else out_silent
+        if self.gate_threshold_rms > 0:
+            rms = float(np.sqrt(np.dot(buf, buf) / buf.size))
+            if rms < self.gate_threshold_rms:
+                out_silent = np.zeros(buf.shape, dtype=np.int16)
+                return out_silent.tobytes() if return_bytes else out_silent
 
         # --- Step 4: Soft Limiter / Proportional Anti-Clipping AGC ---
         peak = float(np.max(np.abs(buf)))

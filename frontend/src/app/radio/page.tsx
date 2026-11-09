@@ -932,27 +932,21 @@ export default function RadioPocketMode() {
         txAccumulatorRef.current.push(...newSamples);
 
         const MIC_BOOST = isCableGatewayActive ? cableGain : 1.25;
-        const GATE_RMS_THRESHOLD = 150.0; // Squelch quiet room floor to absolute silence
         const PEAK_CEILING = 24000.0;     // Safe AMBE+2 dynamic ceiling (prevents clipping)
         while (txAccumulatorRef.current.length >= 160) {
           const frame = txAccumulatorRef.current.splice(0, 160);
           const pcm16 = new Int16Array(160);
           const scaled = new Float32Array(160);
-          let sumSq = 0;
           let peak = 0;
           for (let i = 0; i < 160; i++) {
             const s = frame[i] * MIC_BOOST * 32767.0;
             scaled[i] = s;
-            sumSq += s * s;
             const absS = Math.abs(s);
             if (absS > peak) peak = absS;
           }
-          const rms = Math.sqrt(sumSq / 160);
-          if (rms >= GATE_RMS_THRESHOLD) {
-            const limiterScale = peak > PEAK_CEILING ? PEAK_CEILING / peak : 1.0;
-            for (let i = 0; i < 160; i++) {
-              pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(scaled[i] * limiterScale)));
-            }
+          const limiterScale = peak > PEAK_CEILING ? PEAK_CEILING / peak : 1.0;
+          for (let i = 0; i < 160; i++) {
+            pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(scaled[i] * limiterScale)));
           }
 
           const uint8 = new Uint8Array(pcm16.buffer);
