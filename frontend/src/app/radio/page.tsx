@@ -553,6 +553,22 @@ export default function RadioPocketMode() {
   const rxInputNodeRef = useRef<AudioNode | null>(null);
   const rxNextTimeRef = useRef<number>(0);
   const rxSuspendedQueueRef = useRef<AudioRxData[]>([]);
+  const rxActiveSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+
+  const stopAllScheduledRxSources = () => {
+    try {
+      const sources = rxActiveSourcesRef.current;
+      rxActiveSourcesRef.current = [];
+      for (const s of sources) {
+        try {
+          s.stop();
+          s.disconnect();
+        } catch {}
+      }
+    } catch {}
+    rxNextTimeRef.current = 0;
+    rxSuspendedQueueRef.current = [];
+  };
   const lastPlayedChunkRef = useRef<string>("");
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
 
@@ -719,6 +735,11 @@ export default function RadioPocketMode() {
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
+      source.onended = () => {
+        rxActiveSourcesRef.current = rxActiveSourcesRef.current.filter((s) => s !== source);
+      };
+      rxActiveSourcesRef.current.push(source);
+
       if (rxInputNodeRef.current) {
         source.connect(rxInputNodeRef.current);
       } else if (rxGainNodeRef.current) {
@@ -742,16 +763,18 @@ export default function RadioPocketMode() {
     // Talkgroup Filter (Physical HT + MMDVM Experience):
     // Un-mute speaker only for the tuned channel talkgroup or Parrot echo (TG 9990),
     // and respect profile talkgroup constraints if defined.
-    if (audioChunk.tg && currentTgRef.current?.id) {
-      if (audioChunk.tg !== currentTgRef.current.id && audioChunk.tg !== 9990) {
+    const incomingTg = Number(audioChunk.tg || 0);
+    const tunedTg = Number(currentTgRef.current?.id || 0);
+    if (tunedTg > 0) {
+      if (incomingTg !== tunedTg && incomingTg !== 9990) {
         return;
       }
       if (
         !activeProfileRef.current?.isMonitorOnly &&
         Array.isArray(activeProfileRef.current?.allowedTalkgroups) &&
         activeProfileRef.current.allowedTalkgroups.length > 0 &&
-        !activeProfileRef.current.allowedTalkgroups.includes(audioChunk.tg) &&
-        audioChunk.tg !== 9990
+        !activeProfileRef.current.allowedTalkgroups.map(Number).includes(incomingTg) &&
+        incomingTg !== 9990
       ) {
         return;
       }

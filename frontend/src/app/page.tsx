@@ -121,6 +121,25 @@ export default function DashboardPage() {
   }, [activeTxList]);
 
   const rxSuspendedQueueRef = useRef<AudioRxData[]>([]);
+  const rxActiveSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const activeAudibleTgRef = useRef<number | null>(null);
+  const lastAudiblePacketTimeRef = useRef<number>(0);
+  const [audibleTg, setAudibleTg] = useState<number | null>(null);
+
+  const stopAllScheduledRxSources = () => {
+    try {
+      const sources = rxActiveSourcesRef.current;
+      rxActiveSourcesRef.current = [];
+      for (const s of sources) {
+        try {
+          s.stop();
+          s.disconnect();
+        } catch {}
+      }
+    } catch {}
+    rxNextTimeRef.current = 0;
+    rxSuspendedQueueRef.current = [];
+  };
 
   const scheduleDashboardRxChunk = (audioChunk: AudioRxData) => {
     try {
@@ -163,6 +182,11 @@ export default function DashboardPage() {
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
+      source.onended = () => {
+        rxActiveSourcesRef.current = rxActiveSourcesRef.current.filter((s) => s !== source);
+      };
+      rxActiveSourcesRef.current.push(source);
+
       if (rxInputNodeRef.current) {
         source.connect(rxInputNodeRef.current);
       } else {
@@ -183,42 +207,48 @@ export default function DashboardPage() {
     }
   };
 
-  const lastAudibleTgRef = useRef<number | null>(null);
-
-  // Real-time Audio Dispatcher (Anti-Collision Priority Gate)
+  // Real-time Audio Dispatcher (Anti-Collision Priority Gate & Dynamic Hangover Lock)
   const playAudioChunk = (audioChunk: AudioRxData) => {
     if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
 
-    let targetAudibleTg: number | null = null;
+    const chunkTg = Number(audioChunk.tg || 0);
+    const now = Date.now();
+
     // 1. If user locked a specific TG (via filter chips below or LOCK TG button), ONLY play that TG!
     if (selectedTgFilterRef.current !== null) {
-      if (audioChunk.tg !== selectedTgFilterRef.current) return;
-      targetAudibleTg = selectedTgFilterRef.current;
+      const lockedTg = Number(selectedTgFilterRef.current);
+      if (chunkTg !== lockedTg) {
+        return; // Strictly reject any audio from other TGs
+      }
+      if (activeAudibleTgRef.current !== lockedTg) {
+        stopAllScheduledRxSources();
+        activeAudibleTgRef.current = lockedTg;
+        setAudibleTg(lockedTg);
+      }
+      lastAudiblePacketTimeRef.current = now;
     } else {
-      // 2. If multiple TGs transmit at the same time and no filter is locked:
-      // Hanya stream paling atas (transmisi pertama yang masuk) yang bersuara agar audio tidak tabrakan!
-      const list = activeTxListRef.current;
-      if (list && list.length > 0) {
-        const topTx = list[0];
-        if (topTx && topTx.talkgroup) {
-          if (audioChunk.tg !== topTx.talkgroup) {
-            return; // Drop secondary/overlapping streams so voice stays clean and audible
-          }
-          targetAudibleTg = topTx.talkgroup;
+      // 2. Multi-TG Anti-Collision Priority Lock (Hangover: 1200ms)
+      // When multiple TGs transmit simultaneously, lock onto the first active TG.
+      // Retain the lock for 1200ms after its last packet to avoid audio interleaving during speech pauses.
+      const isLockActive =
+        activeAudibleTgRef.current !== null &&
+        now - lastAudiblePacketTimeRef.current < 1200;
+
+      if (isLockActive) {
+        if (chunkTg !== activeAudibleTgRef.current) {
+          return; // Drop secondary overlapping TG bursts so voice stays clean and intelligible
         }
+        lastAudiblePacketTimeRef.current = now;
+      } else {
+        // Lock expired or fresh transmission: cleanly switch lock to this incoming TG
+        if (activeAudibleTgRef.current !== null && activeAudibleTgRef.current !== chunkTg) {
+          stopAllScheduledRxSources();
+        }
+        activeAudibleTgRef.current = chunkTg;
+        setAudibleTg(chunkTg);
+        lastAudiblePacketTimeRef.current = now;
       }
     }
-
-    if (targetAudibleTg === null) {
-      targetAudibleTg = audioChunk.tg || 0;
-    }
-
-    // Seamless stream-switch / unkey recovery: If active audio stream changed, cleanly reset jitter buffer
-    if (lastAudibleTgRef.current !== null && lastAudibleTgRef.current !== targetAudibleTg) {
-      rxNextTimeRef.current = 0;
-      rxSuspendedQueueRef.current = [];
-    }
-    lastAudibleTgRef.current = targetAudibleTg;
 
     try {
       ensureAudioUnlocked();
@@ -251,22 +281,32 @@ export default function DashboardPage() {
   const [selectedTgFilter, setSelectedTgFilter] = useState<number | null>(null);
   const selectedTgFilterRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    selectedTgFilterRef.current = selectedTgFilter;
+  const handleSelectTgFilter = (newTg: number | null) => {
+    stopAllScheduledRxSources();
+    selectedTgFilterRef.current = newTg;
+    activeAudibleTgRef.current = newTg;
+    setAudibleTg(newTg);
+    setSelectedTgFilter(newTg);
     if (typeof window !== "undefined") {
-      if (selectedTgFilter !== null) {
-        localStorage.setItem("ninjaradio_dashboard_audio_tg", selectedTgFilter.toString());
+      if (newTg !== null) {
+        localStorage.setItem("ninjaradio_dashboard_audio_tg", newTg.toString());
       } else {
         localStorage.removeItem("ninjaradio_dashboard_audio_tg");
       }
     }
+  };
+
+  useEffect(() => {
+    selectedTgFilterRef.current = selectedTgFilter;
   }, [selectedTgFilter]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       const savedTg = localStorage.getItem("ninjaradio_dashboard_audio_tg");
       if (savedTg && !isNaN(Number(savedTg))) {
-        setSelectedTgFilter(Number(savedTg));
+        const parsed = Number(savedTg);
+        selectedTgFilterRef.current = parsed;
+        setSelectedTgFilter(parsed);
       }
     }
   }, []);
@@ -346,8 +386,8 @@ export default function DashboardPage() {
               const isCardAudible =
                 !isMuted &&
                 (selectedTgFilter !== null
-                  ? selectedTgFilter === tx.talkgroup
-                  : idx === 0);
+                  ? Number(selectedTgFilter) === Number(tx.talkgroup)
+                  : (audibleTg !== null ? Number(audibleTg) === Number(tx.talkgroup) : idx === 0));
 
               return (
               <div
@@ -402,7 +442,7 @@ export default function DashboardPage() {
                             ensureAudioUnlocked();
                             if (!isCardAudible && selectedTgFilter !== tx.talkgroup) {
                               // If this card was on standby, clicking it immediately locks audio to this TG!
-                              setSelectedTgFilter(tx.talkgroup);
+                              handleSelectTgFilter(tx.talkgroup);
                               setIsMuted(false);
                               beepPlayer?.playTalkGrant();
                             } else {
@@ -419,7 +459,7 @@ export default function DashboardPage() {
                           title={
                             isCardAudible
                               ? "Speaker aktif memainkan audio stream ini. Klik untuk Mute."
-                              : "Audio stream ini sedang ditahan karena stream di atas aktif. Klik untuk mendengarkan TG ini!"
+                              : "Audio stream ini sedang ditahan karena stream lain aktif. Klik untuk mendengarkan TG ini!"
                           }
                         >
                           {isMuted ? (
@@ -442,7 +482,7 @@ export default function DashboardPage() {
                           type="button"
                           onClick={() => {
                             const newTg = selectedTgFilter === tx.talkgroup ? null : tx.talkgroup;
-                            setSelectedTgFilter(newTg);
+                            handleSelectTgFilter(newTg);
                             if (newTg) {
                               beepPlayer?.playTalkGrant();
                             } else {
@@ -668,7 +708,7 @@ export default function DashboardPage() {
               Filter TG & Audio:
             </span>
             <button
-              onClick={() => setSelectedTgFilter(null)}
+              onClick={() => handleSelectTgFilter(null)}
               className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition-all ${
                 selectedTgFilter === null
                   ? "bg-cyan-400 text-slate-950 font-black shadow-sm"
@@ -683,7 +723,7 @@ export default function DashboardPage() {
               return (
                 <button
                   key={tg}
-                  onClick={() => setSelectedTgFilter(isSelected ? null : tg)}
+                  onClick={() => handleSelectTgFilter(isSelected ? null : tg)}
                   className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 flex items-center gap-1.5 transition-all ${
                     isSelected
                       ? "bg-cyan-400 text-slate-950 font-black shadow-sm"
@@ -702,7 +742,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedTgFilter(null);
+                  handleSelectTgFilter(null);
                   beepPlayer?.playRogerBeep();
                 }}
                 className="ml-auto text-[11px] text-amber-300 font-bold bg-amber-950/80 hover:bg-rose-950/90 border border-amber-600/80 hover:border-rose-500/80 px-3 py-1 rounded-lg shrink-0 flex items-center gap-1.5 shadow-sm transition-all cursor-pointer group"
@@ -770,7 +810,7 @@ export default function DashboardPage() {
                       <td className="py-2.5 px-3 font-bold text-slate-200">
                         <button
                           type="button"
-                          onClick={() => setSelectedTgFilter(selectedTgFilter === item.talkgroup ? null : item.talkgroup)}
+                          onClick={() => handleSelectTgFilter(selectedTgFilter === item.talkgroup ? null : item.talkgroup)}
                           className={`px-2 py-0.5 rounded border transition-colors cursor-pointer ${
                             selectedTgFilter === item.talkgroup
                               ? "bg-cyan-500 text-slate-950 font-black border-cyan-400"
