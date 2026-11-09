@@ -3216,7 +3216,7 @@ usrpAGC = -20,10,100
                 "dmr_id": p.get("dmr_id") or p.get("dmrId") or self.config.get("server_dmr_id", 5109999),
                 "callsign": p.get("callsign") or self.config.get("server_callsign", "N1NJA"),
                 "state": state,
-                "subscribed_tgs": p.get("subscribedTgs") or p.get("subscribed_tgs", "510"),
+                "subscribed_tgs": p.get("subscribedTgs") or p.get("subscribed_tgs") or "",
                 "packets_rx": packets_rx,
                 "packets_tx": packets_tx,
                 "is_connected": state == "CONNECTED"
