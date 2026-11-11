@@ -73,6 +73,25 @@ def get_db_path() -> Optional[str]:
     return None
 
 
+def resolve_dmr_id(dmr_id: int) -> str:
+    """Finds callsign from Callbook DB given a numeric DMR ID."""
+    if not dmr_id:
+        return ""
+    db_path = get_db_path()
+    if db_path and os.path.exists(db_path):
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT callsign FROM callbook WHERE dmr_id = ?", (dmr_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return str(row[0]).strip().upper()
+        except Exception:
+            pass
+    return f"ID {dmr_id}"
+
+
 def resolve_svxlink_identity(callsign_str: str) -> Tuple[int, str]:
     """
     Extracts DMR ID and Callsign from SvxReflector / EchoLink talker callsign and matches against Callbook DB.
@@ -503,10 +522,10 @@ AUDIO_DEV=udp:127.0.0.1:{self.udp_rx_into_svx}
 AUDIO_CHANNEL=0
 SQL_DET=VOX
 VOX_FILTER_DEPTH=20
-VOX_THRESH=300
+VOX_THRESH=80
 SQL_START_DELAY=0
 SQL_DELAY=0
-SQL_HANGTIME=300
+SQL_HANGTIME=1200
 DEEMPHASIS=0
 PREAMP=0
 PEAK_METER=0
@@ -913,6 +932,7 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
             if len(data) >= 32 and (time.time() - last_svx_tx > 0.45):
                 keyup = struct.unpack(">I", data[12:16])[0]
                 talkgroup = struct.unpack(">I", data[16:20])[0]
+                dmr_id = struct.unpack(">I", data[20:24])[0] if len(data) >= 24 else 0
                 pcm_8k = data[32:]
 
                 # Route DMR RX: prioritize specific bot dedicated to this talkgroup; fallback to Any-TG gateway
@@ -930,15 +950,18 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     # Unkey frame from DMR Core: close squelch immediately
                     for bot in target_bots:
                         bot._set_squelch(False)
+                        bot.current_tx_call = None
                     continue
 
                 last_dmr_tx = time.time()
+                caller_call = resolve_dmr_id(dmr_id) if dmr_id else ""
                 if time.time() - last_rx_log > 2.5 and target_bots:
                     last_rx_log = time.time()
                     bot_names = ", ".join([f"{b.bot_user} ('{b.room_name}')" for b in target_bots])
-                    logger.info(f"[SvxLink-Bridge] 🔊 Routing DMR RX (TG {talkgroup}) -> {bot_names}")
+                    logger.info(f"[SvxLink-Bridge] 🔊 Routing DMR RX (TG {talkgroup} from {caller_call or dmr_id}) -> {bot_names}")
 
                 for bot in target_bots:
+                    bot.current_tx_call = caller_call
                     bot.play_pcm_8k(pcm_8k, tg=talkgroup)
 
         except Exception:
@@ -1032,7 +1055,11 @@ class SvxBridgeApiHandler(BaseHTTPRequestHandler):
                     "tg": bot.tg,
                     "slot": bot.slot,
                     "connected": bot.connected,
-                    "active_talker": bot.active_talker_call,
+                    "active_talker": bot.active_talker_call or (
+                        getattr(bot, "current_tx_call", None)
+                        if (time.time() - getattr(bot, "last_dmr_rx_play", 0) < 1.8) and getattr(bot, "current_tx_call", None)
+                        else None
+                    ),
                     "status": "CONNECTED" if bot.connected else "CONNECTING"
                 }
                 for bot in GATEWAY_POOL.values()
