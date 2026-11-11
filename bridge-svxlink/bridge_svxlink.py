@@ -442,11 +442,15 @@ namespace eval EchoLink {
             with open(f"{local_events_dir}/EchoLink.tcl", "w", encoding="utf-8") as wf:
                 wf.write(echolink_tcl)
 
-        # Build dynamic multi-TG monitoring list so SvxLink immediately hears any configured TG
-        all_tgs = sorted(list(set([self.tg] + list(load_room_mappings().values()))))
-        monitored_tgs_str = ",".join(str(t) for t in all_tgs if t > 0)
-        if not monitored_tgs_str:
-            monitored_tgs_str = f"{self.tg}++"
+        # For dedicated bots (tg > 0), only monitor their own talkgroup to prevent hearing cross-bot reflector traffic
+        # For dynamic Any-TG gateway (tg == 0), monitor all configured talkgroups
+        if self.tg > 0:
+            monitored_tgs_str = f"{self.tg}"
+        else:
+            all_tgs = sorted(list(set([self.tg] + list(load_room_mappings().values()))))
+            monitored_tgs_str = ",".join(str(t) for t in all_tgs if t > 0)
+            if not monitored_tgs_str:
+                monitored_tgs_str = "0"
 
         # Generate svxlink.conf
         # Rx1 receives DMR audio from Python (UDP 16kHz S16_LE).
@@ -909,8 +913,12 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                 talkgroup = struct.unpack(">I", data[16:20])[0]
                 pcm_8k = data[32:]
 
-                # Route to matching bot or single unified Any-TG gateway
-                target_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup or bot.bot_user == "SVX-GATEWAY"]
+                # Route DMR RX: prioritize specific bot dedicated to this talkgroup; fallback to Any-TG gateway
+                dedicated_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
+                if dedicated_bots:
+                    target_bots = dedicated_bots
+                else:
+                    target_bots = [bot for bot in gateway_pool.values() if bot.bot_user == "SVX-GATEWAY" or bot.tg == 0]
                 if not target_bots and gateway_pool:
                     target_bots = list(gateway_pool.values())
                 if not target_bots:
