@@ -208,7 +208,7 @@ def load_room_mappings() -> Dict[str, int]:
                             pass
                 for b in data.get("svxlink_bots", []):
                     ch = b.get("channel")
-                    tg = b.get("tg", 510)
+                    tg = b.get("tg", 0)
                     if ch:
                         try:
                             mappings[ch.strip()] = int(tg)
@@ -379,6 +379,10 @@ namespace eval SimplexLogic {
     proc squelch_open {{rx_id 0} {is_open 0}} {}
     proc activating_link {name} {}
     proc deactivating_link {name} {}
+    proc dtmf_digit_received {digit} {}
+    proc dtmf_cmd_received {cmd} {}
+    proc dtmf_command_received {cmd} {}
+    proc talkgroup_selected {tg} {}
     proc playMsg {section msg} {}
 }
 namespace eval Logic {
@@ -386,6 +390,8 @@ namespace eval Logic {
     proc activating_link {name} {}
     proc deactivating_link {name} {}
     proc send_rgr_sound {} {}
+    proc dtmf_digit_received {digit} {}
+    proc dtmf_cmd_received {cmd} {}
     proc playMsg {section msg} {}
 }
 """
@@ -461,6 +467,7 @@ DEFAULT_LANG=en_US
 RGR_SOUND_DELAY=-1
 MUTE_RX_ON_TX=0
 MUTE_TX_ON_RX=0
+DTMF_DEC_PLAY_TCS=0
 DTMF_CTRL_PTY={self.dtmf_pty_path}
 
 [ReflectorLogic]
@@ -931,8 +938,8 @@ def sync_gateway_bots(usrp_sock: socket.socket):
     for b in configured_bots:
         b_name = re.sub(r"[^A-Za-z0-9\-]", "", str(b.get("name", "")))[:15].upper()
         b_channel = str(b.get("channel", "")).strip()
-        b_tg = int(b.get("tg", 510))
-        b_slot = int(b.get("slot") or (1 if b_tg in [510, 5108, 91, 1023] else 2))
+        b_tg = int(b.get("tg", 0))
+        b_slot = int(b.get("slot") or 2)
         if not b_name or not b_channel:
             continue
         configured_names.add(b_name)

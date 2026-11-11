@@ -118,12 +118,13 @@ export default function SvxLinkPage() {
   const botFormRef = useRef<HTMLDivElement>(null);
   const [newBotName, setNewBotName] = useState("");
   const [newBotRoom, setNewBotRoom] = useState("");
-  const [newBotTg, setNewBotTg] = useState("510");
+  const [newBotTg, setNewBotTg] = useState("");
   const [newBotSlot, setNewBotSlot] = useState("2");
   const [echolinkEnabled, setEcholinkEnabled] = useState(false);
   const [echolinkCallsign, setEcholinkCallsign] = useState("");
   const [echolinkPassword, setEcholinkPassword] = useState("");
   const [savingBot, setSavingBot] = useState(false);
+  const [showBotForm, setShowBotForm] = useState(false);
 
   const fetchAll = async () => {
     try {
@@ -173,27 +174,46 @@ export default function SvxLinkPage() {
     fetchAll();
   };
 
+  const handleOpenAddBot = () => {
+    setEditingBotName(null);
+    setNewBotName("");
+    setNewBotRoom("");
+    setNewBotTg("");
+    setNewBotSlot("2");
+    setEcholinkEnabled(false);
+    setEcholinkCallsign("");
+    setEcholinkPassword("");
+    setShowBotForm(true);
+    setTimeout(() => {
+      botFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  };
+
   const handleEditBot = (bot: SvxBot) => {
     setEditingBotName(bot.name);
     setNewBotName(bot.name);
-    setNewBotRoom(bot.channel);
-    setNewBotTg(bot.tg.toString());
-    setNewBotSlot(bot.slot.toString());
+    setNewBotRoom(bot.channel || bot.name);
+    setNewBotTg(bot.tg !== undefined && bot.tg !== null ? bot.tg.toString() : "");
+    setNewBotSlot((bot.slot || 2).toString());
     setEcholinkEnabled(Boolean(bot.echolink_enabled));
     setEcholinkCallsign(bot.echolink_callsign || "");
     setEcholinkPassword("");
-    botFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setShowBotForm(true);
+    setTimeout(() => {
+      botFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
   };
 
   const handleCancelEdit = () => {
     setEditingBotName(null);
     setNewBotName("");
     setNewBotRoom("");
-    setNewBotTg("510");
+    setNewBotTg("");
     setNewBotSlot("2");
     setEcholinkEnabled(false);
     setEcholinkCallsign("");
     setEcholinkPassword("");
+    setShowBotForm(false);
   };
 
   const handleApplyPreset = (name: string, room: string, tg: number, slot: number) => {
@@ -202,7 +222,10 @@ export default function SvxLinkPage() {
     setNewBotRoom(room);
     setNewBotTg(tg.toString());
     setNewBotSlot(slot.toString());
-    botFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setShowBotForm(true);
+    setTimeout(() => {
+      botFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
   };
 
   const handleAddBot = async (e: React.FormEvent) => {
@@ -217,7 +240,7 @@ export default function SvxLinkPage() {
           original_name: editingBotName,
           name: newBotName.trim().toUpperCase(),
           channel: newBotRoom.trim(),
-          tg: parseInt(newBotTg, 10) || 510,
+          tg: parseInt(newBotTg, 10) || 0,
           slot: parseInt(newBotSlot, 10) || 2,
           echolink_enabled: echolinkEnabled,
           echolink_callsign: echolinkCallsign.trim().toUpperCase(),
@@ -228,11 +251,12 @@ export default function SvxLinkPage() {
         setEditingBotName(null);
         setNewBotName("");
         setNewBotRoom("");
-        setNewBotTg("510");
+        setNewBotTg("");
         setNewBotSlot("2");
         setEcholinkEnabled(false);
         setEcholinkCallsign("");
         setEcholinkPassword("");
+        setShowBotForm(false);
         fetchAll();
       }
     } catch (err) {
@@ -485,30 +509,42 @@ export default function SvxLinkPage() {
                     </div>
                   </div>
 
-                  {/* View Mode Toggle */}
-                  <div className="flex items-center gap-1.5 self-start lg:self-auto bg-slate-950/90 p-1 rounded-xl border border-slate-800 text-xs font-mono">
+                  {/* View Mode & Add Manual Node Controls */}
+                  <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
                     <button
-                      onClick={() => setViewMode("detailed")}
-                      className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all ${
-                        viewMode === "detailed"
-                          ? "bg-cyan-950 text-cyan-300 border border-cyan-700/70 shadow"
-                          : "text-slate-400 hover:text-slate-200"
-                      }`}
+                      type="button"
+                      onClick={handleOpenAddBot}
+                      className="px-3 py-1 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold text-xs font-mono flex items-center gap-1.5 shadow-[0_0_12px_rgba(16,185,129,0.3)] transition-all cursor-pointer"
+                      title="Tambah Node Bot SvxLink Manual"
                     >
-                      <LayoutGrid className="w-3.5 h-3.5" />
-                      Detailed
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Node Manual</span>
                     </button>
-                    <button
-                      onClick={() => setViewMode("compact")}
-                      className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all ${
-                        viewMode === "compact"
-                          ? "bg-cyan-950 text-cyan-300 border border-cyan-700/70 shadow"
-                          : "text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      <ListFilter className="w-3.5 h-3.5" />
-                      Compact
-                    </button>
+
+                    <div className="flex items-center gap-1.5 bg-slate-950/90 p-1 rounded-xl border border-slate-800 text-xs font-mono">
+                      <button
+                        onClick={() => setViewMode("detailed")}
+                        className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          viewMode === "detailed"
+                            ? "bg-cyan-950 text-cyan-300 border border-cyan-700/70 shadow"
+                            : "text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        <LayoutGrid className="w-3.5 h-3.5" />
+                        Detailed
+                      </button>
+                      <button
+                        onClick={() => setViewMode("compact")}
+                        className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          viewMode === "compact"
+                            ? "bg-cyan-950 text-cyan-300 border border-cyan-700/70 shadow"
+                            : "text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        <ListFilter className="w-3.5 h-3.5" />
+                        Compact
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -522,7 +558,7 @@ export default function SvxLinkPage() {
                       <button
                         key={src}
                         onClick={() => setSourceFilter(src)}
-                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                        className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
                           sourceFilter === src
                             ? "bg-cyan-600/20 text-cyan-300 border border-cyan-500/60 shadow-[0_0_10px_rgba(6,182,212,0.2)]"
                             : "bg-slate-900/70 text-slate-400 border border-slate-800 hover:text-slate-200"
@@ -543,7 +579,7 @@ export default function SvxLinkPage() {
                       <button
                         key={t}
                         onClick={() => setTypeFilter(t)}
-                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                        className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
                           typeFilter === t
                             ? "bg-emerald-600/20 text-emerald-300 border border-emerald-500/60 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
                             : "bg-slate-900/70 text-slate-400 border border-slate-800 hover:text-slate-200"
@@ -554,6 +590,143 @@ export default function SvxLinkPage() {
                     ))}
                   </div>
                 </div>
+
+                {/* Add / Edit SvxLink Bot Form */}
+                {(showBotForm || editingBotName) && (
+                  <div
+                    ref={botFormRef}
+                    className={`rounded-2xl border p-5 shadow-2xl space-y-4 transition-all duration-300 ${
+                      editingBotName
+                        ? "bg-[#0b1726] border-cyan-500/70 shadow-[0_0_25px_rgba(6,182,212,0.2)]"
+                        : "bg-[#0b121e] border-emerald-500/50 shadow-[0_0_20px_rgba(16,185,129,0.15)]"
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                      <div className="flex items-center gap-2">
+                        {editingBotName ? (
+                          <Pencil className="w-5 h-5 text-cyan-400 animate-pulse" />
+                        ) : (
+                          <Plus className="w-5 h-5 text-emerald-400" />
+                        )}
+                        <div>
+                          <h2 className="font-heading font-black text-base text-white flex items-center gap-2">
+                            {editingBotName ? (
+                              <>
+                                <span>EDIT NODE BOT SVXLINK:</span>
+                                <span className="text-cyan-400 font-mono underline">{editingBotName}</span>
+                              </>
+                            ) : (
+                              "TAMBAH NODE BOT SVXLINK MANUAL"
+                            )}
+                          </h2>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            {editingBotName
+                              ? "Perbarui konfigurasi bot, nama room/label, mapped Talkgroup, dan slot. Simpan langsung aktif tanpa restart daemon."
+                              : "Tambahkan bot / node SvxLink manual untuk menjembatani Talkgroup SvxReflector secara bi-direksional ke DMR."}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCancelEdit}
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-300 flex items-center gap-1.5 border border-slate-700 self-start sm:self-center transition-colors cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Tutup / Batal</span>
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleAddBot} className="grid grid-cols-1 sm:grid-cols-5 gap-3 text-xs font-mono">
+                      <div>
+                        <label className="text-slate-400 block mb-1 font-bold">Node Callsign / ID</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. SVX-GATEWAY"
+                          value={newBotName}
+                          onChange={(e) => setNewBotName(e.target.value)}
+                          required
+                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1 font-bold">Nama Room / Label</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Direct Any-TG, SVX-BRIDI"
+                          value={newBotRoom}
+                          onChange={(e) => setNewBotRoom(e.target.value)}
+                          required
+                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1 font-bold">Target Talkgroup (TG)</label>
+                        <input
+                          type="number"
+                          placeholder="e.g. 1025"
+                          value={newBotTg}
+                          onChange={(e) => setNewBotTg(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-cyan-400 font-bold focus:border-cyan-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block mb-1 font-bold">DMR TimeSlot</label>
+                        <select
+                          value={newBotSlot}
+                          onChange={(e) => setNewBotSlot(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                        >
+                          <option value="1">Slot 1</option>
+                          <option value="2">Slot 2</option>
+                        </select>
+                      </div>
+                      <div className="flex items-end">
+                        <button
+                          type="submit"
+                          disabled={savingBot}
+                          className={`w-full py-2 px-4 rounded-xl font-bold shadow-lg transition-all disabled:opacity-50 text-white cursor-pointer ${
+                            editingBotName
+                              ? "bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+                              : "bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+                          }`}
+                        >
+                          {savingBot ? "MENYIMPAN..." : editingBotName ? "💾 SIMPAN PERUBAHAN" : "+ SIMPAN & JALANKAN NODE"}
+                        </button>
+                      </div>
+                    </form>
+
+                    {/* Optional EchoLink Toggle */}
+                    <div className="pt-2 border-t border-slate-800/70 flex flex-col sm:flex-row sm:items-center gap-4 text-xs font-mono">
+                      <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={echolinkEnabled}
+                          onChange={(e) => setEcholinkEnabled(e.target.checked)}
+                          className="rounded border-slate-700 bg-slate-900 text-emerald-500"
+                        />
+                        <span>Aktifkan Modul EchoLink pada Bot ini (Opsional)</span>
+                      </label>
+                      {echolinkEnabled && (
+                        <div className="flex flex-wrap items-center gap-2 flex-1">
+                          <input
+                            type="text"
+                            placeholder="EchoLink Callsign (e.g. YB0ABC-L)"
+                            value={echolinkCallsign}
+                            onChange={(e) => setEcholinkCallsign(e.target.value)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-white"
+                          />
+                          <input
+                            type="password"
+                            placeholder="EchoLink Password"
+                            value={echolinkPassword}
+                            onChange={(e) => setEcholinkPassword(e.target.value)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-white"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Node Cards Grid */}
                 <div
@@ -671,20 +844,27 @@ export default function SvxLinkPage() {
                           <div className="flex items-center gap-2">
                             {node.category === "SvxLink" && (() => {
                               const b = bots.find(item => item.name.toUpperCase() === node.callsign.toUpperCase());
-                              if (b) {
-                                return (
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleEditBot(b);
-                                      }}
-                                      className="p-1 rounded bg-slate-800/90 hover:bg-cyan-900/70 text-cyan-400 border border-slate-700 hover:border-cyan-500 transition-colors"
-                                      title={`Edit Bot ${b.name}`}
-                                    >
-                                      <Pencil className="w-3 h-3" />
-                                    </button>
+                              const targetBot: SvxBot = b || {
+                                name: node.callsign,
+                                channel: node.description || node.callsign,
+                                tg: node.tg || 0,
+                                slot: 2,
+                                status: node.connected ? "CONNECTED" : "STANDBY"
+                              };
+                              return (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleEditBot(targetBot);
+                                    }}
+                                    className="p-1 rounded bg-slate-800/90 hover:bg-cyan-900/70 text-cyan-400 border border-slate-700 hover:border-cyan-500 transition-colors cursor-pointer"
+                                    title={`Edit Node Bot ${targetBot.name}`}
+                                  >
+                                    <Pencil className="w-3 h-3" />
+                                  </button>
+                                  {b && (
                                     <button
                                       type="button"
                                       onClick={(e) => {
@@ -693,15 +873,14 @@ export default function SvxLinkPage() {
                                           handleDeleteBot(b.name);
                                         }
                                       }}
-                                      className="p-1 rounded bg-slate-800/90 hover:bg-rose-900/70 text-rose-400 border border-slate-700 hover:border-rose-500 transition-colors"
+                                      className="p-1 rounded bg-slate-800/90 hover:bg-rose-900/70 text-rose-400 border border-slate-700 hover:border-rose-500 transition-colors cursor-pointer"
                                       title={`Hapus Bot ${b.name}`}
                                     >
                                       <Trash2 className="w-3 h-3" />
                                     </button>
-                                  </div>
-                                );
-                              }
-                              return null;
+                                  )}
+                                </div>
+                              );
                             })()}
                             {node.category === "DMR" && (
                               <a
@@ -732,6 +911,119 @@ export default function SvxLinkPage() {
               </div>
             );
           })()}
+
+          {/* Active SvxLink Bot Pool Table */}
+          <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 overflow-hidden shadow-xl">
+            <div className="p-4 sm:p-5 border-b border-cyan-900/30 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bot className="w-5 h-5 text-emerald-400" />
+                <div>
+                  <h2 className="font-heading font-bold text-base sm:text-lg text-white">
+                    SVXLINK MULTI-TG BOT POOL (ACTIVE GATEWAYS)
+                  </h2>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    Daftar node / bot SvxLink yang menjembatani Talkgroup SvxReflector dengan Direct DMR Core.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenAddBot}
+                className="px-3 py-1.5 rounded-xl bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-700/60 font-bold text-xs font-mono flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5 text-cyan-400" />
+                <span>+ Tambah Bot</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs font-mono">
+                <thead>
+                  <tr className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                    <th className="p-3 font-bold">BOT CALLSIGN</th>
+                    <th className="p-3 font-bold">REFLECTOR ROOM</th>
+                    <th className="p-3 font-bold">MAPPED TG (SVX & DMR)</th>
+                    <th className="p-3 font-bold">TIMESLOT</th>
+                    <th className="p-3 font-bold">ACTIVE TALKER</th>
+                    <th className="p-3 font-bold text-center">STATUS</th>
+                    <th className="p-3 font-bold text-right">AKSI</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {bots && bots.length > 0 ? (
+                    bots.map((bot, idx) => (
+                      <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                        <td className="p-3 font-bold text-white flex items-center gap-2">
+                          <Bot className="w-4 h-4 text-emerald-400" />
+                          <span className="text-emerald-300 font-black text-sm">{bot.name}</span>
+                        </td>
+                        <td className="p-3">
+                          <span className="px-2.5 py-1 rounded-lg bg-cyan-950/60 text-cyan-300 border border-cyan-800/70 font-bold inline-flex items-center gap-1.5">
+                            <Layers className="w-3 h-3 text-cyan-400" />
+                            {bot.channel}
+                          </span>
+                        </td>
+                        <td className="p-3 font-bold text-amber-400 text-sm">
+                          {bot.tg ? `TG ${bot.tg}` : "Dynamic (Any-TG)"}
+                        </td>
+                        <td className="p-3 text-slate-300">Slot {bot.slot || 2}</td>
+                        <td className="p-3">
+                          {bot.active_talker ? (
+                            <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 font-bold animate-pulse">
+                              🎙️ {bot.active_talker}
+                            </span>
+                          ) : (
+                            <span className="text-slate-500">STANDBY</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              bot.connected
+                                ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
+                                : "bg-cyan-950 text-cyan-400 border border-cyan-800"
+                            }`}
+                          >
+                            {bot.status || "STATIONED"}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleEditBot(bot)}
+                              className="p-1.5 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-400 border border-cyan-800/60 transition-colors cursor-pointer"
+                              title={`Edit Bot ${bot.name}`}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Hapus bot ${bot.name} dari pool?`)) {
+                                  handleDeleteBot(bot.name);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 text-rose-400 border border-rose-800/60 transition-colors cursor-pointer"
+                              title={`Hapus Bot ${bot.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-500">
+                        Belum ada bot SvxLink manual. Klik &quot;+ Tambah Bot&quot; di atas untuk menambahkan.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
           {/* Unified Any-TG SvxLink Gateway Architecture */}
           <div className="bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 overflow-hidden shadow-xl p-5 space-y-4">
