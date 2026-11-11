@@ -104,6 +104,7 @@ services:
       - SVX_PORT=5300
       - SVX_HTTP_PORT=8080
       - SVX_AUTH_KEY=${SVX_AUTH_KEY:-ninjaradio_svx}
+      - DEFAULT_TALKGROUP=${DEFAULT_TALKGROUP:-1025}
     volumes:
       - ./svxreflector/entrypoint.sh:/app/entrypoint.sh
       - ./svxreflector/svxreflector.conf:/etc/svxlink/svxreflector.conf
@@ -130,6 +131,7 @@ services:
       - DMR_USRP_PORT=${USRP_AUDIO_PORT:-32345}
       - SVX_BRIDGE_RX_PORT=12348
       - SVX_BRIDGE_HTTP_PORT=12349
+      - DEFAULT_TALKGROUP=${DEFAULT_TALKGROUP:-1025}
     depends_on:
       - svxreflector
       - core
