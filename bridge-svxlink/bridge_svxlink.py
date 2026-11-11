@@ -341,29 +341,32 @@ class SvxGatewayBot:
         # Ensure /usr/share/svxlink/sounds/en_US exists so SimplexLogic locale initialization succeeds cleanly
         os.makedirs("/usr/share/svxlink/sounds/en_US/Core", exist_ok=True)
         os.makedirs("/usr/share/svxlink/sounds/en_US/Default", exist_ok=True)
+        os.makedirs("/var/lib/svxlink/pki", exist_ok=True)
+        os.makedirs(f"{self.runtime_dir}/pki", exist_ok=True)
 
         events_tcl_path = "/usr/share/svxlink/events.tcl"
 
         # Write local/ReflectorLogic.tcl to silence all audio announcements, bot voice sounds, and report talker_start/stop
         reflector_local_tcl = """
 namespace eval ReflectorLogic {
-    proc talker_start {tg callsign} {
+    proc talker_start {tg callsign args} {
         puts "NINJA_EVENT:TALKER_START:$tg:$callsign"
         flush stdout
     }
-    proc talker_stop {tg callsign} {
+    proc talker_stop {tg callsign args} {
         puts "NINJA_EVENT:TALKER_STOP:$tg:$callsign"
         flush stdout
     }
-    proc select_tg {new_tg} {
+    proc select_tg {new_tg args} {
         puts "NINJA_EVENT:SELECT_TG:$new_tg"
         flush stdout
     }
-    proc activating_tg {tg} {}
-    proc deactivating_tg {tg} {}
-    proc tg_selected {tg} {}
-    proc qsy_pending {} {}
-    proc playMsg {section msg} {}
+    proc activating_tg {args} {}
+    proc deactivating_tg {args} {}
+    proc tg_selected {args} {}
+    proc talkgroup_selected {args} {}
+    proc qsy_pending {args} {}
+    proc playMsg {args} {}
 }
 """
         with open(f"{local_events_dir}/ReflectorLogic.tcl", "w", encoding="utf-8") as wf:
@@ -372,27 +375,28 @@ namespace eval ReflectorLogic {
         # Write local/SimplexLogic.tcl to disable all local startup/link announcements, CW/Voice IDs, bot voice, and Roger Beeps
         simplex_local_tcl = """
 namespace eval SimplexLogic {
-    proc startup {} {}
-    proc send_short_ident {{hour -1} {minute -1}} {}
-    proc send_long_ident {{hour -1} {minute -1}} {}
-    proc send_rgr_sound {} {}
-    proc squelch_open {{rx_id 0} {is_open 0}} {}
-    proc activating_link {name} {}
-    proc deactivating_link {name} {}
-    proc dtmf_digit_received {digit} {}
-    proc dtmf_cmd_received {cmd} {}
-    proc dtmf_command_received {cmd} {}
-    proc talkgroup_selected {tg} {}
-    proc playMsg {section msg} {}
+    proc startup {args} {}
+    proc send_short_ident {args} {}
+    proc send_long_ident {args} {}
+    proc send_rgr_sound {args} {}
+    proc squelch_open {args} {}
+    proc activating_link {args} {}
+    proc deactivating_link {args} {}
+    proc dtmf_digit_received {args} {}
+    proc dtmf_cmd_received {args} {}
+    proc dtmf_command_received {args} {}
+    proc talkgroup_selected {args} {}
+    proc playMsg {args} {}
+    proc playSilence {args} {}
 }
 namespace eval Logic {
-    proc startup {} {}
-    proc activating_link {name} {}
-    proc deactivating_link {name} {}
-    proc send_rgr_sound {} {}
-    proc dtmf_digit_received {digit} {}
-    proc dtmf_cmd_received {cmd} {}
-    proc playMsg {section msg} {}
+    proc startup {args} {}
+    proc activating_link {args} {}
+    proc deactivating_link {args} {}
+    proc send_rgr_sound {args} {}
+    proc dtmf_digit_received {args} {}
+    proc dtmf_cmd_received {args} {}
+    proc playMsg {args} {}
 }
 """
         with open(f"{local_events_dir}/SimplexLogic.tcl", "w", encoding="utf-8") as wf:
@@ -472,8 +476,8 @@ DTMF_CTRL_PTY={self.dtmf_pty_path}
 
 [ReflectorLogic]
 TYPE=Reflector
-HOST={SVX_HOST}
-PORT={SVX_PORT}
+HOSTS={SVX_HOST}
+HOST_PORT={SVX_PORT}
 CALLSIGN={self.bot_user}
 AUTH_KEY="{SVX_AUTH_KEY}"
 DEFAULT_TG={self.tg}

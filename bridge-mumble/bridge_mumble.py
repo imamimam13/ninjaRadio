@@ -1114,7 +1114,7 @@ class MumbleGatewayBot:
                         while len(self.tx_pcm_buffer) >= 320:
                             chunk = bytes(self.tx_pcm_buffer[:320])
                             self.tx_pcm_buffer = self.tx_pcm_buffer[320:]
-                            nptt_pkt = struct.pack(">4sIIII?16s", b"NPTT", int(user_dmr_id), int(self.tg), int(self.slot), len(chunk), True, call_bytes) + chunk
+                            nptt_pkt = struct.pack(">4sIIII?16s", b"NMUM", int(user_dmr_id), int(self.tg), int(self.slot), len(chunk), True, call_bytes) + chunk
                             self.usrp_sock.sendto(nptt_pkt, (USRP_HOST, 32100))
 
                         last_mumble_tx = time.time()
@@ -1233,7 +1233,7 @@ def ptt_watchdog_loop(usrp_sock):
                 try:
                     target_sock = bot_sock or usrp_sock
                     call_bytes = (callsign or "MUMBLE").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                    unkey_nptt = struct.pack(">4sIIII?16s", b"NPTT", int(dmr_id), int(tg), int(slot), 0, False, call_bytes)
+                    unkey_nptt = struct.pack(">4sIIII?16s", b"NMUM", int(dmr_id), int(tg), int(slot), 0, False, call_bytes)
                     target_sock.sendto(unkey_nptt, (USRP_HOST, 32100))
                     logger.info(f"[MUMBLE-TX] ⏹️ DIRECT DMR RELEASE from {callsign} ({dmr_id}) -> TG {tg} Slot {slot}")
                 except Exception:

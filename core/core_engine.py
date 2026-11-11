@@ -2306,14 +2306,22 @@ usrpAGC = -20,10,100
         while self.running:
             try:
                 data, addr = await loop.sock_recvfrom(self.web_ptt_sock, 4096)
-                if len(data) >= 37 and data[:4] in (b"NPTT", b"NSVX"):
-                    is_svx = data[:4] == b"NSVX"
+                if len(data) >= 37 and data[:4] in (b"NWEB", b"NMUM", b"NSVX", b"NPTT"):
+                    magic = data[:4]
+                    is_svx = (magic == b"NSVX")
+                    is_mumble = (magic == b"NMUM")
+                    is_webrtc = (magic == b"NWEB") or (magic == b"NPTT" and not is_svx and not is_mumble)
                     dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
                     session_key = (dmr_id, tg)
                     now = time.time()
-                    net_label = "SVX / SDR" if is_svx else ("Direct DMR (Mumble)" if addr[0] not in ("127.0.0.1", "localhost") else "Direct DMR (WebRTC)")
+                    if is_svx:
+                        net_label = "SVX / SDR"
+                    elif is_mumble:
+                        net_label = "Direct DMR (Mumble)"
+                    else:
+                        net_label = "Direct DMR (WebRTC)"
                     if is_tx:
                         is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx)
                         if not is_allowed:
@@ -2342,24 +2350,26 @@ usrpAGC = -20,10,100
                                 self.broadcast_to_usrp_clients(build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, fwd_tlv), tg=tg)
                             except Exception:
                                 pass
-                            asyncio.create_task(self.dispatch_event_to_backend({
-                                "network": net_label,
-                                "host": f"{addr[0]}:32100",
-                                "src_id": dmr_id,
-                                "dst_tg": tg,
-                                "slot": slot,
-                                "callsign": callsign,
-                                "is_tx": True,
-                                "is_transmitting": True,
-                                "data_type": 0
-                            }))
+                            # Dispatch to backend for Mumble / SvxLink; WebRTC handles its own TX state
+                            if not is_webrtc:
+                                asyncio.create_task(self.dispatch_event_to_backend({
+                                    "network": net_label,
+                                    "host": f"{addr[0]}:32100",
+                                    "src_id": dmr_id,
+                                    "dst_tg": tg,
+                                    "slot": slot,
+                                    "callsign": callsign,
+                                    "is_tx": True,
+                                    "is_transmitting": True,
+                                    "data_type": 0
+                                }))
                         pkt_count += 1
                         if pkt_count % 100 == 0:
                             logger.info(f"🎙️ [WebPTT-Ingress] Streaming audio from {callsign}: {pkt_count} frames processed")
 
                         # Forward pristine 8kHz PCM directly to DVSwitch Mobile, Mumble, and SvxLink clients
                         if pcm_chunk and len(pcm_chunk) >= 320:
-                            is_from_mumble = (not is_svx) and (addr[0] not in ("127.0.0.1", "localhost"))
+                            is_from_mumble = is_mumble
                             for offset in range(0, len(pcm_chunk), 320):
                                 frame_pcm = pcm_chunk[offset:offset + 320]
                                 if len(frame_pcm) == 320:
