@@ -88,7 +88,7 @@ except Exception as e:
     print(f"Note PKI check: {e}")
 
 users = set([
-    "N1NJA", "BD62BOT", "SVX", "SVXLINK",
+    "N1NJA", "BD62BOT", "SVX", "SVXLINK", "SVX-GATEWAY",
     "SVX-NASIONAL", "SVX-NUSANTARA", "SVX-BRIDI", "SVX-PARROT",
     "SVX-DARURAT", "SVX-WORLDWIDE", "ADMIN", "GUEST", "USER"
 ])
