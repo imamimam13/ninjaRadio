@@ -365,6 +365,7 @@ namespace eval ReflectorLogic {
     proc deactivating_tg {args} {}
     proc tg_selected {args} {}
     proc talkgroup_selected {args} {}
+    proc tg_remote_activation {args} {}
     proc qsy_pending {args} {}
     proc playMsg {args} {}
 }
@@ -702,8 +703,9 @@ PREEMPHASIS=0
                 if raw_talker in internal_bot_names or raw_talker == self.bot_user.upper():
                     continue
 
-                if not raw_talker:
-                    raw_talker = "SVX-LINK"
+                # Only transmit when a real remote callsign is active (do NOT transmit phantom trailing silence/beeps)
+                if not raw_talker or raw_talker in ("SVX", "SVX-LINK", "NONE") or raw_talker.startswith("SVX-"):
+                    continue
 
                 # Check if audio frame is non-zero (ignore zero-fill silence frames)
                 pcm_16k = np.frombuffer(data, dtype=np.int16)

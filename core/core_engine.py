@@ -1603,17 +1603,6 @@ usrpAGC = -20,10,100
                 if now - self.last_audio_tx_time > 4.0:
                     logger.info(f"[PTT-Watchdog] ⏹️ Audio stream stopped (>4.0s without packets). Auto-releasing carrier PTT.")
                     self.stop_carrier_tx()
-                    asyncio.create_task(self.dispatch_event_to_backend({
-                        "network": "DVSwitch Mobile / USRP (32345)",
-                        "host": "auto-watchdog",
-                        "src_id": self.current_tx_dmr_id or 1022057,
-                        "dst_tg": self.current_tx_tg or self.primary_tg or 510,
-                        "slot": self.current_tx_slot or 2,
-                        "callsign": self.current_operator_callsign or "N1NJA",
-                        "is_tx": False,
-                        "is_transmitting": False,
-                        "data_type": 2
-                    }))
 
     async def run_process_watchdog(self):
         """Monitors DVSwitch daemons and restarts them if they terminate unexpectedly."""
