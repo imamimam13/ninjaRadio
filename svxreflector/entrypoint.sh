@@ -93,11 +93,24 @@ users = set([
     "SVX-DARURAT", "SVX-WORLDWIDE", "ADMIN", "GUEST", "USER"
 ])
 
+tg_v1 = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 1)))
+
 # 1. Read config.json
 try:
     if os.path.exists("/app/data/config.json"):
         with open("/app/data/config.json", "r", encoding="utf-8") as f:
             cfg = json.load(f)
+            found_tg = (
+                cfg.get("default_talkgroup")
+                or cfg.get("defaultTg")
+                or cfg.get("tg")
+                or cfg.get("target_tg")
+            )
+            if found_tg:
+                try:
+                    tg_v1 = int(found_tg)
+                except (ValueError, TypeError):
+                    pass
             if cfg.get("server_callsign"):
                 users.add(str(cfg["server_callsign"]).strip().upper())
             if cfg.get("operator_callsign"):
@@ -150,7 +163,7 @@ conf_content = f"""[GLOBAL]
 TIMESTAMP_FORMAT="%Y-%m-%d %H:%M:%S"
 LISTEN_PORT={listen_port}
 HTTP_SRV_PORT={http_port}
-TG_FOR_V1_CLIENTS=510
+TG_FOR_V1_CLIENTS={tg_v1}
 ACCEPT_CALLSIGN=.*
 SQL_TIMEOUT=300
 SQL_TIMEOUT_BLOCKTIME=10

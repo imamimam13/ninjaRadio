@@ -153,7 +153,8 @@ def check_svxlink_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> T
             )
             row = cursor.fetchone()
             if not row:
-                return False, f"Callsign '{call_upper}' belum terdaftar di Callbook Server NinjaRadio"
+                # Default allow for stations authenticated on SvxReflector
+                return True, "Authenticated Node (Auto-Allow)"
 
             if target_tg == 9990:
                 return True, "Echo Test (Callbook Verified)"
@@ -266,12 +267,13 @@ def load_configured_bots() -> List[Dict[str, Any]]:
         except Exception as e:
             logger.debug(f"Error loading svxlink_bots from config: {e}")
 
+    default_tg_val = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 510)))
     # Single Unified Any-TG Gateway
     return [{
         "name": "SVX-GATEWAY",
         "channel": "Direct Any-TG Gateway",
-        "tg": 1025,
-        "slot": 2,
+        "tg": default_tg_val,
+        "slot": 1 if default_tg_val in [510, 5108, 91, 1023] else 2,
         "echolink_enabled": False
     }]
 
@@ -457,8 +459,8 @@ LONG_IDENT_INTERVAL=0
 EVENT_HANDLER={events_tcl_path}
 DEFAULT_LANG=en_US
 RGR_SOUND_DELAY=-1
-MUTE_RX_ON_TX=1
-MUTE_TX_ON_RX=1
+MUTE_RX_ON_TX=0
+MUTE_TX_ON_RX=0
 DTMF_CTRL_PTY={self.dtmf_pty_path}
 
 [ReflectorLogic]
@@ -476,17 +478,19 @@ NODE_INFO_FILE={self.runtime_dir}/node_info.json
 [ReflectorLink]
 CONNECT_LOGICS=SimplexLogic:9:SVX,ReflectorLogic
 DEFAULT_ACTIVE=1
+OPTIONS=DEFAULT_CONNECT,NO_DISCONNECT
 TIMEOUT=0
 
 [Rx1]
 TYPE=Local
 AUDIO_DEV=udp:127.0.0.1:{self.udp_rx_into_svx}
 AUDIO_CHANNEL=0
-SQL_DET=PTY
-PTY_PATH={self.sql_pty_path}
+SQL_DET=VOX
+VOX_FILTER_DEPTH=20
+VOX_THRESH=300
 SQL_START_DELAY=0
 SQL_DELAY=0
-SQL_HANGTIME=40
+SQL_HANGTIME=300
 DEEMPHASIS=0
 PREAMP=0
 PEAK_METER=0
@@ -495,9 +499,7 @@ PEAK_METER=0
 TYPE=Local
 AUDIO_DEV=udp:127.0.0.1:{self.udp_tx_from_svx}
 AUDIO_CHANNEL=0
-PTT_TYPE=PTY
-PTT_PTY={self.ptt_pty_path}
-TIMEOUT=300
+PTT_TYPE=NONE
 TX_DELAY=0
 PREEMPHASIS=0
 {echolink_conf}
@@ -569,9 +571,9 @@ PREEMPHASIS=0
         if os.path.exists(self.dtmf_pty_path):
             try:
                 fd = os.open(self.dtmf_pty_path, os.O_WRONLY | os.O_NONBLOCK)
-                os.write(fd, f"9{tg}#\n".encode("ascii"))
+                os.write(fd, f"91{tg}#\n".encode("ascii"))
                 os.close(fd)
-                logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 9{tg}#)")
+                logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 91{tg}#)")
             except Exception:
                 pass
 
@@ -683,17 +685,14 @@ PREEMPHASIS=0
                 if self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 0.45):
                     continue
 
-                # Strictly require an active external station callsign talking on SvxReflector!
-                # Never transmit when raw_talker is empty (local SimplexLogic tones) or when raw_talker is an internal SVX-* bot.
+                # Only filter out audio originating from our own internal gateway bot
                 raw_talker = (self.active_talker_call or "").strip().upper()
                 internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
-                if (
-                    not raw_talker
-                    or raw_talker == self.bot_user.upper()
-                    or raw_talker in internal_bot_names
-                    or raw_talker.startswith("SVX")
-                ):
+                if raw_talker in internal_bot_names or raw_talker == self.bot_user.upper():
                     continue
+
+                if not raw_talker:
+                    raw_talker = "SVX-LINK"
 
                 # Check if audio frame is non-zero (ignore zero-fill silence frames)
                 pcm_16k = np.frombuffer(data, dtype=np.int16)
