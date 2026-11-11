@@ -193,6 +193,20 @@ services:
       - "8073:8073"
     volumes:
       - openwebrx_data:/var/lib/openwebrx
+    depends_on:
+      - sdr-sim
+    networks:
+      - ninjaradio_net
+
+  # 7. NinjaRadio HF/VHF RF Spectrum & Audio Simulator (rtl_tcp port 1234)
+  sdr-sim:
+    build:
+      context: ./sdr-sim
+      dockerfile: Dockerfile
+    container_name: ninjaradio_sdr_sim
+    restart: unless-stopped
+    ports:
+      - "1234:1234"
     networks:
       - ninjaradio_net
 
