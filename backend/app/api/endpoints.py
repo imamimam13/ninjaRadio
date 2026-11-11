@@ -1848,7 +1848,7 @@ async def create_or_update_bot(payload: dict):
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Bot name and target channel are required")
     try:
-        tg = int(payload.get("tg", 510))
+        tg = int(payload.get("tg", 0))
         slot = int(payload.get("slot", 2))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid TG or slot")
@@ -2675,7 +2675,7 @@ async def create_or_update_svxlink_bot(payload: dict):
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Bot Callsign/Name and target room are required")
     try:
-        tg = int(payload.get("tg", 510))
+        tg = int(payload.get("tg", 0))
         slot = int(payload.get("slot", 2))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid TG or slot")
