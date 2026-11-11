@@ -380,13 +380,7 @@ namespace eval ReflectorLogic {
         puts "NINJA_EVENT:SELECT_TG:$new_tg"
         flush stdout
     }
-    proc activating_tg {args} {}
-    proc deactivating_tg {args} {}
-    proc tg_selected {args} {}
-    proc talkgroup_selected {args} {}
-    proc tg_remote_activation {args} {}
-    proc qsy_pending {args} {}
-    proc playMsg {args} {}
+    proc unknown {args} {}
 }
 """
         with open(f"{local_events_dir}/ReflectorLogic.tcl", "w", encoding="utf-8") as wf:
@@ -600,7 +594,10 @@ PREEMPHASIS=0
 
     def select_talkgroup(self, tg: int):
         """Switches active SvxReflector talkgroup dynamically via DTMF PTY."""
-        if tg <= 0 or tg == getattr(self, "_current_selected_tg", 0):
+        if tg <= 0 or tg == getattr(self, "_current_selected_tg", self.tg):
+            return
+        if self.tg > 0 and tg == self.tg:
+            self._current_selected_tg = tg
             return
         self._current_selected_tg = tg
         if os.path.exists(self.dtmf_pty_path):
@@ -681,7 +678,7 @@ PREEMPHASIS=0
             self.tx_conditioner.reset()
             return
         dmr_id = self.active_talker_dmr_id or 5109999
-        tx_tg = getattr(self, "active_talker_tg", None) or self.tg
+        tx_tg = self.tg if self.tg > 0 else (getattr(self, "active_talker_tg", None) or 510)
         tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
         try:
             call_bytes = call_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
@@ -740,7 +737,7 @@ PREEMPHASIS=0
 
                 # Resolve caller identity (Carry-Over Callsign from SvxReflector / EchoLink)
                 user_dmr_id, user_callsign = resolve_svxlink_identity(raw_talker)
-                tx_tg = getattr(self, "active_talker_tg", None) or self.tg
+                tx_tg = self.tg if self.tg > 0 else (getattr(self, "active_talker_tg", None) or 510)
                 tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
 
                 is_allowed, reason = check_svxlink_tx_permission(user_dmr_id, user_callsign, tx_tg)
