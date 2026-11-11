@@ -825,7 +825,8 @@ PREEMPHASIS=0
                         ev_call = parts[2].strip() if len(parts) > 2 else ""
 
                         if ev_type in ("TALKER_START", "ECHOLINK_START"):
-                            if ev_call and ev_call.upper() != self.bot_user.upper():
+                            internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
+                            if ev_call and ev_call.upper() != self.bot_user.upper() and ev_call.upper() not in internal_bot_names and not ev_call.upper().startswith("SVX-"):
                                 self.active_talker_call = ev_call
                                 try:
                                     parsed_tg = int(ev_tg)
@@ -853,7 +854,8 @@ PREEMPHASIS=0
                             except Exception:
                                 self.active_talker_tg = self.tg
                             t_call = m.group(2).strip()
-                            if t_call.upper() != self.bot_user.upper():
+                            internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
+                            if t_call.upper() != self.bot_user.upper() and t_call.upper() not in internal_bot_names and not t_call.upper().startswith("SVX-"):
                                 self.active_talker_call = t_call
                                 dmr_id, _ = resolve_svxlink_identity(t_call)
                                 self.active_talker_dmr_id = dmr_id
