@@ -93,7 +93,7 @@ users = set([
     "SVX-DARURAT", "SVX-WORLDWIDE", "ADMIN", "GUEST", "USER"
 ])
 
-tg_v1 = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 1)))
+tg_v1 = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 1025)))
 
 # 1. Read config.json
 try:
@@ -101,7 +101,8 @@ try:
         with open("/app/data/config.json", "r", encoding="utf-8") as f:
             cfg = json.load(f)
             found_tg = (
-                cfg.get("default_talkgroup")
+                cfg.get("default_tg")
+                or cfg.get("default_talkgroup")
                 or cfg.get("defaultTg")
                 or cfg.get("tg")
                 or cfg.get("target_tg")

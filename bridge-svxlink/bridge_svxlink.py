@@ -267,7 +267,7 @@ def load_configured_bots() -> List[Dict[str, Any]]:
         except Exception as e:
             logger.debug(f"Error loading svxlink_bots from config: {e}")
 
-    default_tg_val = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 510)))
+    default_tg_val = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 1025)))
     # Single Unified Any-TG Gateway
     return [{
         "name": "SVX-GATEWAY",
