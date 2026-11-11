@@ -1575,6 +1575,9 @@ usrpAGC = -20,10,100
         # 6. Synchronize Native DMR Upstream Peer Clients (e.g., BRIDI)
         asyncio.create_task(self.sync_peer_clients())
 
+        # 7. USRP UDP NAT Keepalive (Keeps external DVSwitch Mobile clients connected without dropped sessions)
+        asyncio.create_task(self.run_usrp_nat_keepalive_loop())
+
     async def restore_configured_workers(self):
         """Restores configured workers after engine boots."""
         await asyncio.sleep(2.0)
@@ -2251,10 +2254,32 @@ usrpAGC = -20,10,100
                     logger.debug(f"usrp_ingress_loop note: {e}")
                     await asyncio.sleep(0.01)
 
+    async def run_usrp_nat_keepalive_loop(self):
+        """Keeps UDP NAT pinholes open for external DVSwitch Mobile clients by sending a tiny USRP keepalive every 20s."""
+        while self.running:
+            try:
+                await asyncio.sleep(20.0)
+                if not self.usrp_ingress_sock or not self.registered_usrp_clients:
+                    continue
+                now = time.time()
+                ping_pkt = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_TEXT, b"PING\x00")
+                for client_addr, last_seen in list(self.registered_usrp_clients.items()):
+                    if client_addr[0] == "127.0.0.1" or (client_addr[0].startswith("172.") and client_addr[0] not in ("172.17.0.1", "172.18.0.1")):
+                        continue
+                    if now - last_seen < 3600:
+                        try:
+                            self.usrp_ingress_sock.sendto(ping_pkt, client_addr)
+                        except Exception:
+                            pass
+            except asyncio.CancelledError:
+                break
+            except Exception as ex:
+                logger.debug(f"USRP keepalive note: {ex}")
+
     def broadcast_to_usrp_clients(self, data: bytes, tg: int = None, exclude_addr: tuple = None):
         now = time.time()
         for client_addr, last_seen in list(self.registered_usrp_clients.items()):
-            if now - last_seen > 120:
+            if now - last_seen > 3600:
                 del self.registered_usrp_clients[client_addr]
                 self.initialized_usrp_clients.pop(client_addr, None)
                 self.dvswitch_client_addrs.discard(client_addr)
