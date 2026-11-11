@@ -268,11 +268,14 @@ def sync_callbook_to_subscriber_csv(default_id: int = 5109999, default_call: str
             pass
 
 
-def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tuple:
+def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int, is_svx: bool = False) -> tuple:
     """
     Validates whether the incoming DMR/USRP operator is allowed to transmit on target_tg.
     Returns (is_allowed: bool, reason: str).
     """
+    if is_svx:
+        return True, "SvxLink Gateway Authenticated"
+
     call_upper = (callsign or "").strip().upper()
     if (
         not call_upper
@@ -2312,7 +2315,7 @@ usrpAGC = -20,10,100
                     now = time.time()
                     net_label = "SVX / SDR" if is_svx else ("Direct DMR (Mumble)" if addr[0] not in ("127.0.0.1", "localhost") else "Direct DMR (WebRTC)")
                     if is_tx:
-                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg)
+                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx)
                         if not is_allowed:
                             if now - getattr(self, "_last_web_fw_alert", 0) > 3.0:
                                 self._last_web_fw_alert = now
