@@ -184,32 +184,6 @@ services:
     networks:
       - ninjaradio_net
 
-  # 6. OpenWebRX WebSDR Multi-Band Receiver (HF/SSB/VHF/UHF Waterfall)
-  openwebrx:
-    image: jketterl/openwebrx:stable
-    container_name: ninjaradio_openwebrx
-    restart: unless-stopped
-    ports:
-      - "8073:8073"
-    volumes:
-      - openwebrx_data:/var/lib/openwebrx
-    depends_on:
-      - sdr-sim
-    networks:
-      - ninjaradio_net
-
-  # 7. NinjaRadio HF/VHF RF Spectrum & Audio Simulator (rtl_tcp port 1234)
-  sdr-sim:
-    build:
-      context: ./sdr-sim
-      dockerfile: Dockerfile
-    container_name: ninjaradio_sdr_sim
-    restart: unless-stopped
-    ports:
-      - "1234:1234"
-    networks:
-      - ninjaradio_net
-
 networks:
   ninjaradio_net:
     driver: bridge
@@ -219,4 +193,3 @@ volumes:
   mumble_data:
   caddy_data:
   caddy_config:
-  openwebrx_data:
