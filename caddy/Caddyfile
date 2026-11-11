@@ -5,6 +5,12 @@
     admin off
 }
 
+# Subdomain for OpenWebRX WebSDR (HF/VHF Waterfall, Audio & Demodulator)
+sdr.{$DOMAIN:localhost} {
+    encode gzip zstd
+    reverse_proxy openwebrx:8073
+}
+
 # {$DOMAIN:localhost} will use the DOMAIN env variable, defaulting to localhost if unset
 {$DOMAIN:localhost} {
     # Compress web traffic

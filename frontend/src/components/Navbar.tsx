@@ -17,7 +17,8 @@ import {
   Unlock, 
   KeyRound, 
   AlertCircle, 
-  X 
+  X,
+  Waves
 } from "lucide-react";
 import { getIsAdminUnlocked, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
 import { beepPlayer } from "@/components/BeepPlayer";
@@ -84,6 +85,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
   const baseNavItems = [
     { href: "/", label: "NOC", icon: Activity, tag: "LIVE" },
     { href: "/radio", label: "RADIO POCKET", icon: Radio, highlight: true, tag: "PWA" },
+    { href: "/sdr", label: "WEB SDR", icon: Waves, tag: "HF/SSB" },
     { href: "/matrix", label: "TG MATRIX", icon: Network },
     { href: "/logbook", label: "QSO LOG", icon: BookOpen },
     { href: "/callbook", label: "CALLBOOK", icon: Users },
@@ -118,6 +120,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
     ? [
         { href: "/", label: "NOC", icon: Activity },
         { href: "/radio", label: "RADIO", icon: Radio },
+        { href: "/sdr", label: "SDR", icon: Waves },
         { href: "/matrix", label: "MATRIX", icon: Network },
         { href: "/serverdmr", label: "DMR", icon: Cpu },
         { href: "/dvswitch", label: "DVS", icon: Terminal },
@@ -127,6 +130,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
     : [
         { href: "/", label: "NOC", icon: Activity },
         { href: "/radio", label: "RADIO", icon: Radio },
+        { href: "/sdr", label: "SDR", icon: Waves },
         { href: "/matrix", label: "MATRIX", icon: Network },
         { href: "/logbook", label: "LOG", icon: BookOpen },
         { href: "/callbook", label: "CALLBOOK", icon: Users },
