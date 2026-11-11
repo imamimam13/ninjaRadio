@@ -235,15 +235,6 @@ def load_room_mappings() -> Dict[str, int]:
         except Exception as e:
             logger.debug(f"Note reading bridge_routes for svxlink: {e}")
 
-    if mappings:
-        return mappings
-
-    mappings = {
-        "SVX-Nasional": 510,
-        "SVX-Nusantara": 5109,
-        "SVX-BRIDI": 1025,
-        "SVX-Parrot": 9990,
-    }
     raw_map = os.getenv("SVXLINK_ROOM_MAP", "")
     if raw_map:
         for item in raw_map.split(","):
@@ -258,16 +249,25 @@ def load_room_mappings() -> Dict[str, int]:
 
 def load_configured_bots() -> List[Dict[str, Any]]:
     """Loads SvxLink bot definitions. Operates as a single unified Any-TG Gateway by default."""
+    default_tg_val = 0
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if "svxlink_bots" in data and isinstance(data["svxlink_bots"], list) and len(data["svxlink_bots"]) > 0:
                     return data["svxlink_bots"]
+                found_tg = data.get("default_tg") or data.get("default_talkgroup") or data.get("tg")
+                if found_tg is not None:
+                    default_tg_val = int(found_tg)
         except Exception as e:
             logger.debug(f"Error loading svxlink_bots from config: {e}")
 
-    default_tg_val = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 1025)))
+    if not default_tg_val:
+        try:
+            default_tg_val = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 0)))
+        except (ValueError, TypeError):
+            default_tg_val = 0
+
     # Single Unified Any-TG Gateway
     return [{
         "name": "SVX-GATEWAY",

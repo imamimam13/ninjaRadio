@@ -93,7 +93,7 @@ users = set([
     "SVX-DARURAT", "SVX-WORLDWIDE", "ADMIN", "GUEST", "USER"
 ])
 
-tg_v1 = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 1025)))
+tg_v1 = 0
 
 # 1. Read config.json
 try:
@@ -121,6 +121,12 @@ try:
                     users.add(str(p["callsign"]).strip().upper())
 except Exception as e:
     print(f"Note reading config.json: {e}")
+
+if not tg_v1:
+    try:
+        tg_v1 = int(os.environ.get("DEFAULT_TALKGROUP", os.environ.get("DEFAULT_TG", 0)))
+    except (ValueError, TypeError):
+        tg_v1 = 0
 
 # 2. Read Callbook SQLite DB (load every registered amateur / operator callsign)
 db_paths = ["/app/data/ninjaradio.db", "/app/ninjaradio.db", "ninjaradio.db"]
