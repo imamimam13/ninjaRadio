@@ -88,10 +88,19 @@ except Exception as e:
     print(f"Note PKI check: {e}")
 
 users = set([
-    "N1NJA", "BD62BOT", "SVX", "SVXLINK", "SVX-GATEWAY",
+    "N1NJA", "BD62BOT", "SVX", "SVXLINK", "SVX-GATEWAY", "SVX-GW-NINJA",
     "SVX-NASIONAL", "SVX-NUSANTARA", "SVX-BRIDI", "SVX-PARROT",
     "SVX-DARURAT", "SVX-WORLDWIDE", "ADMIN", "GUEST", "USER"
 ])
+
+# Dynamically populate broad patterns for custom bot callsigns
+for p1 in ["SVX", "NINJA", "GW", "BOT", "NODE", "RADIO"]:
+    for p2 in ["GW", "NINJA", "BOT", "NODE", "LINK", "REFLECTOR", "GATEWAY", "RADIO"]:
+        for p3 in ["", "-1", "-2", "-3", "-NINJA", "-NASIONAL", "-NUSANTARA", "-BRIDI", "-DARURAT", "-WORLDWIDE", "-LOCAL"]:
+            users.add(f"{p1}-{p2}{p3}")
+            users.add(f"{p1}{p3}")
+            users.add(f"{p1}-{p2}")
+            users.add(f"{p1}-GW-{p2}")
 
 tg_v1 = 0
 
@@ -119,6 +128,9 @@ try:
             for p in cfg.get("peering", []):
                 if p.get("callsign"):
                     users.add(str(p["callsign"]).strip().upper())
+            for b in cfg.get("svxlink_bots", []):
+                if b.get("name"):
+                    users.add(str(b["name"]).strip().upper())
 except Exception as e:
     print(f"Note reading config.json: {e}")
 
