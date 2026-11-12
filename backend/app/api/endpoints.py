@@ -2873,9 +2873,11 @@ async def get_zello_config():
     return {
         "status": "SUCCESS",
         "enabled": z_cfg.get("enabled", True),
-        "channel": z_cfg.get("channel", "NINJARADIOZL"),
-        "issuer": z_cfg.get("issuer", "WkM6R0FURVdBWS1OSU5KQTox.B9gxcZLgOZUmcY0g4HXmHGZsCvPNby0e6GWnsj04GuY"),
-        "target_tg": z_cfg.get("target_tg", 510),
+        "channel": z_cfg.get("channel", ""),
+        "username": z_cfg.get("username", ""),
+        "has_password": bool(z_cfg.get("password")),
+        "issuer": z_cfg.get("issuer", ""),
+        "target_tg": z_cfg.get("target_tg", 0),
         "slot": z_cfg.get("slot", 2),
         "bot_callsign": z_cfg.get("bot_callsign", "NINJA-ZELLO"),
         "has_key": has_key,
@@ -2895,6 +2897,10 @@ async def save_zello_config(data: dict):
         z_cfg["enabled"] = bool(data["enabled"])
     if "channel" in data and data["channel"]:
         z_cfg["channel"] = str(data["channel"]).strip()
+    if "username" in data:
+        z_cfg["username"] = str(data["username"]).strip()
+    if "password" in data and data["password"]:
+        z_cfg["password"] = str(data["password"])
     if "issuer" in data and data["issuer"]:
         z_cfg["issuer"] = str(data["issuer"]).strip()
     if "target_tg" in data:

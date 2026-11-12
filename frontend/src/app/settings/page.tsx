@@ -61,9 +61,11 @@ export default function SettingsPage() {
 
   // Zello Channel Bridge State
   const [zelloEnabled, setZelloEnabled] = useState(true);
-  const [zelloChannel, setZelloChannel] = useState("NINJARADIOZL");
-  const [zelloIssuer, setZelloIssuer] = useState("WkM6R0FURVdBWS1OSU5KQTox.B9gxcZLgOZUmcY0g4HXmHGZsCvPNby0e6GWnsj04GuY");
-  const [zelloTargetTg, setZelloTargetTg] = useState<number | string>(510);
+  const [zelloChannel, setZelloChannel] = useState("");
+  const [zelloUsername, setZelloUsername] = useState("");
+  const [zelloPassword, setZelloPassword] = useState("");
+  const [zelloIssuer, setZelloIssuer] = useState("");
+  const [zelloTargetTg, setZelloTargetTg] = useState<number | string>("");
   const [zelloSlot, setZelloSlot] = useState(2);
   const [zelloBotCallsign, setZelloBotCallsign] = useState("NINJA-ZELLO");
   const [zelloPrivateKey, setZelloPrivateKey] = useState("");
@@ -80,6 +82,7 @@ export default function SettingsPage() {
       if (res.ok) {
         const data = await res.json();
         if (data.channel) setZelloChannel(data.channel);
+        if (data.username) setZelloUsername(data.username);
         if (data.issuer) setZelloIssuer(data.issuer);
         if (data.target_tg !== undefined) setZelloTargetTg(data.target_tg);
         if (data.slot !== undefined) setZelloSlot(data.slot);
@@ -88,6 +91,10 @@ export default function SettingsPage() {
         setZelloHasKey(!!data.has_key);
       }
     } catch {}
+    await fetchZelloLiveState();
+  };
+
+  const fetchZelloLiveState = async () => {
     try {
       const resStatus = await fetch("/api/zello/status");
       if (resStatus.ok) {
@@ -116,10 +123,12 @@ export default function SettingsPage() {
       const payload: any = {
         enabled: zelloEnabled,
         channel: zelloChannel,
+        username: zelloUsername.trim(),
+        password: zelloPassword,
         issuer: zelloIssuer,
-        target_tg: zelloTargetTg,
+        target_tg: Number(zelloTargetTg) || 1025,
         slot: zelloSlot,
-        bot_callsign: zelloBotCallsign
+        bot_callsign: (zelloBotCallsign || "NINJA-ZELLO").toUpperCase().trim()
       };
       if (zelloPrivateKey.trim()) {
         payload.private_key = zelloPrivateKey.trim();
@@ -268,16 +277,19 @@ export default function SettingsPage() {
     window.addEventListener(ADMIN_AUTH_EVENT, handleAuth);
     window.addEventListener("storage", handleAuth);
 
-    const checkAndLoad = () => {
-      if (getIsAdminUnlocked()) {
-        loadSystemConfig();
-        fetchMumbleBots();
-        fetchZelloConfig();
-      }
-    };
+    // Initial load on mount
+    if (getIsAdminUnlocked()) {
+      loadSystemConfig();
+      fetchMumbleBots();
+      fetchZelloConfig();
+    }
 
-    checkAndLoad();
-    const interval = setInterval(checkAndLoad, 5000);
+    // Only poll lightweight status/logs periodically without overwriting user form inputs
+    const interval = setInterval(() => {
+      if (getIsAdminUnlocked()) {
+        fetchZelloLiveState();
+      }
+    }, 5000);
 
     return () => {
       clearInterval(interval);
@@ -2020,11 +2032,37 @@ export default function SettingsPage() {
                     <input
                       type="text"
                       value={zelloBotCallsign}
-                      onChange={(e) => setZelloBotCallsign(e.target.value.toUpperCase())}
+                      onChange={(e) => setZelloBotCallsign(e.target.value)}
                       placeholder="e.g. NINJA-ZELLO"
-                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300 uppercase"
                     />
                     <p className="text-[11px] text-slate-500 mt-1">Identitas yang dipancarkan ke DMR/SvxLink saat transmisi.</p>
+                  </div>
+
+                  {/* Zello Username */}
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Zello Account Username</label>
+                    <input
+                      type="text"
+                      value={zelloUsername}
+                      onChange={(e) => setZelloUsername(e.target.value.trim())}
+                      placeholder="e.g. ninjaradio_gateway"
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Username akun terdaftar di aplikasi Zello (wajib agar lolos dari Error 3002).</p>
+                  </div>
+
+                  {/* Zello Password */}
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Zello Account Password</label>
+                    <input
+                      type="password"
+                      value={zelloPassword}
+                      onChange={(e) => setZelloPassword(e.target.value)}
+                      placeholder="Password akun Zello (opsional jika token JWT)"
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Password akun Zello jika channel memerlukan otentikasi login.</p>
                   </div>
 
                   {/* Timeslot */}

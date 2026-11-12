@@ -71,11 +71,13 @@ def record_log(msg: str):
 class ZelloBridgeState:
     def __init__(self):
         self.enabled = True
-        self.channel = "NINJARADIOZL"
-        self.issuer = "WkM6R0FURVdBWS1OSU5KQTox.B9gxcZLgOZUmcY0g4HXmHGZsCvPNby0e6GWnsj04GuY"
-        self.target_tg = 510
+        self.channel = ""
+        self.username = ""
+        self.password = ""
+        self.issuer = ""
+        self.target_tg = 0
         self.slot = 2
-        self.bot_callsign = "NINJA-ZELLO"
+        self.bot_callsign = ""
         self.has_key = False
         self.private_key_obj = None
         self.ws_connected = False
@@ -119,8 +121,10 @@ def load_bridge_config():
                 if isinstance(z, dict):
                     bridge_state.enabled = bool(z.get("enabled", True))
                     bridge_state.channel = str(z.get("channel", "NINJARADIOZL")).strip()
+                    bridge_state.username = str(z.get("username", "")).strip()
+                    bridge_state.password = str(z.get("password", "")).strip()
                     bridge_state.issuer = str(z.get("issuer", bridge_state.issuer)).strip()
-                    bridge_state.target_tg = int(z.get("target_tg", 510))
+                    bridge_state.target_tg = int(z.get("target_tg", 1025))
                     bridge_state.slot = int(z.get("slot", 2))
                     bridge_state.bot_callsign = str(z.get("bot_callsign", "NINJA-ZELLO")).strip().upper()
                 break
@@ -262,6 +266,10 @@ async def zello_websocket_worker():
                     "auth_token": jwt_token,
                     "channel": bridge_state.channel
                 }
+                if bridge_state.username:
+                    logon_msg["username"] = bridge_state.username
+                if bridge_state.password:
+                    logon_msg["password"] = bridge_state.password
                 bridge_state.seq_counter += 1
                 await ws.send(json.dumps(logon_msg))
 
