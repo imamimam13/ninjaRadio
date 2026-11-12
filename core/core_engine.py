@@ -2109,8 +2109,12 @@ usrpAGC = -20,10,100
                             self.tx_identity_sent = False
                             self.active_tx_client_addr = None
                             self.current_tx_tg = 0
-                            if self.direct_dmr:
-                                self.direct_dmr.push_web_ptt_pcm(active_call, active_id, active_tg, active_slot, b"", is_tx=False)
+                            call_b_unkey = (active_call or "DVSWITCH").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
+                            unkey_nptt = struct.pack(">4sIIII?16s", b"NSVX", active_id, active_tg, active_slot, 0, False, call_b_unkey)
+                            try:
+                                self.bridge_sock.sendto(unkey_nptt, ("127.0.0.1", WEB_PTT_PORT))
+                            except Exception:
+                                pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
                                 "host": f"{addr[0]}:{addr[1]}",
@@ -2221,10 +2225,6 @@ usrpAGC = -20,10,100
                         chunk_pcm = payload[:320]
                         std_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, chunk_pcm)
 
-                        # Encode directly to DMRD via DirectDmrEngine (Multi-TG C++ Vocoder)
-                        if self.direct_dmr:
-                            self.direct_dmr.push_web_ptt_pcm(target_call, target_dmr_id, target_tg, target_slot, chunk_pcm, is_tx=True)
-
                         # Forward audio burst to other external DVSwitch Mobile clients tuned to target_tg
                         try:
                             self.broadcast_to_usrp_clients(std_pkt, tg=target_tg, exclude_addr=addr)
@@ -2246,6 +2246,14 @@ usrpAGC = -20,10,100
                             pass
                         try:
                             self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                        except Exception:
+                            pass
+
+                        # Inject into proven rock-solid SvxLink gateway pipeline (b"NSVX") on port 32100 (Zero carrier collisions)
+                        call_b = (target_call or "DVSWITCH").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
+                        nptt_pkt = struct.pack(">4sIIII?16s", b"NSVX", target_dmr_id, target_tg, target_slot, len(chunk_pcm), True, call_b) + chunk_pcm
+                        try:
+                            self.bridge_sock.sendto(nptt_pkt, ("127.0.0.1", WEB_PTT_PORT))
                         except Exception:
                             pass
 
