@@ -167,6 +167,40 @@
                 android:background="@drawable/btn_dpad" />
         </LinearLayout>
 
+        <!-- Noise Cancelling DSP & Auto-Connect Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="23dp"
+            android:orientation="horizontal"
+            android:layout_marginBottom="2dp">
+
+            <Button
+                android:id="@+id/btnToggleNc"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1.15"
+                android:text="NC+DSP: ON"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_green"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginEnd="2dp" />
+
+            <Button
+                android:id="@+id/btnToggleAutoConn"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="AUTO-CONN: ON"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/ninja_green"
+                android:background="@drawable/btn_dpad"
+                android:layout_marginStart="2dp" />
+        </LinearLayout>
+
         <!-- HT Headset Jack & VOX Auto-TX Row -->
         <LinearLayout
             android:layout_width="match_parent"

@@ -106,7 +106,22 @@
                 android:paddingStart="6dp"
                 android:layout_marginBottom="1.5dp" />
 
-            <!-- 5. More Android Apps -->
+            <!-- 5. Android System Settings (Wi-Fi, Bluetooth, PoC Settings) -->
+            <Button
+                android:id="@+id/btnAppSettings"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:text="⚙ PENGATURAN POC (WIFI &amp; BLUETOOTH)"
+                android:textColor="@color/ninja_amber"
+                android:textSize="10sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:background="@drawable/btn_dpad"
+                android:gravity="center_vertical|start"
+                android:paddingStart="6dp"
+                android:layout_marginBottom="1.5dp" />
+
+            <!-- 6. More Android Apps -->
             <Button
                 android:id="@+id/btnAppMoreApp"
                 android:layout_width="match_parent"

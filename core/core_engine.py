@@ -2096,7 +2096,7 @@ usrpAGC = -20,10,100
                     if key_flag == 0:
                         default_fallback_tg = int(self.primary_tg or self.config.get("default_tg", 510))
                         default_server_id = int(self.config.get("server_dmr_id", 5109999))
-                        if self.is_transmitting or self.tx_identity_sent:
+                        if (self.is_transmitting or self.tx_identity_sent) and (self.active_tx_client_addr is None or self.active_tx_client_addr == addr):
                             client_meta_unkey = self.client_metadata.get(addr, {})
                             active_tg = self.current_tx_tg or tg or client_meta_unkey.get("tg") or default_fallback_tg
                             active_slot = self.current_tx_slot or slot or client_meta_unkey.get("slot") or 2

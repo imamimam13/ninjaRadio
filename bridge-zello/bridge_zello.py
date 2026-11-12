@@ -119,7 +119,7 @@ class OpusDecoderWrapper:
         out_buf = (ctypes.c_int16 * (max_frame_size * self.channels))()
         ret = _opus_lib.opus_decode(self.dec, data, len(data), out_buf, max_frame_size, 0)
         if ret > 0:
-            return bytes(out_buf[:ret * self.channels])
+            return ctypes.string_at(ctypes.addressof(out_buf), ret * self.channels * 2)
         return b""
 
     def __del__(self):
