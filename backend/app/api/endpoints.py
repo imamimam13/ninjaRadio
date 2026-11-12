@@ -2880,6 +2880,7 @@ async def get_zello_config():
         "target_tg": z_cfg.get("target_tg", 0),
         "slot": z_cfg.get("slot", 2),
         "bot_callsign": z_cfg.get("bot_callsign", "NINJA-ZELLO"),
+        "dev_token": z_cfg.get("dev_token", ""),
         "has_key": has_key,
         "key_path": key_file if has_key else None
     }
@@ -2901,6 +2902,8 @@ async def save_zello_config(data: dict):
         z_cfg["username"] = str(data["username"]).strip()
     if "password" in data and data["password"]:
         z_cfg["password"] = str(data["password"])
+    if "dev_token" in data:
+        z_cfg["dev_token"] = str(data["dev_token"]).strip()
     if "issuer" in data and data["issuer"]:
         z_cfg["issuer"] = str(data["issuer"]).strip()
     if "target_tg" in data:
