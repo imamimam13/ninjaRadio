@@ -209,7 +209,7 @@ export default function DashboardPage() {
 
   // Real-time Audio Dispatcher (Anti-Collision Priority Gate & Dynamic Hangover Lock)
   const playAudioChunk = (audioChunk: AudioRxData) => {
-    if (!audioChunk || !audioChunk.pcm || isMutedRef.current || (activeTxRef.current as any)?.is_tx) return;
+    if (!audioChunk || !audioChunk.pcm || isMutedRef.current) return;
 
     const chunkTg = Number(audioChunk.tg || 0);
     const now = Date.now();

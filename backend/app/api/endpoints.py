@@ -1163,9 +1163,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
             tx_data["last_broadcast"] = now
             await manager.update_stream(stream_key, tx_data)
 
-        # Broadcast live audio chunk to web clients if payload present and NOT outgoing TX
+        # Broadcast live audio chunk to web clients if payload present
         payload_b64 = event.get("payload_b64")
-        if payload_b64 and not is_tx:
+        if payload_b64:
             try:
                 import base64
                 raw_payload = base64.b64decode(payload_b64)

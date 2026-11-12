@@ -524,8 +524,9 @@ async def zello_websocket_worker():
                                     bridge_state.active_stream_id = None
                                     
                                     # Send unkey frame to DirectDmrEngine (port 32100)
-                                    call_b = (bridge_state.bot_callsign or "ZELLO").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                                    unkey_nptt = struct.pack(">4sIIII?16s", b"NPTT", 1022057, int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
+                                    call_str = f"ZL:{bridge_state.active_speaker[:12]}" if bridge_state.active_speaker else (bridge_state.bot_callsign or "ZELLO")
+                                    call_b = call_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                    unkey_nptt = struct.pack(">4sIIII?16s", b"NZEL", 1022057, int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
                                     try:
                                         udp_tx_sock.sendto(unkey_nptt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
                                     except Exception:
@@ -555,13 +556,14 @@ async def zello_websocket_worker():
                                     zello_rx_pcm_buffer.extend(pcm_8k)
 
                                     # Buffer into 320-byte (20ms) frames and transmit directly to DirectDmrEngine
-                                    call_b = (bridge_state.active_speaker or bridge_state.bot_callsign or "ZELLO").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                    call_str = f"ZL:{bridge_state.active_speaker[:12]}" if bridge_state.active_speaker else (bridge_state.bot_callsign or "ZELLO")
+                                    call_b = call_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                                     while len(zello_rx_pcm_buffer) >= 320:
                                         chunk = bytes(zello_rx_pcm_buffer[:320])
                                         del zello_rx_pcm_buffer[:320]
                                         nptt_pkt = struct.pack(
                                             ">4sIIII?16s",
-                                            b"NPTT",
+                                            b"NZEL",
                                             1022057,
                                             int(bridge_state.target_tg),
                                             int(bridge_state.slot),
