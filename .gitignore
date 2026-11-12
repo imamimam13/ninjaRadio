@@ -48,6 +48,11 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+*.key
+*.pem
+*.crt
+credentials/
+zello/
 
 # Scratch and analysis scripts
 scratch/
