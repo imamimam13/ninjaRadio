@@ -687,6 +687,10 @@ LPF_3200HZ_A = [1.0, 1.142977284, 0.412797620]
 LPF_2350HZ_B = [0.378279113, 0.756558225, 0.378279113]
 LPF_2350HZ_A = [1.0, 0.323035979, 0.190080472]
 
+# 2000Hz Peaking Notch filter (fs=8000Hz, Q=1.4, -3.5dB) - removes piercing nasal formant screech
+NOTCH_2000HZ_B = [0.899164008, 0.0, 0.492760353]
+NOTCH_2000HZ_A = [1.0, 0.0, 0.391924361]
+
 class DeemphasisFilter:
     """Standard communications 350-400us De-emphasis filter: strips harsh sibilance ('tsshh'/'kssh') and vocoder screech."""
     def __init__(self, alpha: float = 0.82):
@@ -978,17 +982,18 @@ class DirectDmrEngine:
             self._rx_filters[stream_key] = (
                 BiquadFilter(HPF_300HZ_B, HPF_300HZ_A),
                 BiquadFilter(LPF_2350HZ_B, LPF_2350HZ_A),
+                BiquadFilter(NOTCH_2000HZ_B, NOTCH_2000HZ_A),
                 DeemphasisFilter(alpha=0.82)
             )
-        hpf, lpf, deemph = self._rx_filters[stream_key]
+        hpf, lpf, notch, deemph = self._rx_filters[stream_key]
 
         import math
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
         processed = []
         for s in samples:
-            # 1. High-pass (300Hz), Low-pass (2350Hz), and De-emphasis (alpha=0.82)
-            # Post-gain 2.3x restores warm, rich, broadcast-grade speech after de-emphasis
-            f_val = deemph.process(lpf.process(hpf.process(float(s)))) * 2.3
+            # 1. High-pass (300Hz), Low-pass (2350Hz), Notch (2000Hz), and De-emphasis (alpha=0.82)
+            # Post-gain 2.35x restores warm, rich, broadcast-grade speech after de-emphasis
+            f_val = deemph.process(notch.process(lpf.process(hpf.process(float(s))))) * 2.35
             # 2. Transparent soft-knee limiter to prevent clipping on loud voice peaks
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)

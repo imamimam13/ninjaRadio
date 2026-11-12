@@ -2185,8 +2185,8 @@ usrpAGC = -20,10,100
                             target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
                             target_slot = hdr_slot
 
-                        # Server-Side TX Firewall check
-                        is_allowed, reason = check_core_tx_permission(target_dmr_id, target_call, target_tg)
+                        # Server-Side TX Firewall check (DVSwitch Mobile users connecting to authenticated USRP port are authorized)
+                        is_allowed, reason = check_core_tx_permission(target_dmr_id, target_call, target_tg, is_gateway=True)
                         if not is_allowed:
                             if now - getattr(self, "_last_fw_alert_time", 0) > 3.0:
                                 self._last_fw_alert_time = now
@@ -2349,7 +2349,7 @@ usrpAGC = -20,10,100
                     else:
                         net_label = "Direct DMR (WebRTC)"
                     if is_tx:
-                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx, is_gateway=(is_svx or is_mumble or is_zello))
+                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx, is_gateway=(is_svx or is_mumble or is_zello or is_webrtc))
                         if not is_allowed:
                             if now - getattr(self, "_last_web_fw_alert", 0) > 3.0:
                                 self._last_web_fw_alert = now
@@ -2925,13 +2925,12 @@ usrpAGC = -20,10,100
                                     break
 
             # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, and DVSwitch Mobile
-            # Only decode if packet did not originate from local USRP MMDVM_Bridge (which dispatches PCM via USRP 32001)
-            # and is not our own active local Web TX (self-echo suppression)
+            # Process voice bursts for both remote and local MMDVM hotspot stations with smooth audio filter chain
             decoded_pcm = b""
             data_type = traffic.get("data_type", 1)
             slot = traffic.get("slot", 2)
             stream_id = traffic.get("stream_id", 0)
-            if not is_local_origin and data_type == 1 and traffic.get("payload") and self.direct_dmr:
+            if data_type == 1 and traffic.get("payload") and self.direct_dmr:
                 try:
                     decoded_pcm = self.direct_dmr.decode_dmr_burst(traffic["payload"][:33], tg=dst_tg, slot=slot, stream_id=stream_id)
                 except Exception:
