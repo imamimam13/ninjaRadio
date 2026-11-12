@@ -263,16 +263,20 @@ class OpusDecoderWrapper:
         if _opus_lib:
             err = ctypes.c_int()
             self.dec = _opus_lib.opus_decoder_create(sample_rate, channels, ctypes.byref(err))
+            if err.value != 0:
+                logger.warning(f"[Opus] opus_decoder_create failed with error: {err.value}")
         self.sample_rate = sample_rate
         self.channels = channels
 
-    def decode(self, data: bytes, max_frame_size=1920) -> bytes:
+    def decode(self, data: bytes, max_frame_size=5760) -> bytes:
         if not self.dec or not data:
             return b""
         out_buf = (ctypes.c_int16 * (max_frame_size * self.channels))()
         ret = _opus_lib.opus_decode(self.dec, data, len(data), out_buf, max_frame_size, 0)
         if ret > 0:
             return ctypes.string_at(ctypes.addressof(out_buf), ret * self.channels * 2)
+        elif ret < 0:
+            logger.debug(f"[Opus] decode error code: {ret} (len={len(data)})")
         return b""
 
     def __del__(self):
@@ -334,6 +338,8 @@ class ZelloBridgeState:
         self.active_speaker_call = None
         self.active_speaker_allowed = False
         self.active_stream_id = None
+        self.rx_packet_count = 0
+        self.current_stream_sample_rate = 16000
         self.last_tx_time = 0.0
         self.last_rx_time = 0.0
         self.tx_sequence = 0
@@ -695,7 +701,25 @@ async def zello_websocket_worker():
                                     bridge_state.active_speaker = speaker_label
                                     bridge_state.active_stream_id = stream_id
                                     bridge_state.last_rx_time = time.time()
+                                    bridge_state.rx_packet_count = 0
                                     zello_rx_pcm_buffer.clear()
+
+                                    # Parse codec_header to detect exact audio sample rate from Zello
+                                    codec_hdr_b64 = data.get("codec_header")
+                                    stream_sr = 16000
+                                    if codec_hdr_b64:
+                                        try:
+                                            hdr_b = base64.b64decode(codec_hdr_b64)
+                                            if len(hdr_b) >= 2:
+                                                detected_sr = struct.unpack("<H", hdr_b[:2])[0]
+                                                if detected_sr in (8000, 12000, 16000, 24000, 48000):
+                                                    stream_sr = detected_sr
+                                        except Exception as e:
+                                            logger.debug(f"Error parsing codec_header: {e}")
+
+                                    bridge_state.current_stream_sample_rate = stream_sr
+                                    if not opus_decoder or opus_decoder.sample_rate != stream_sr:
+                                        opus_decoder = OpusDecoderWrapper(stream_sr, 1)
 
                                     # Strict TX Firewall: Must exist in Callbook DB to transmit to DMR/Repeaters
                                     if not user_dmr_id or not user_callsign:
@@ -738,12 +762,12 @@ async def zello_websocket_worker():
                                             bridge_state.active_speaker_allowed = True
                                             bridge_state.active_speaker_id = user_dmr_id
                                             bridge_state.active_speaker_call = user_callsign
-                                            record_log(f"✓ [ZELLO-FIREWALL] Authorized Zello TX: '{speaker_label}' as {user_callsign} ({user_dmr_id}) -> TG {bridge_state.target_tg} (Slot {bridge_state.slot})")
+                                            record_log(f"✓ [ZELLO-FIREWALL] Authorized Zello TX: '{speaker_label}' as {user_callsign} ({user_dmr_id}) -> TG {bridge_state.target_tg} (Slot {bridge_state.slot}, Opus {stream_sr}Hz)")
 
                                 # Remote speaker stopped talking on Zello
                                 elif cmd == "on_stream_stop":
                                     stream_id = data.get("stream_id")
-                                    record_log(f"Zello RX Ended for stream {stream_id}")
+                                    record_log(f"Zello RX Ended for stream {stream_id} (Total {bridge_state.rx_packet_count} audio packets)")
                                     
                                     # Send unkey frame to DirectDmrEngine only if session was authorized
                                     if getattr(bridge_state, "active_speaker_allowed", False) and bridge_state.active_speaker_id:
@@ -760,6 +784,7 @@ async def zello_websocket_worker():
                                     bridge_state.active_speaker_id = 0
                                     bridge_state.active_speaker_call = None
                                     bridge_state.active_stream_id = None
+                                    bridge_state.rx_packet_count = 0
                                     zello_rx_pcm_buffer.clear()
 
                                 elif data.get("success") is False:
@@ -781,14 +806,39 @@ async def zello_websocket_worker():
 
                                 opus_payload = msg[9:]
                                 
-                                # Decode Opus to 16kHz PCM (supports 20ms, 40ms, 60ms frames from Zello)
-                                pcm_16k = opus_decoder.decode(opus_payload, max_frame_size=1920)
-                                if pcm_16k:
-                                    # Downsample 16kHz PCM to 8kHz PCM using 2:1 averaging (anti-aliasing)
-                                    pcm_16k_arr = np.frombuffer(pcm_16k, dtype=np.int16).astype(np.float32)
-                                    pcm_8k_arr = 0.5 * (pcm_16k_arr[0::2] + pcm_16k_arr[1::2])
-                                    pcm_8k = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
+                                # Decode Opus to PCM (max_frame_size 5760 to support 120ms @ 48kHz without buffer overflow)
+                                pcm_raw = opus_decoder.decode(opus_payload, max_frame_size=5760)
+                                if pcm_raw:
+                                    bridge_state.rx_packet_count += 1
+                                    pcm_arr = np.frombuffer(pcm_raw, dtype=np.int16).astype(np.float32)
+                                    in_sr = getattr(bridge_state, "current_stream_sample_rate", 16000)
+
+                                    # Universal Resampling to 8000 Hz for DMR / Mumble / SvxLink
+                                    if in_sr == 8000:
+                                        pcm_8k_arr = pcm_arr
+                                    elif in_sr == 16000:
+                                        pcm_8k_arr = 0.5 * (pcm_arr[0::2] + pcm_arr[1::2])
+                                    elif in_sr == 48000:
+                                        n = len(pcm_arr) - (len(pcm_arr) % 6)
+                                        pcm_8k_arr = pcm_arr[:n].reshape(-1, 6).mean(axis=1) if n > 0 else pcm_arr
+                                    else:
+                                        target_len = int(len(pcm_arr) * 8000 / in_sr)
+                                        pcm_8k_arr = np.interp(
+                                            np.linspace(0, len(pcm_arr), target_len, endpoint=False),
+                                            np.arange(len(pcm_arr)),
+                                            pcm_arr
+                                        )
+
+                                    # Boost gain by 1.6x with soft tanh saturation for robust DMR modulation
+                                    pcm_boosted = np.tanh(pcm_8k_arr / 32768.0 * 1.6) * 32767.0
+                                    pcm_8k = pcm_boosted.astype(np.int16).tobytes()
                                     zello_rx_pcm_buffer.extend(pcm_8k)
+
+                                    if bridge_state.rx_packet_count == 1:
+                                        record_log(f"🎙️ [Zello Audio] Receiving audio stream (sampling: {in_sr}Hz, packet 1: {len(opus_payload)}B Opus -> {len(pcm_raw)}B PCM)")
+                                    elif bridge_state.rx_packet_count % 50 == 0:
+                                        peak = int(np.max(np.abs(pcm_8k_arr))) if len(pcm_8k_arr) > 0 else 0
+                                        record_log(f"🎙️ [Zello Audio] Streaming: {bridge_state.rx_packet_count} pkts, peak={peak}/32767")
 
                                     # Buffer into 320-byte (20ms) frames and transmit directly to DirectDmrEngine
                                     cur_dmr_id = bridge_state.active_speaker_id
