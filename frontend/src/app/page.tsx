@@ -43,10 +43,10 @@ export default function DashboardPage() {
       if (!rxAudioCtxRef.current) {
         const ctx = new AudioCtx();
 
-        // 1. Communications Low-pass filter (2800 Hz, Q=0.707) to eliminate vocoder quantization hiss & harsh sibilance ("sss"/"tt")
+        // 1. Communications Low-pass filter (2600 Hz, Q=0.707) to eliminate vocoder quantization hiss & harsh sibilance ("sss"/"tt")
         const lpf = ctx.createBiquadFilter();
         lpf.type = "lowpass";
-        lpf.frequency.value = 2800;
+        lpf.frequency.value = 2600;
         lpf.Q.value = 0.707;
 
         // 2. High-pass filter (250 Hz) to eliminate DC offset and sub-bass rumble
@@ -55,11 +55,11 @@ export default function DashboardPage() {
         hpf.frequency.value = 250;
         hpf.Q.value = 0.707;
 
-        // 3. De-emphasis High-Shelf: -3.5 dB above 1800 Hz for warm, rounded, natural voice like Opus
+        // 3. De-emphasis High-Shelf: -5.0 dB above 1600 Hz for warm, rounded, natural voice like Opus
         const deemph = ctx.createBiquadFilter();
         deemph.type = "highshelf";
-        deemph.frequency.value = 1800;
-        deemph.gain.value = -3.5;
+        deemph.frequency.value = 1600;
+        deemph.gain.value = -5.0;
 
         // 4. Clear voice gain (natural level matching /radio)
         const gainNode = ctx.createGain();
