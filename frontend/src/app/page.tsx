@@ -43,11 +43,11 @@ export default function DashboardPage() {
       if (!rxAudioCtxRef.current) {
         const ctx = new AudioCtx();
 
-        // 1. Communications Low-pass filter (3100 Hz, Q=0.68) to eliminate vocoder quantization hiss & harsh sibilance ("sss"/"tt")
+        // 1. Communications Low-pass filter (2800 Hz, Q=0.707) to eliminate vocoder quantization hiss & harsh sibilance ("sss"/"tt")
         const lpf = ctx.createBiquadFilter();
         lpf.type = "lowpass";
-        lpf.frequency.value = 3100;
-        lpf.Q.value = 0.68;
+        lpf.frequency.value = 2800;
+        lpf.Q.value = 0.707;
 
         // 2. High-pass filter (250 Hz) to eliminate DC offset and sub-bass rumble
         const hpf = ctx.createBiquadFilter();
@@ -55,11 +55,17 @@ export default function DashboardPage() {
         hpf.frequency.value = 250;
         hpf.Q.value = 0.707;
 
-        // 3. Clear voice gain (natural level matching /radio)
-        const gainNode = ctx.createGain();
-        gainNode.gain.value = 1.0;
+        // 3. De-emphasis High-Shelf: -3.5 dB above 1800 Hz for warm, rounded, natural voice like Opus
+        const deemph = ctx.createBiquadFilter();
+        deemph.type = "highshelf";
+        deemph.frequency.value = 1800;
+        deemph.gain.value = -3.5;
 
-        // 4. Relaxed Dynamics Compressor: transparent peak protection without robotic squashing
+        // 4. Clear voice gain (natural level matching /radio)
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = 1.15;
+
+        // 5. Relaxed Dynamics Compressor: transparent peak protection without robotic squashing
         const comp = ctx.createDynamicsCompressor();
         comp.threshold.value = -6;
         comp.knee.value = 20;
@@ -67,9 +73,10 @@ export default function DashboardPage() {
         comp.attack.value = 0.01;
         comp.release.value = 0.20;
 
-        // Pipeline: hpf -> lpf -> gainNode -> comp -> destination
+        // Pipeline: hpf -> lpf -> deemph -> gainNode -> comp -> destination
         hpf.connect(lpf);
-        lpf.connect(gainNode);
+        lpf.connect(deemph);
+        deemph.connect(gainNode);
         gainNode.connect(comp);
         comp.connect(ctx.destination);
 
