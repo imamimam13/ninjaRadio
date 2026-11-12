@@ -2098,9 +2098,20 @@ export default function SettingsPage() {
                         placeholder="-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ...\n-----END PRIVATE KEY-----"
                         className="w-full p-3 rounded-xl font-mono text-[11px] bg-[#05080f] border border-amber-500/60 focus:border-amber-400 text-amber-200"
                       />
-                      <p className="text-[10px] font-mono text-amber-400/80">
-                        🔒 Key disimpan secara lokal pada volume server dengan hak akses 0600 dan otomatis di-exclude dari Git repository.
-                      </p>
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-1">
+                        <p className="text-[10px] font-mono text-amber-400/80">
+                          🔒 Key disimpan secara lokal pada volume server dengan hak akses 0600 dan otomatis di-exclude dari Git repository.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveZello()}
+                          disabled={isSavingZello || !zelloPrivateKey.trim()}
+                          className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 text-xs font-mono font-black rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 disabled:opacity-40 whitespace-nowrap self-end sm:self-auto"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{isSavingZello ? "Menyimpan..." : zelloSaveSuccess ? "Tersimpan!" : "Simpan Key Sekarang"}</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
