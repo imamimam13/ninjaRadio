@@ -25,6 +25,7 @@ CONFIG_PATH = os.getenv("CONFIG_PATH", "/app/data/config.json")
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "http://backend:8000/api/internal/dmr_event")
 MUMBLE_BRIDGE_PORT = 12346
 SVXLINK_BRIDGE_PORT = 12348
+ZELLO_BRIDGE_PORT = 12351
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 WEB_PTT_PORT = int(os.getenv("WEB_PTT_PORT", 32100))
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
@@ -2131,6 +2132,10 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(unkey_mumble, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                             except Exception:
                                 pass
+                            try:
+                                self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                            except Exception:
+                                pass
                             # Forward unkey frame to DVSwitch Mobile clients
                             try:
                                 unkey_mobile = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
@@ -2234,6 +2239,10 @@ usrpAGC = -20,10,100
                                 pass
                         try:
                             self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                        except Exception:
+                            pass
+                        try:
+                            self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                         except Exception:
                             pass
 
@@ -2404,6 +2413,10 @@ usrpAGC = -20,10,100
                                             self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                                         except Exception:
                                             pass
+                                    try:
+                                        self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                                    except Exception:
+                                        pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": net_label,
                                 "host": f"{addr[0]}:32100",
@@ -2441,6 +2454,10 @@ usrpAGC = -20,10,100
                                     self.bridge_sock.sendto(mumble_unkey, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                                 except Exception:
                                     pass
+                            try:
+                                self.bridge_sock.sendto(mumble_unkey, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                            except Exception:
+                                pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": net_label,
                                 "host": f"{addr[0]}:32100",
@@ -2957,6 +2974,10 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                             except Exception:
                                 pass
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                            except Exception:
+                                pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_dmr_master_traffic note: {e}")
@@ -3171,6 +3192,10 @@ usrpAGC = -20,10,100
                                     pass
                             try:
                                 self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                            except Exception:
+                                pass
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                             except Exception:
                                 pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
