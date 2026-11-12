@@ -264,7 +264,8 @@ async def zello_websocket_worker():
                     "command": "logon",
                     "seq": bridge_state.seq_counter,
                     "auth_token": jwt_token,
-                    "channel": bridge_state.channel
+                    "channel": bridge_state.channel,
+                    "channels": [bridge_state.channel] if bridge_state.channel else []
                 }
                 if bridge_state.username:
                     logon_msg["username"] = bridge_state.username
