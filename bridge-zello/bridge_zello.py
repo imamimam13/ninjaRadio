@@ -213,10 +213,33 @@ class BridgeHTTPHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+import signal
+
+http_server_instance: Optional[ThreadingHTTPServer] = None
+is_app_running = True
+
+def handle_sigterm(signum, frame):
+    global is_app_running, http_server_instance
+    is_app_running = False
+    if http_server_instance:
+        try:
+            threading.Thread(target=http_server_instance.shutdown).start()
+        except Exception:
+            pass
+    # Exit cleanly without waiting for Docker's 10s SIGKILL timeout
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_sigterm)
+signal.signal(signal.SIGINT, handle_sigterm)
+
 def run_http_server():
-    server = ThreadingHTTPServer(("0.0.0.0", BRIDGE_HTTP_PORT), BridgeHTTPHandler)
+    global http_server_instance
+    http_server_instance = ThreadingHTTPServer(("0.0.0.0", BRIDGE_HTTP_PORT), BridgeHTTPHandler)
     record_log(f"Bridge HTTP Server listening on port {BRIDGE_HTTP_PORT}")
-    server.serve_forever()
+    try:
+        http_server_instance.serve_forever()
+    except Exception:
+        pass
 
 # ---------------- Zello WebSocket Client Worker ----------------
 async def zello_websocket_worker():
@@ -227,7 +250,7 @@ async def zello_websocket_worker():
 
     udp_tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    while True:
+    while is_app_running:
         if not bridge_state.enabled:
             bridge_state.ws_connected = False
             bridge_state.channel_joined = False
