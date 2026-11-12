@@ -683,13 +683,13 @@ HPF_300HZ_A = [1.0, -1.669200875, 0.716631541]
 LPF_3200HZ_B = [0.638943726, 1.277887452, 0.638943726]
 LPF_3200HZ_A = [1.0, 1.142977284, 0.412797620]
 
-# 2600Hz Low-pass filter (2nd order Butterworth, fs=8000Hz) - cuts off vocoder hash, hiss, and unvoiced sizzle
-LPF_2600HZ_B = [0.445997646, 0.891995291, 0.445997646]
-LPF_2600HZ_A = [1.0, 0.557028933, 0.226961650]
+# 2350Hz Low-pass filter (2nd order Butterworth, fs=8000Hz) - cuts off vocoder hash, hiss, and high-frequency screech
+LPF_2350HZ_B = [0.378279113, 0.756558225, 0.378279113]
+LPF_2350HZ_A = [1.0, 0.323035979, 0.190080472]
 
 class DeemphasisFilter:
-    """Standard communications 350us De-emphasis filter: strips harsh sibilance ('tsshh'/'kssh') and vocoder sizzle."""
-    def __init__(self, alpha: float = 0.72):
+    """Standard communications 350-400us De-emphasis filter: strips harsh sibilance ('tsshh'/'kssh') and vocoder screech."""
+    def __init__(self, alpha: float = 0.82):
         self.alpha = alpha
         self.prev = 0.0
 
@@ -977,8 +977,8 @@ class DirectDmrEngine:
         if stream_key not in self._rx_filters:
             self._rx_filters[stream_key] = (
                 BiquadFilter(HPF_300HZ_B, HPF_300HZ_A),
-                BiquadFilter(LPF_2600HZ_B, LPF_2600HZ_A),
-                DeemphasisFilter(alpha=0.72)
+                BiquadFilter(LPF_2350HZ_B, LPF_2350HZ_A),
+                DeemphasisFilter(alpha=0.82)
             )
         hpf, lpf, deemph = self._rx_filters[stream_key]
 
@@ -986,16 +986,16 @@ class DirectDmrEngine:
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
         processed = []
         for s in samples:
-            # 1. High-pass (300Hz), Low-pass (2600Hz), and De-emphasis (350us)
-            # Post-gain 1.85x restores full, warm, natural vocal body after de-emphasis
-            f_val = deemph.process(lpf.process(hpf.process(float(s)))) * 1.85
-            # 2. Transparent soft-knee limiter to prevent digital clipping/kresek on loud voice peaks
+            # 1. High-pass (300Hz), Low-pass (2350Hz), and De-emphasis (alpha=0.82)
+            # Post-gain 2.3x restores warm, rich, broadcast-grade speech after de-emphasis
+            f_val = deemph.process(lpf.process(hpf.process(float(s)))) * 2.3
+            # 2. Transparent soft-knee limiter to prevent clipping on loud voice peaks
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)
-            if x <= 16000.0:
+            if x <= 15000.0:
                 y = x
             else:
-                y = 16000.0 + 8000.0 * math.tanh((x - 16000.0) / 10000.0)
+                y = 15000.0 + 8500.0 * math.tanh((x - 15000.0) / 9500.0)
             processed.append(int(max(-32767.0, min(32767.0, sign * y))))
 
         return struct.pack("<480h", *processed)

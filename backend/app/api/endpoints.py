@@ -971,9 +971,12 @@ async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = 
     except Exception:
         pass
 
+    stream_key = f"{dmr_id}_{tg}_{slot}"
     if is_transmitting:
+        now_ts = time.time()
         tx_data = {
-            "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
+            "id": f"tx_web_{stream_key}",
+            "stream_key": stream_key,
             "callsign": callsign,
             "name": name,
             "dmr_id": dmr_id,
@@ -984,14 +987,18 @@ async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = 
             "category": category,
             "rssi": "-55 dBm",
             "ber": "0.0%",
-            "started_at": datetime.utcnow().strftime("%H:%M:%S")
+            "started_at": datetime.utcnow().strftime("%H:%M:%S"),
+            "start_time": now_ts,
+            "last_active": now_ts
         }
-        await manager.update_tx_state(tx_data)
+        ACTIVE_STREAMS[stream_key] = tx_data
+        await manager.update_stream(stream_key, tx_data)
         return {"status": "TX_STARTED", "data": tx_data}
     else:
-        await manager.update_tx_state(None)
+        ACTIVE_STREAMS.pop(stream_key, None)
+        await manager.update_stream(stream_key, None)
         lh_item = {
-            "id": f"tx_web_{int(datetime.utcnow().timestamp())}",
+            "id": f"tx_web_{stream_key}_{int(datetime.utcnow().timestamp())}",
             "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
             "callsign": callsign,
             "name": name,
@@ -1138,15 +1145,16 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         started_at = cached.get("started_at", datetime.utcnow().strftime("%H:%M:%S")) if cached else datetime.utcnow().strftime("%H:%M:%S")
         last_broadcast = cached.get("last_broadcast", 0.0) if cached else 0.0
 
+        mode_val = cached.get("mode") if (cached and cached.get("mode") == "DMR (WebRTC)") else f"DMR ({network})"
         tx_data = {
-            "id": f"tx_rf_{stream_key}",
+            "id": cached.get("id", f"tx_rf_{stream_key}") if cached else f"tx_rf_{stream_key}",
             "callsign": callsign,
             "name": name,
             "dmr_id": src_id,
             "talkgroup": dst_tg,
             "tg_name": tg_name,
             "slot": slot,
-            "mode": f"DMR ({network})",
+            "mode": mode_val,
             "category": category,
             "rssi": "-62 dBm",
             "ber": "0.1%",

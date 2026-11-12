@@ -113,13 +113,16 @@ class HomeBrewClient:
                             if val not in self.ts2_tgs:
                                 self.ts2_tgs.append(val)
         else:
-            # Simple list: first TG goes to TS1, second to TS2
+            # When no explicit TS1/TS2 prefix is specified (e.g. "1025" or "510, 1025"):
+            # In standard amateur/commercial DMR (including BrandMeister, FreeDMR, BRIDI),
+            # talkgroups operate on TS2 (or TS1). Subscribing to BOTH TS1 and TS2
+            # ensures the Master links the TG on both slots, and never blindly forces TS1!
             parts = [int(tg.strip()) for tg in re.split(r'[,; ]+', self.raw_tgs_str) if tg.strip().isdigit()]
-            if len(parts) == 1:
-                self.ts1_tgs.append(parts[0])
-            elif len(parts) >= 2:
-                self.ts1_tgs.append(parts[0])
-                self.ts2_tgs.extend(parts[1:])
+            for p in parts:
+                if p not in self.ts2_tgs:
+                    self.ts2_tgs.append(p)
+                if p not in self.ts1_tgs:
+                    self.ts1_tgs.append(p)
 
         self.subscribed_tgs = list(dict.fromkeys(self.ts1_tgs + self.ts2_tgs))
         logger.info(f"[{self.name}] Configured Talkgroups: TS1={self.ts1_tgs} | TS2={self.ts2_tgs}")
