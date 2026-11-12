@@ -8,6 +8,7 @@ import logging
 import json
 import base64
 import asyncio
+import ctypes
 from typing import Optional, List, Dict, Any
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
@@ -56,7 +57,8 @@ def _get_int_env(key: str, default: int) -> int:
 
 USRP_HOST = os.getenv("DMR_USRP_HOST", "core")
 USRP_PORT = _get_int_env("DMR_USRP_PORT", 32345)
-USRP_RX_PORT = _get_int_env("ZELLO_USRP_RX_PORT", 32101)
+CORE_DIRECT_DMR_PORT = _get_int_env("WEB_PTT_PORT", 32100)
+ZELLO_BRIDGE_RX_PORT = _get_int_env("ZELLO_BRIDGE_RX_PORT", 12351)
 BRIDGE_HTTP_PORT = _get_int_env("ZELLO_BRIDGE_HTTP_PORT", 12350)
 
 recent_logs: List[str] = []
@@ -67,6 +69,96 @@ def record_log(msg: str):
     if len(recent_logs) > 120:
         recent_logs.pop(0)
 
+# ---------------- Native libopus Transcoder via ctypes ----------------
+_opus_lib = None
+for _name in [
+    "libopus.so.0",
+    "libopus.so",
+    "/usr/lib/x86_64-linux-gnu/libopus.so.0",
+    "/usr/lib/aarch64-linux-gnu/libopus.so.0",
+    "/usr/lib/arm-linux-gnueabihf/libopus.so.0"
+]:
+    try:
+        _opus_lib = ctypes.CDLL(_name)
+        if _opus_lib:
+            logger.info(f"Loaded native libopus library from: {_name}")
+            break
+    except Exception:
+        pass
+
+if _opus_lib:
+    try:
+        _opus_lib.opus_decoder_create.restype = ctypes.c_void_p
+        _opus_lib.opus_decoder_create.argtypes = [ctypes.c_int32, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+        _opus_lib.opus_decode.restype = ctypes.c_int
+        _opus_lib.opus_decode.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int32, ctypes.POINTER(ctypes.c_int16), ctypes.c_int, ctypes.c_int]
+        _opus_lib.opus_decoder_destroy.argtypes = [ctypes.c_void_p]
+
+        _opus_lib.opus_encoder_create.restype = ctypes.c_void_p
+        _opus_lib.opus_encoder_create.argtypes = [ctypes.c_int32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+        _opus_lib.opus_encode.restype = ctypes.c_int32
+        _opus_lib.opus_encode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
+        _opus_lib.opus_encoder_destroy.argtypes = [ctypes.c_void_p]
+    except Exception as oe:
+        logger.warning(f"Error binding libopus signatures: {oe}")
+else:
+    logger.warning("libopus shared library not found. Audio transcoding will fallback to pass-through.")
+
+class OpusDecoderWrapper:
+    def __init__(self, sample_rate=16000, channels=1):
+        self.dec = None
+        if _opus_lib:
+            err = ctypes.c_int()
+            self.dec = _opus_lib.opus_decoder_create(sample_rate, channels, ctypes.byref(err))
+        self.sample_rate = sample_rate
+        self.channels = channels
+
+    def decode(self, data: bytes, frame_size=320) -> bytes:
+        if not self.dec or not data:
+            return b""
+        out_buf = (ctypes.c_int16 * (frame_size * self.channels))()
+        ret = _opus_lib.opus_decode(self.dec, data, len(data), out_buf, frame_size, 0)
+        if ret > 0:
+            return bytes(out_buf[:ret * self.channels])
+        return b""
+
+    def __del__(self):
+        if self.dec and _opus_lib:
+            try:
+                _opus_lib.opus_decoder_destroy(self.dec)
+            except Exception:
+                pass
+            self.dec = None
+
+class OpusEncoderWrapper:
+    def __init__(self, sample_rate=16000, channels=1):
+        self.enc = None
+        if _opus_lib:
+            err = ctypes.c_int()
+            # 2048 = OPUS_APPLICATION_VOIP
+            self.enc = _opus_lib.opus_encoder_create(sample_rate, channels, 2048, ctypes.byref(err))
+        self.sample_rate = sample_rate
+        self.channels = channels
+
+    def encode(self, pcm_data: bytes, frame_size=320) -> bytes:
+        if not self.enc or not pcm_data:
+            return b""
+        n_samples = len(pcm_data) // 2
+        in_buf = (ctypes.c_int16 * n_samples).from_buffer_copy(pcm_data)
+        out_buf = ctypes.create_string_buffer(1275)
+        ret = _opus_lib.opus_encode(self.enc, in_buf, frame_size, out_buf, 1275)
+        if ret > 0:
+            return bytes(out_buf.raw[:ret])
+        return b""
+
+    def __del__(self):
+        if self.enc and _opus_lib:
+            try:
+                _opus_lib.opus_encoder_destroy(self.enc)
+            except Exception:
+                pass
+            self.enc = None
+
 # Bridge State
 class ZelloBridgeState:
     def __init__(self):
@@ -75,9 +167,9 @@ class ZelloBridgeState:
         self.username = ""
         self.password = ""
         self.issuer = ""
-        self.target_tg = 0
+        self.target_tg = 1025
         self.slot = 2
-        self.bot_callsign = ""
+        self.bot_callsign = "NINJA-ZELLO"
         self.dev_token = ""
         self.has_key = False
         self.private_key_obj = None
@@ -89,8 +181,18 @@ class ZelloBridgeState:
         self.last_rx_time = 0.0
         self.tx_sequence = 0
         self.seq_counter = 1
+        
+        # Outgoing DMR -> Zello streaming state
+        self.dmr_to_zello_streaming = False
+        self.dmr_stream_id = None
+        self.dmr_stream_seq = 0
+        self.dmr_last_audio_time = 0.0
+        self.dmr_tx_pcm_buf = bytearray()
+        self.active_ws = None
 
 bridge_state = ZelloBridgeState()
+opus_decoder = OpusDecoderWrapper(16000, 1)
+opus_encoder = OpusEncoderWrapper(16000, 1)
 
 def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
@@ -151,25 +253,6 @@ def load_bridge_config():
 
     record_log(f"Config loaded: Channel={bridge_state.channel}, TG={bridge_state.target_tg}, KeyLoaded={bridge_state.has_key}")
 
-# ---------------- USRP Audio Encoding & Protocol ----------------
-TLV_TAG_SET_INFO = 0x08
-
-def build_usrp_frame(seq: int, keyup: int, usrp_type: int = 0, payload: bytes = b"") -> bytes:
-    """Header Length: Exactly 32 bytes: b'USRP' + struct.pack('>iiiiiii', seq, 0, key_flag, 0, packetType << 24, 0, 0)"""
-    return b"USRP" + struct.pack(">iiiiiii", seq & 0x7FFFFFFF, 0, 1 if keyup else 0, 0, usrp_type << 24, 0, 0) + payload
-
-def build_set_info_tlv(src_id: int, rpt_id: int, tg: int, slot: int, cc: int, callsign: str) -> bytes:
-    """Dynamic Identity Carry-Over Frame (Tag 0x08) dispatched before voice bursts."""
-    call = (callsign or str(src_id)).encode("ascii", errors="ignore")[:16]
-    body = (
-        (src_id & 0xFFFFFF).to_bytes(3, "big")
-        + (rpt_id & 0xFFFFFFFF).to_bytes(4, "big")
-        + (tg & 0xFFFFFF).to_bytes(3, "big")
-        + bytes([slot & 0xFF, cc & 0xFF])
-        + call + b"\x00"
-    )
-    return bytes([TLV_TAG_SET_INFO, len(body)]) + body
-
 # ---------------- HTTP Bridge Control Server ----------------
 class BridgeHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -228,7 +311,6 @@ def handle_sigterm(signum, frame):
             threading.Thread(target=http_server_instance.shutdown).start()
         except Exception:
             pass
-    # Exit cleanly without waiting for Docker's 10s SIGKILL timeout
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, handle_sigterm)
@@ -243,6 +325,30 @@ def run_http_server():
     except Exception:
         pass
 
+# ---------------- DMR RX Listener (Routes DMR Audio to Zello) ----------------
+dmr_to_zello_queue = asyncio.Queue()
+
+def run_dmr_rx_listener(loop: asyncio.AbstractEventLoop):
+    """Listens for decoded PCM audio from Core on UDP port ZELLO_BRIDGE_RX_PORT (12351)"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(("0.0.0.0", ZELLO_BRIDGE_RX_PORT))
+        logger.info(f"DMR RX Listener bound on UDP port {ZELLO_BRIDGE_RX_PORT}")
+    except Exception as e:
+        logger.warning(f"Could not bind DMR RX listener on port {ZELLO_BRIDGE_RX_PORT}: {e}")
+        return
+
+    while is_app_running:
+        try:
+            data, addr = sock.recvfrom(2048)
+            if len(data) >= 32 and data[:4] == b"USRP":
+                magic, seq, mem, key_flag, tg, src_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
+                pcm_8k = data[32:]
+                if tg == bridge_state.target_tg:
+                    loop.call_soon_threadsafe(dmr_to_zello_queue.put_nowait, (key_flag, pcm_8k, tg, src_id, slot))
+        except Exception:
+            time.sleep(0.01)
+
 # ---------------- Zello WebSocket Client Worker ----------------
 async def zello_websocket_worker():
     """Asynchronous WebSocket client connecting to wss://zello.io/ws"""
@@ -251,6 +357,7 @@ async def zello_websocket_worker():
         return
 
     udp_tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    zello_rx_pcm_buffer = bytearray()
 
     while is_app_running:
         if not bridge_state.enabled:
@@ -286,16 +393,16 @@ async def zello_websocket_worker():
                 ssl=True
             ) as ws:
                 bridge_state.ws_connected = True
+                bridge_state.active_ws = ws
                 u_info = bridge_state.username if bridge_state.username else "anonymous"
                 record_log(f"Connected to Zello WebSocket. Logging in to '{bridge_state.channel}' as '{u_info}'...")
 
-                # 1. Send logon
+                # 1. Send logon command
                 logon_msg = {
                     "command": "logon",
                     "seq": bridge_state.seq_counter,
                     "auth_token": jwt_token,
-                    "channel": bridge_state.channel,
-                    "channels": [bridge_state.channel] if bridge_state.channel else []
+                    "channel": bridge_state.channel
                 }
                 if bridge_state.username:
                     logon_msg["username"] = bridge_state.username
@@ -304,86 +411,177 @@ async def zello_websocket_worker():
                 bridge_state.seq_counter += 1
                 await ws.send(json.dumps(logon_msg))
 
-                # 2. Message Loop
-                async for msg in ws:
-                    if isinstance(msg, str):
+                # Background task: Stream audio from DMR -> Zello
+                async def dmr_to_zello_task():
+                    last_pcm_time = 0.0
+                    while is_app_running and bridge_state.ws_connected:
                         try:
-                            record_log(f"Zello message received: {msg[:180]}")
-                            data = json.loads(msg)
-                            # Logon result
-                            if data.get("command") == "logon" or data.get("success") is True:
-                                bridge_state.channel_joined = True
-                                record_log(f"Successfully joined Zello Channel: '{bridge_state.channel}'")
-                            
-                            cmd = data.get("command") or data.get("action") or data.get("event")
-                            # Stream started (Someone is talking on Zello)
-                            if cmd == "on_stream_start":
-                                stream_id = data.get("stream_id")
-                                speaker = data.get("from") or "ZelloUser"
-                                bridge_state.active_speaker = speaker
-                                bridge_state.active_stream_id = stream_id
-                                bridge_state.last_rx_time = time.time()
-                                record_log(f"Zello RX Started: '{speaker}' on stream {stream_id}")
-
-                                # Send Dynamic SET_INFO TLV to USRP Target
-                                tlv_frame = build_set_info_tlv(
-                                    src_id=1022057,
-                                    rpt_id=1022057,
-                                    tg=bridge_state.target_tg,
-                                    slot=bridge_state.slot,
-                                    cc=1,
-                                    callsign=speaker[:15]
-                                )
-                                tlv_pkt = build_usrp_frame(seq=bridge_state.tx_sequence, keyup=1, usrp_type=2, payload=tlv_frame)
-                                bridge_state.tx_sequence += 1
-                                try:
-                                    udp_tx_sock.sendto(tlv_pkt, (USRP_HOST, 32000))
-                                    udp_tx_sock.sendto(tlv_pkt, (USRP_HOST, USRP_PORT))
-                                except Exception as se:
-                                    logger.debug(f"USRP TLV Send: {se}")
-
-                            # Stream stopped
-                            elif cmd == "on_stream_stop":
-                                stream_id = data.get("stream_id")
-                                record_log(f"Zello RX Ended for stream {stream_id}")
-                                bridge_state.active_speaker = None
-                                bridge_state.active_stream_id = None
-                                
-                                # Send unkey frame to USRP
-                                unkey_pkt = build_usrp_frame(seq=bridge_state.tx_sequence, keyup=0, usrp_type=0, payload=b"\x00" * 320)
-                                bridge_state.tx_sequence += 1
-                                try:
-                                    udp_tx_sock.sendto(unkey_pkt, (USRP_HOST, USRP_PORT))
-                                except Exception:
-                                    pass
-
-                            # Error response
-                            elif data.get("success") is False:
-                                err = data.get("error", "Unknown Zello error")
-                                record_log(f"Zello Error response: {err}")
-
-                        except Exception as pe:
-                            logger.debug(f"Error parsing json frame: {pe}")
-
-                    elif isinstance(msg, bytes):
-                        # Binary Audio packet from Zello: [0x01][4B stream_id][4B packet_seq][Opus audio payload]
-                        if len(msg) > 9 and msg[0] == 0x01:
-                            bridge_state.last_rx_time = time.time()
-                            # 320 bytes zero-padded or decoded voice frame into USRP (20ms 8kHz mono)
-                            # When full opus decoding pipeline is running, decoded PCM goes here
-                            dummy_pcm = b"\x00" * 320
-                            voice_pkt = build_usrp_frame(seq=bridge_state.tx_sequence, keyup=1, usrp_type=0, payload=dummy_pcm)
-                            bridge_state.tx_sequence += 1
                             try:
-                                udp_tx_sock.sendto(voice_pkt, (USRP_HOST, USRP_PORT))
-                            except Exception:
-                                pass
+                                key_flag, pcm_8k, tg, src_id, slot = await asyncio.wait_for(dmr_to_zello_queue.get(), timeout=0.1)
+                            except asyncio.TimeoutError:
+                                # Watchdog: if no DMR audio for > 0.45s while streaming, stop Zello stream
+                                if bridge_state.dmr_to_zello_streaming and (time.time() - last_pcm_time > 0.45):
+                                    if bridge_state.dmr_stream_id:
+                                        stop_cmd = {
+                                            "command": "stop_stream",
+                                            "seq": bridge_state.seq_counter,
+                                            "stream_id": bridge_state.dmr_stream_id
+                                        }
+                                        bridge_state.seq_counter += 1
+                                        await ws.send(json.dumps(stop_cmd))
+                                        record_log(f"DMR -> Zello TX Ended (stream {bridge_state.dmr_stream_id})")
+                                    bridge_state.dmr_to_zello_streaming = False
+                                    bridge_state.dmr_stream_id = None
+                                    bridge_state.dmr_tx_pcm_buf.clear()
+                                continue
+
+                            if key_flag == 1 and pcm_8k:
+                                last_pcm_time = time.time()
+                                bridge_state.last_tx_time = last_pcm_time
+
+                                # Start stream if not yet started
+                                if not bridge_state.dmr_to_zello_streaming:
+                                    # 16kHz, 1 frame/pkt, 20ms duration -> codec_header = "gD4BFA=="
+                                    start_cmd = {
+                                        "command": "start_stream",
+                                        "seq": bridge_state.seq_counter,
+                                        "type": "audio",
+                                        "codec": "opus",
+                                        "codec_header": "gD4BFA==",
+                                        "packet_duration": 20
+                                    }
+                                    bridge_state.seq_counter += 1
+                                    await ws.send(json.dumps(start_cmd))
+                                    bridge_state.dmr_to_zello_streaming = True
+                                    bridge_state.dmr_stream_seq = 0
+                                    record_log(f"DMR -> Zello TX Started on TG {tg} (slot {slot})")
+
+                                # Upsample 8kHz PCM to 16kHz PCM (2x repeat)
+                                pcm_8k_arr = np.frombuffer(pcm_8k, dtype=np.int16)
+                                pcm_16k_arr = np.repeat(pcm_8k_arr, 2)
+                                pcm_16k = pcm_16k_arr.tobytes()
+
+                                # Encode 20ms of 16kHz PCM (320 samples = 640 bytes) to Opus
+                                opus_bytes = opus_encoder.encode(pcm_16k, frame_size=320)
+                                if opus_bytes and bridge_state.dmr_stream_id:
+                                    # Zello binary audio frame: [0x01][4B stream_id][4B seq][Opus data]
+                                    hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
+                                    bridge_state.dmr_stream_seq += 1
+                                    await ws.send(hdr + opus_bytes)
+
+                            elif key_flag == 0:
+                                if bridge_state.dmr_to_zello_streaming and bridge_state.dmr_stream_id:
+                                    stop_cmd = {
+                                        "command": "stop_stream",
+                                        "seq": bridge_state.seq_counter,
+                                        "stream_id": bridge_state.dmr_stream_id
+                                    }
+                                    bridge_state.seq_counter += 1
+                                    await ws.send(json.dumps(stop_cmd))
+                                    record_log(f"DMR -> Zello TX Released (stream {bridge_state.dmr_stream_id})")
+                                bridge_state.dmr_to_zello_streaming = False
+                                bridge_state.dmr_stream_id = None
+                                bridge_state.dmr_tx_pcm_buf.clear()
+                        except Exception as de:
+                            logger.debug(f"dmr_to_zello note: {de}")
+                            await asyncio.sleep(0.01)
+
+                dmr_fwd_task = asyncio.create_task(dmr_to_zello_task())
+
+                # 2. Incoming Zello WebSocket Message Loop (Zello -> DMR)
+                try:
+                    async for msg in ws:
+                        if isinstance(msg, str):
+                            try:
+                                data = json.loads(msg)
+                                cmd = data.get("command") or data.get("action") or data.get("event")
+
+                                # Logon response
+                                if cmd == "logon" or data.get("success") is True:
+                                    bridge_state.channel_joined = True
+                                    record_log(f"Successfully joined Zello Channel: '{bridge_state.channel}'")
+
+                                # Response to our start_stream command
+                                if data.get("command") == "start_stream" or (data.get("success") is True and "stream_id" in data):
+                                    bridge_state.dmr_stream_id = data.get("stream_id")
+                                    record_log(f"Zello granted outbound TX stream ID: {bridge_state.dmr_stream_id}")
+
+                                # Remote speaker started talking on Zello
+                                if cmd == "on_stream_start":
+                                    stream_id = data.get("stream_id")
+                                    speaker = data.get("from") or "ZelloUser"
+                                    bridge_state.active_speaker = speaker
+                                    bridge_state.active_stream_id = stream_id
+                                    bridge_state.last_rx_time = time.time()
+                                    zello_rx_pcm_buffer.clear()
+                                    record_log(f"Zello RX Started: '{speaker}' on stream {stream_id}")
+
+                                # Remote speaker stopped talking on Zello
+                                elif cmd == "on_stream_stop":
+                                    stream_id = data.get("stream_id")
+                                    record_log(f"Zello RX Ended for stream {stream_id}")
+                                    bridge_state.active_speaker = None
+                                    bridge_state.active_stream_id = None
+                                    
+                                    # Send unkey frame to DirectDmrEngine (port 32100)
+                                    call_b = (bridge_state.bot_callsign or "ZELLO").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                    unkey_nptt = struct.pack(">4sIIII?16s", b"NPTT", 1022057, int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
+                                    try:
+                                        udp_tx_sock.sendto(unkey_nptt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
+                                    except Exception:
+                                        pass
+                                    zello_rx_pcm_buffer.clear()
+
+                                elif data.get("success") is False:
+                                    err = data.get("error", "Unknown Zello error")
+                                    record_log(f"Zello error: {err}")
+
+                            except Exception as pe:
+                                logger.debug(f"JSON parse error: {pe}")
+
+                        elif isinstance(msg, bytes):
+                            # Binary audio packet from Zello: [0x01][4B stream_id][4B packet_seq][Opus payload]
+                            if len(msg) > 9 and msg[0] == 0x01:
+                                bridge_state.last_rx_time = time.time()
+                                opus_payload = msg[9:]
+                                
+                                # Decode Opus to 16kHz PCM
+                                pcm_16k = opus_decoder.decode(opus_payload, frame_size=320)
+                                if pcm_16k:
+                                    # Downsample 16kHz PCM to 8kHz PCM using 2:1 decimation
+                                    pcm_16k_arr = np.frombuffer(pcm_16k, dtype=np.int16).astype(np.float32)
+                                    pcm_8k_arr = pcm_16k_arr[::2]
+                                    pcm_8k = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
+                                    zello_rx_pcm_buffer.extend(pcm_8k)
+
+                                    # Buffer into 320-byte (20ms) frames and transmit directly to DirectDmrEngine
+                                    call_b = (bridge_state.active_speaker or bridge_state.bot_callsign or "ZELLO").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                    while len(zello_rx_pcm_buffer) >= 320:
+                                        chunk = bytes(zello_rx_pcm_buffer[:320])
+                                        del zello_rx_pcm_buffer[:320]
+                                        nptt_pkt = struct.pack(
+                                            ">4sIIII?16s",
+                                            b"NPTT",
+                                            1022057,
+                                            int(bridge_state.target_tg),
+                                            int(bridge_state.slot),
+                                            len(chunk),
+                                            True,
+                                            call_b
+                                        ) + chunk
+                                        try:
+                                            udp_tx_sock.sendto(nptt_pkt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
+                                        except Exception:
+                                            pass
+                finally:
+                    dmr_fwd_task.cancel()
 
         except Exception as e:
             record_log(f"Zello WebSocket connection error: {e}. Reconnecting in 5s...")
             bridge_state.ws_connected = False
             bridge_state.channel_joined = False
             bridge_state.active_speaker = None
+            bridge_state.active_ws = None
             await asyncio.sleep(5.0)
 
 def main():
@@ -394,9 +592,17 @@ def main():
     http_thread = threading.Thread(target=run_http_server, daemon=True)
     http_thread.start()
 
+    # Get asyncio event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Start DMR RX Listener thread
+    dmr_rx_thread = threading.Thread(target=run_dmr_rx_listener, args=(loop,), daemon=True)
+    dmr_rx_thread.start()
+
     # Start Asyncio WebSocket Loop
     try:
-        asyncio.run(zello_websocket_worker())
+        loop.run_until_complete(zello_websocket_worker())
     except KeyboardInterrupt:
         record_log("Zello Bridge stopped by user")
 
