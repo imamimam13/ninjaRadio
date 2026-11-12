@@ -78,6 +78,7 @@ class ZelloBridgeState:
         self.target_tg = 0
         self.slot = 2
         self.bot_callsign = ""
+        self.dev_token = ""
         self.has_key = False
         self.private_key_obj = None
         self.ws_connected = False
@@ -127,6 +128,7 @@ def load_bridge_config():
                     bridge_state.target_tg = int(z.get("target_tg", 1025))
                     bridge_state.slot = int(z.get("slot", 2))
                     bridge_state.bot_callsign = str(z.get("bot_callsign", "NINJA-ZELLO")).strip().upper()
+                    bridge_state.dev_token = str(z.get("dev_token", "")).strip()
                 break
             except Exception as e:
                 logger.warning(f"Could not read config from {p}: {e}")
@@ -262,7 +264,11 @@ async def zello_websocket_worker():
             await asyncio.sleep(5.0)
             continue
 
-        jwt_token = generate_jwt(bridge_state.issuer, bridge_state.private_key_obj)
+        if bridge_state.dev_token:
+            jwt_token = bridge_state.dev_token
+            record_log("Using custom Sample Development Token from Settings")
+        else:
+            jwt_token = generate_jwt(bridge_state.issuer, bridge_state.private_key_obj)
         if not jwt_token:
             record_log("Failed to generate JWT auth token. Retrying in 10s...")
             await asyncio.sleep(10.0)
@@ -280,7 +286,8 @@ async def zello_websocket_worker():
                 ssl=True
             ) as ws:
                 bridge_state.ws_connected = True
-                record_log("Connected to Zello WebSocket. Sending logon command...")
+                u_info = bridge_state.username if bridge_state.username else "anonymous"
+                record_log(f"Connected to Zello WebSocket. Logging in to '{bridge_state.channel}' as '{u_info}'...")
 
                 # 1. Send logon
                 logon_msg = {
@@ -301,14 +308,16 @@ async def zello_websocket_worker():
                 async for msg in ws:
                     if isinstance(msg, str):
                         try:
+                            record_log(f"Zello message received: {msg[:180]}")
                             data = json.loads(msg)
                             # Logon result
                             if data.get("command") == "logon" or data.get("success") is True:
                                 bridge_state.channel_joined = True
                                 record_log(f"Successfully joined Zello Channel: '{bridge_state.channel}'")
                             
+                            cmd = data.get("command") or data.get("action") or data.get("event")
                             # Stream started (Someone is talking on Zello)
-                            if data.get("event") == "on_stream_start":
+                            if cmd == "on_stream_start":
                                 stream_id = data.get("stream_id")
                                 speaker = data.get("from") or "ZelloUser"
                                 bridge_state.active_speaker = speaker
@@ -334,7 +343,7 @@ async def zello_websocket_worker():
                                     logger.debug(f"USRP TLV Send: {se}")
 
                             # Stream stopped
-                            elif data.get("event") == "on_stream_stop":
+                            elif cmd == "on_stream_stop":
                                 stream_id = data.get("stream_id")
                                 record_log(f"Zello RX Ended for stream {stream_id}")
                                 bridge_state.active_speaker = None

@@ -470,17 +470,12 @@ def rewrite_dmrd_tg_and_slot(raw_packet: bytes, new_tg: int, new_slot: int) -> b
 def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: list = None) -> bool:
     """
     100% Self-Serve Peer & Matrix Routing Engine:
-    1. If the peer is explicitly subscribed to this TG in Settings, approve immediately!
-    2. If there is an active route in TG Matrix for `tg` matching this peer, approve immediately!
-    3. If there is an explicit disabled route targeted to this peer, drop it.
-    4. Otherwise, allow DMR traffic.
+    1. If the route for `tg` is explicitly turned OFF (is_active = 0) in TG Matrix, drop it.
+    2. If there is an active route in TG Matrix for `tg` (either as source or target), approve immediately!
+    3. If the peer is configured with `subscribedTgs` containing `tg`, auto-approve immediately!
+    4. Otherwise, if peer has no explicit restrictions, allow DMR traffic.
     """
     peer_upper = (peer_name or "").strip().upper()
-
-    # Rule 1: Explicit peer subscription always takes top priority
-    if client_subscribed_tgs and tg in client_subscribed_tgs:
-        return True
-
     routes = _get_cached_bridge_routes()
 
     if routes:
@@ -501,13 +496,20 @@ def is_tg_bridged_to_peer(tg: int, peer_name: str = "", client_subscribed_tgs: l
                 if not peer_upper or peer_upper in str(r_name).upper() or peer_upper in str(s_m).upper() or peer_upper in str(t_m).upper() or str(t_m).upper() in ("DMR", "PEER", "MUMBLE", "WEBRTC", "ALL"):
                     return True
 
+        disabled_matches = []
         for row in routes:
             r_id, r_name, is_active, s_m, s_tg, s_slot, t_m, t_tg, t_slot, bidir = row[:10]
-            r_peer = str(row[10] or "").strip().upper() if len(row) > 10 and row[10] else ""
             if not is_active and (int(s_tg or 0) == tg or int(t_tg or 0) == tg):
-                if not r_peer or r_peer in ("ALL", "*") or (peer_upper and (r_peer in peer_upper or peer_upper in r_peer)):
-                    return False
+                disabled_matches.append(r_id)
 
+        if disabled_matches:
+            return False
+
+    # Rule 2: If peer client explicitly subscribed to this TG in Settings, it is APPROVED automatically!
+    if client_subscribed_tgs and tg in client_subscribed_tgs:
+        return True
+
+    # Rule 4: Default allow for connected DMR peers when no explicit block rule exists
     return True
 
 DEFAULT_CONFIG = {
@@ -2820,10 +2822,7 @@ usrpAGC = -20,10,100
             is_local_mmdvm = host_str.startswith("127.0.0.1")
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
-            # Only suppress local loopback echo if Web PTT is actively transmitting this DMR ID.
-            # Real RF transmissions from physical HTs / MMDVM hotspots must NEVER be suppressed.
-            is_web_tx_active = bool(self.is_transmitting and self.current_tx_dmr_id == src_id)
-            is_local_origin = is_web_tx_active or (is_local_mmdvm and self.is_transmitting)
+            is_local_origin = is_local_mmdvm or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id))
 
             self.current_rx_src = src_id
             self.current_rx_tg = dst_tg
