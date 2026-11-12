@@ -2911,7 +2911,7 @@ async def save_zello_config(data: dict):
         z_cfg["bot_callsign"] = str(data["bot_callsign"]).strip().upper()
         
     private_key_pem = data.get("private_key")
-    if private_key_pem and isinstance(private_key_pem, str) and "BEGIN PRIVATE KEY" in private_key_pem:
+    if private_key_pem and isinstance(private_key_pem, str) and ("PRIVATE KEY" in private_key_pem):
         key_file = get_zello_key_file()
         try:
             os.makedirs(os.path.dirname(key_file), exist_ok=True)
