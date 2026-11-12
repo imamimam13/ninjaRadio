@@ -61,10 +61,22 @@ class AudioEngine {
     @Volatile var micGain: Float = 2.5f
     @Volatile var spkGain: Float = 1.2f
     @Volatile var masterVolume: Float = 1.0f
+    @Volatile var noiseCancelEnabled: Boolean = true
 
-    fun configure(micGain: Float, spkGain: Float) {
+    private val dsp = NinjaAudioDsp(rate.toDouble())
+
+    fun configure(micGain: Float, spkGain: Float, ncEnabled: Boolean = true) {
         this.micGain = micGain.coerceIn(0.10f, 5.0f)
-        this.spkGain = spkGain.coerceIn(0.20f, 2.5f)
+        this.spkGain = spkGain.coerceIn(0.20f, 3.0f)
+        this.noiseCancelEnabled = ncEnabled
+    }
+
+    fun resetRxDsp() {
+        dsp.resetRx()
+    }
+
+    fun resetTxDsp() {
+        dsp.resetTx()
     }
 
     fun startPlayback(context: Context? = null) {
@@ -109,16 +121,8 @@ class AudioEngine {
     fun play(pcm: ShortArray) {
         playExec.execute {
             val t = track ?: return@execute
-            if (spkGain == 1.0f) {
-                t.write(pcm, 0, pcm.size)
-            } else {
-                val out = ShortArray(pcm.size)
-                for (i in pcm.indices) {
-                    val s = (pcm[i] * spkGain).toInt().coerceIn(-32768, 32767)
-                    out[i] = s.toShort()
-                }
-                t.write(out, 0, out.size)
-            }
+            val out = dsp.processRxFrame(pcm, spkGain, noiseCancelEnabled)
+            t.write(out, 0, out.size)
         }
     }
 
@@ -174,17 +178,20 @@ class AudioEngine {
 
         val finalRec = rec ?: return false
         routeToExternalHeadsetIfAvailable(context, finalRec)
+        dsp.resetTx()
+        dsp.attachHardwareEffects(finalRec.audioSessionId, noiseCancelEnabled)
 
         try {
             finalRec.startRecording()
         } catch (e: Exception) {
             Log.e(TAG, "rec.startRecording() threw exception: ${e.message}", e)
+            dsp.releaseHardwareEffects()
             try { finalRec.release() } catch (_: Exception) {}
             return false
         }
 
         capturing = true
-        Log.i(TAG, "AudioRecord started successfully! recordingState=${finalRec.recordingState}")
+        Log.i(TAG, "AudioRecord started successfully! recordingState=${finalRec.recordingState}, nc=$noiseCancelEnabled")
 
         capThread = thread(name = "mic-capture", isDaemon = true) {
             val buf = ShortArray(160)
@@ -196,17 +203,14 @@ class AudioEngine {
                     n += r
                 }
                 if (n == 160) {
-                    val out = ShortArray(160)
-                    val g = micGain
-                    for (i in 0 until 160) {
-                        out[i] = (buf[i] * g).toInt().coerceIn(-32768, 32767).toShort()
-                    }
+                    val out = dsp.processTxFrame(buf, micGain, noiseCancelEnabled)
                     cb(out)
                 } else if (n <= 0) {
                     Log.w(TAG, "AudioRecord read returned $n, exiting capture thread")
                     break
                 }
             }
+            dsp.releaseHardwareEffects()
             try {
                 finalRec.stop()
             } catch (_: Exception) {}

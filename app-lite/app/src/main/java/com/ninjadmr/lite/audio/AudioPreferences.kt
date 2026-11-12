@@ -12,6 +12,8 @@ object AudioPreferences {
     private const val KEY_VOX_ENABLED = "vox_ht_enabled"
     private const val KEY_HEADSET_PRIORITY = "headset_jack_priority"
     private const val KEY_TOT_SECONDS = "tot_seconds"
+    private const val KEY_AUTO_CONNECT = "auto_connect_enabled"
+    private const val KEY_NOISE_CANCEL = "noise_cancel_dsp_enabled"
 
     // Default 2.5x (250%) boost for PoC pinhole mics; can go down to 0.10f (10%) for HT Jack Line-In
     const val DEFAULT_MIC_GAIN = 2.5f
@@ -21,6 +23,8 @@ object AudioPreferences {
     const val DEFAULT_VOX_ENABLED = false
     const val DEFAULT_HEADSET_PRIORITY = true
     const val DEFAULT_TOT_SECONDS = 180 // 180s (3 minutes) default TOT
+    const val DEFAULT_AUTO_CONNECT = true
+    const val DEFAULT_NOISE_CANCEL = true
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -80,5 +84,21 @@ object AudioPreferences {
 
     fun setTotSeconds(context: Context, seconds: Int) {
         getPrefs(context).edit().putInt(KEY_TOT_SECONDS, seconds.coerceAtLeast(0)).apply()
+    }
+
+    fun isAutoConnectEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_AUTO_CONNECT, DEFAULT_AUTO_CONNECT)
+    }
+
+    fun setAutoConnectEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_AUTO_CONNECT, enabled).apply()
+    }
+
+    fun isNoiseCancelEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_NOISE_CANCEL, DEFAULT_NOISE_CANCEL)
+    }
+
+    fun setNoiseCancelEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_NOISE_CANCEL, enabled).apply()
     }
 }

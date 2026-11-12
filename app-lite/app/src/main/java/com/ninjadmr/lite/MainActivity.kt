@@ -53,6 +53,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private var isLearningPtt = false
     private var learningTarget: PttManager.KeyTarget = PttManager.KeyTarget.PTT
     private var lastHeardDisplay: String = ""
+    private var lastHeardSrcId: Int = 0
+    private var previousHeardDisplay: String = ""
     private var pttBroadcastReceiver: BroadcastReceiver? = null
     private var headsetPlugReceiver: BroadcastReceiver? = null
     private var pttCalibDialog: AlertDialog? = null
@@ -67,6 +69,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private lateinit var tvModeBadge: TextView
     private lateinit var tvQsoTimer: TextView
     private lateinit var tvSlot: TextView
+    private lateinit var tvLastHeard: TextView
     private lateinit var tvCallsignId: TextView
     private lateinit var tvRxInfo: TextView
     private lateinit var hudWaveform: HudWaveformView
@@ -102,6 +105,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             dmrService = s
             s.listener = this@MainActivity
             isBound = true
+            s.tryAutoConnect()
             updateUiFromService()
         }
 
@@ -132,8 +136,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         tvModeBadge = findViewById(R.id.tvModeBadge)
         tvQsoTimer = findViewById(R.id.tvQsoTimer)
         tvSlot = findViewById(R.id.tvSlot)
+        tvLastHeard = findViewById(R.id.tvLastHeard)
         tvCallsignId = findViewById(R.id.tvCallsignId)
-        tvCallsignId.isSelected = true
         tvRxInfo = findViewById(R.id.tvRxInfo)
         tvRxInfo.isSelected = true
         hudWaveform = findViewById(R.id.hudWaveform)
@@ -151,8 +155,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         updateProfileDisplay()
         updateAudioModeIndicator()
 
-        // Auto-sync callbook on first launch if empty
-        if (CallbookManager.count(this) == 0) {
+        // Auto-sync callbook on launch if not yet populated
+        if (CallbookManager.count(this) < 10) {
             CallbookManager.importFromUrl(this, CallbookManager.getCustomUrl(this), {}, { count, _ ->
                 if (count > 0) {
                     runOnUiThread { updateProfileDisplay() }
@@ -235,21 +239,28 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private fun updateAudioModeIndicator() {
         val voxOn = AudioPreferences.isVoxEnabled(this)
         val jackIn = AudioEngine.isExternalAudioConnected(this)
+        val ncOn = AudioPreferences.isNoiseCancelEnabled(this)
+        val ncTag = if (ncOn) "·NC" else ""
         when {
             voxOn && jackIn -> {
                 tvAudioModeBadge.visibility = View.VISIBLE
-                tvAudioModeBadge.text = "🎧 VOX+JACK"
+                tvAudioModeBadge.text = "VOX+JACK$ncTag"
                 tvAudioModeBadge.setTextColor(Color.parseColor("#34D399"))
             }
             voxOn -> {
                 tvAudioModeBadge.visibility = View.VISIBLE
-                tvAudioModeBadge.text = "⚡ VOX"
+                tvAudioModeBadge.text = "VOX$ncTag"
                 tvAudioModeBadge.setTextColor(Color.parseColor("#34D399"))
             }
             jackIn -> {
                 tvAudioModeBadge.visibility = View.VISIBLE
-                tvAudioModeBadge.text = "🎧 JACK"
+                tvAudioModeBadge.text = "JACK$ncTag"
                 tvAudioModeBadge.setTextColor(Color.parseColor("#38BDF8"))
+            }
+            ncOn -> {
+                tvAudioModeBadge.visibility = View.VISIBLE
+                tvAudioModeBadge.text = "NC+DSP"
+                tvAudioModeBadge.setTextColor(Color.parseColor("#34D399"))
             }
             else -> {
                 tvAudioModeBadge.visibility = View.GONE
@@ -282,8 +293,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         btnConnect.setOnClickListener {
             animatePress(it)
             val s = dmrService ?: return@setOnClickListener
-            if (s.isConnected) {
-                s.disconnect()
+            if (s.isConnectingOrConnected) {
+                s.disconnect(manual = true)
             } else {
                 val profile = profileStore.getActiveProfile()
                 if (profile == null) {
@@ -395,6 +406,23 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         startActivityForResult(intent, REQ_PROFILES)
     }
 
+    private fun openDeviceSettings() {
+        val candidates = listOf(
+            Intent().setComponent(ComponentName("cc.unipro.usettings", "cc.unipro.usettings.MainActivity")),
+            Intent(android.provider.Settings.ACTION_SETTINGS),
+            Intent(android.provider.Settings.ACTION_WIFI_SETTINGS),
+            Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+        )
+        for (intent in candidates) {
+            try {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                return
+            } catch (_: Exception) {}
+        }
+        Toast.makeText(this, "Tidak dapat membuka Pengaturan", Toast.LENGTH_SHORT).show()
+    }
+
     private fun openAllApps() {
         try {
             val intent = packageManager.getLaunchIntentForPackage("com.dtt.moreapp")
@@ -429,26 +457,33 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
     private fun startCallsignPulse(baseColor: Int, glowColor: Int) {
         callsignPulseAnimator?.cancel()
+        callsignPulseAnimator = null
         tvCallsignId.scaleX = 1.0f
         tvCallsignId.scaleY = 1.0f
-        callsignPulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 2400L // 2.4s calm breathing rhythm (no rapid flicker)
-            repeatMode = ValueAnimator.REVERSE
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = AccelerateDecelerateInterpolator()
-            val evaluator = ArgbEvaluator()
-            addUpdateListener { anim ->
-                val frac = anim.animatedFraction
-                val color = evaluator.evaluate(frac, baseColor, glowColor) as Int
-                tvCallsignId.setTextColor(color)
-            }
-            start()
+        tvCallsignId.alpha = 1.0f
+        tvCallsignId.translationY = 0f
+        // Layar fisik PoC 160x128 (98 dpi SPI TFT): gunakan warna solid statis agar pixel huruf 100% tajam tanpa flickering
+        tvCallsignId.setTextColor(baseColor)
+    }
+
+    private fun updateLastHeardBanner(isRxActive: Boolean = (dmrService?.isRx == true)) {
+        tvLastHeard.visibility = View.VISIBLE
+        // Saat sedang ada stasiun masuk (RX), tampilkan stasiun SEBELUMNYA di baris LH agar tidak kembar dengan Callsign RX di bawahnya.
+        // Begitu RX selesai (Standby) atau saat kita tekan PTT (TX), tampilkan stasiun terakhir yang barusan bicara (lastHeardDisplay).
+        val targetLh = if (isRxActive) previousHeardDisplay else lastHeardDisplay
+        if (targetLh.isNotEmpty()) {
+            tvLastHeard.text = "LH: $targetLh"
+            tvLastHeard.setTextColor(Color.parseColor("#FBBF24"))
+        } else {
+            tvLastHeard.text = "LH: -"
+            tvLastHeard.setTextColor(Color.parseColor("#64748B"))
         }
     }
 
     private fun updateProfileDisplay() {
         val p = profileStore.getActiveProfile()
         val (chNum, totalCh) = profileStore.getActiveChannelIndex()
+        updateLastHeardBanner()
         if (p != null) {
             if (p.callsign.isNotBlank()) {
                 CallbookManager.cacheCallsign(this, p.dmrId, p.callsign)
@@ -457,11 +492,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             tvProfileName.text = p.name
             tvTg.text = "TG ${p.talkgroup}"
             tvSlot.text = "TS ${p.slot}"
-            if (lastHeardDisplay.isNotEmpty()) {
-                tvCallsignId.text = lastHeardDisplay
-            } else {
-                tvCallsignId.text = "${p.callsign} (${p.dmrId})"
-            }
+            tvCallsignId.text = CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign)
             startCallsignPulse(Color.parseColor("#38BDF8"), Color.parseColor("#BAE6FD"))
             tvRxInfo.text = "${p.name} · TG ${p.talkgroup} · TS ${p.slot} · STANDBY"
         } else {
@@ -492,18 +523,58 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         var voxOn = AudioPreferences.isVoxEnabled(this)
         var headsetPrio = AudioPreferences.isHeadsetPriority(this)
         var totSec = AudioPreferences.getTotSeconds(this)
+        var ncOn = AudioPreferences.isNoiseCancelEnabled(this)
+        var autoConnOn = AudioPreferences.isAutoConnectEnabled(this)
 
         val btnToggleChirp = view.findViewById<Button>(R.id.btnToggleChirp)
         val btnTogglePttMode = view.findViewById<Button>(R.id.btnTogglePttMode)
         val btnToggleVox = view.findViewById<Button>(R.id.btnToggleVox)
         val btnToggleHeadset = view.findViewById<Button>(R.id.btnToggleHeadset)
         val btnToggleTot = view.findViewById<Button>(R.id.btnToggleTot)
+        val btnToggleNc = view.findViewById<Button>(R.id.btnToggleNc)
+        val btnToggleAutoConn = view.findViewById<Button>(R.id.btnToggleAutoConn)
 
         fun updateLabels() {
             tvMic.text = "${(curMic * 100).toInt()}%"
             tvSpk.text = "${(curSpk * 100).toInt()}%"
         }
         updateLabels()
+
+        fun updateNcBtn() {
+            btnToggleNc?.text = if (ncOn) "NC+DSP: ON" else "NC+DSP: OFF"
+            btnToggleNc?.setTextColor(if (ncOn) Color.parseColor("#34D399") else Color.parseColor("#94A3B8"))
+        }
+        updateNcBtn()
+
+        fun updateAutoConnBtn() {
+            btnToggleAutoConn?.text = if (autoConnOn) "AUTO-CONN: ON" else "AUTO-CONN: OFF"
+            btnToggleAutoConn?.setTextColor(if (autoConnOn) Color.parseColor("#34D399") else Color.parseColor("#94A3B8"))
+        }
+        updateAutoConnBtn()
+
+        btnToggleNc?.setOnClickListener {
+            ncOn = !ncOn
+            updateNcBtn()
+            AudioPreferences.setNoiseCancelEnabled(this, ncOn)
+            dmrService?.updateAudioSettings()
+            updateAudioModeIndicator()
+            Toast.makeText(
+                this,
+                if (ncOn) "Noise Cancelling & Voice Clarity DSP Aktif" else "Noise Cancelling DSP Nonaktif",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
+        btnToggleAutoConn?.setOnClickListener {
+            autoConnOn = !autoConnOn
+            updateAutoConnBtn()
+            AudioPreferences.setAutoConnectEnabled(this, autoConnOn)
+            Toast.makeText(
+                this,
+                if (autoConnOn) "Auto-Connect Aktif saat aplikasi dibuka" else "Auto-Connect Nonaktif",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
 
         fun updateChirpBtn() {
             btnToggleChirp?.text = if (chirpOn) "CHIRP: ON" else "CHIRP: OFF"
@@ -634,6 +705,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             AudioPreferences.setVoxEnabled(this, voxOn)
             AudioPreferences.setHeadsetPriority(this, headsetPrio)
             AudioPreferences.setTotSeconds(this, totSec)
+            AudioPreferences.setNoiseCancelEnabled(this, ncOn)
+            AudioPreferences.setAutoConnectEnabled(this, autoConnOn)
             dmrService?.updateAudioSettings()
             updateAudioModeIndicator()
             Toast.makeText(this, "Pengaturan disimpan", Toast.LENGTH_SHORT).show()
@@ -684,6 +757,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                         Toast.makeText(this, "Gagal mengunduh: $err", Toast.LENGTH_LONG).show()
                     } else {
                         refreshCount()
+                        updateProfileDisplay()
                         Toast.makeText(this, "Selesai! $count stasiun tersimpan", Toast.LENGTH_LONG).show()
                     }
                 }
@@ -731,6 +805,10 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         view.findViewById<Button>(R.id.btnAppChannels)?.setOnClickListener {
             dialog.dismiss()
             openProfiles()
+        }
+        view.findViewById<Button>(R.id.btnAppSettings)?.setOnClickListener {
+            dialog.dismiss()
+            openDeviceSettings()
         }
         view.findViewById<Button>(R.id.btnAppMoreApp)?.setOnClickListener {
             dialog.dismiss()
@@ -876,6 +954,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         val btnJackPriority = view.findViewById<Button>(R.id.btnJackPriority)
         val btnChirpToggle = view.findViewById<Button>(R.id.btnChirpToggle)
         val btnPttModeToggle = view.findViewById<Button>(R.id.btnPttModeToggle)
+        val btnNcToggle = view.findViewById<Button>(R.id.btnNcToggle)
+        val btnAutoConnToggle = view.findViewById<Button>(R.id.btnAutoConnToggle)
 
         var curMic = AudioPreferences.getMicGain(this)
         var curSpk = AudioPreferences.getSpkGain(this)
@@ -884,6 +964,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         var voxOn = AudioPreferences.isVoxEnabled(this)
         var headsetPrio = AudioPreferences.isHeadsetPriority(this)
         var totSec = AudioPreferences.getTotSeconds(this)
+        var ncOn = AudioPreferences.isNoiseCancelEnabled(this)
+        var autoConnOn = AudioPreferences.isAutoConnectEnabled(this)
 
         fun updateAudioUi() {
             tvMic.text = "${(curMic * 100).toInt()}%"
@@ -898,8 +980,25 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             btnPttModeToggle.setTextColor(if (pttToggleOn) Color.parseColor("#34D399") else Color.parseColor("#38BDF8"))
             btnTotCycle.text = if (totSec == 0) "TOT: OFF" else "TOT: ${totSec}s"
             btnTotCycle.setTextColor(if (totSec == 0) Color.parseColor("#94A3B8") else Color.parseColor("#38BDF8"))
+            btnNcToggle?.text = if (ncOn) "NC+DSP: ON" else "NC+DSP: OFF"
+            btnNcToggle?.setTextColor(if (ncOn) Color.parseColor("#34D399") else Color.parseColor("#94A3B8"))
+            btnAutoConnToggle?.text = if (autoConnOn) "AUTO-CONN: ON" else "AUTO-CONN: OFF"
+            btnAutoConnToggle?.setTextColor(if (autoConnOn) Color.parseColor("#34D399") else Color.parseColor("#94A3B8"))
         }
         updateAudioUi()
+
+        btnNcToggle?.setOnClickListener {
+            ncOn = !ncOn
+            updateAudioUi()
+            AudioPreferences.setNoiseCancelEnabled(this, ncOn)
+            dmrService?.updateAudioSettings()
+            updateAudioModeIndicator()
+        }
+        btnAutoConnToggle?.setOnClickListener {
+            autoConnOn = !autoConnOn
+            updateAudioUi()
+            AudioPreferences.setAutoConnectEnabled(this, autoConnOn)
+        }
 
         btnMicDown.setOnClickListener {
             curMic = (curMic - 0.25f).coerceAtLeast(0.1f)
@@ -990,6 +1089,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                             Toast.makeText(this, "Gagal mengunduh: $err", Toast.LENGTH_LONG).show()
                         } else {
                             refreshCbCount()
+                            updateProfileDisplay()
                             tvCbMsg.text = "✓ Selesai! $count stasiun tersimpan"
                             Toast.makeText(this, "Selesai! $count stasiun terindeks", Toast.LENGTH_SHORT).show()
                         }
@@ -1060,25 +1160,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private fun updateUiFromService() {
         val s = dmrService ?: return
         updateAudioModeIndicator()
-        if (s.isConnected) {
-            btnConnect.text = "DISC"
-            btnConnect.setTextColor(Color.parseColor("#34D399"))
-            tvStatus.text = "● ONLINE"
-            tvStatus.setTextColor(Color.parseColor("#34D399"))
-            tvStatus.setBackgroundResource(R.drawable.badge_status_online)
-            tvModeBadge.text = "STANDBY"
-            tvModeBadge.setTextColor(Color.parseColor("#38BDF8"))
-            startStatusPulse(false)
-        } else {
-            btnConnect.text = "CONN"
-            btnConnect.setTextColor(Color.parseColor("#38BDF8"))
-            tvStatus.text = "● OFFLINE"
-            tvStatus.setTextColor(Color.parseColor("#94A3B8"))
-            tvStatus.setBackgroundResource(R.drawable.badge_status_offline)
-            tvModeBadge.text = "OFFLINE"
-            tvModeBadge.setTextColor(Color.parseColor("#64748B"))
-            startStatusPulse(false)
-        }
+        onStateChanged(s.currentState, "")
         if (s.isTx) {
             onTxStateChanged(true)
         } else if (s.isRx) {
@@ -1348,6 +1430,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     override fun onChannelSwitched(profile: DmrProfile, channelIndex: Int, totalChannels: Int) {
         runOnUiThread {
             lastHeardDisplay = ""
+            lastHeardSrcId = 0
+            previousHeardDisplay = ""
             updateProfileDisplay()
             animatePop(tvChannelBadge)
             animatePop(tvProfileName)
@@ -1441,27 +1525,33 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 }
 
                 val p = profileStore.getActiveProfile()
-                val selfCall = if (p != null && srcId == p.dmrId) p.callsign else null
-                val knownCall = selfCall ?: CallbookManager.getCallsign(this, srcId)
+                val knownCall = CallbookManager.getCallsign(this, srcId)
+                    ?: if (p != null && srcId == p.dmrId) CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign) else null
 
                 val displayLabel = knownCall ?: "$srcId"
+                if (lastHeardSrcId != 0 && lastHeardSrcId != srcId && lastHeardDisplay.isNotEmpty()) {
+                    previousHeardDisplay = lastHeardDisplay
+                }
+                lastHeardSrcId = srcId
                 lastHeardDisplay = "$displayLabel"
+                updateLastHeardBanner(isRxActive = true)
                 tvCallsignId.text = "$displayLabel"
-                startCallsignPulse(Color.parseColor("#10B981"), Color.parseColor("#A7F3D0"))
-                animatePop(tvCallsignId)
+                startCallsignPulse(Color.parseColor("#34D399"), Color.parseColor("#A7F3D0"))
                 val targetTg = if (talkgroup > 0) talkgroup else (p?.talkgroup ?: 0)
                 tvRxInfo.text = if (knownCall != null) "RX ID: $srcId · TG $targetTg · SUARA MASUK" else "MENCARI CALLSIGN ($srcId)..."
                 tvRxInfo.setTextColor(Color.parseColor("#34D399"))
 
                 if (knownCall == null) {
                     CallbookManager.resolveAsync(this, srcId) { resolved ->
-                        lastHeardDisplay = "$resolved"
+                        if (lastHeardSrcId == srcId) {
+                            lastHeardDisplay = "$resolved"
+                        }
                         if (dmrService?.isRx == true && dmrService?.currentRxSrc == srcId) {
                             tvCallsignId.text = "$resolved"
                             tvRxInfo.text = "RX ID: $srcId · TG $targetTg · SUARA MASUK"
-                        } else if (dmrService?.isTx != true) {
-                            tvCallsignId.text = "$resolved"
-                            startCallsignPulse(Color.parseColor("#38BDF8"), Color.parseColor("#BAE6FD"))
+                            updateLastHeardBanner(isRxActive = true)
+                        } else {
+                            updateLastHeardBanner(isRxActive = false)
                         }
                     }
                 }
@@ -1471,6 +1561,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 startStatusPulse(false)
                 hudWaveform.setModeAndLevel(HudWaveformView.Mode.STANDBY, 0f)
                 hudSmeter.setLevel(0f)
+                updateLastHeardBanner(isRxActive = false)
 
                 val s = dmrService
                 if (s?.isConnected == true) {
@@ -1484,9 +1575,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 if (p != null) {
                     tvTg.text = "TG ${p.talkgroup}"
                     tvTg.setTextColor(Color.parseColor("#38BDF8"))
-                }
-                if (lastHeardDisplay.isNotEmpty()) {
-                    tvCallsignId.text = lastHeardDisplay
+                    tvCallsignId.text = CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign)
                 } else {
                     updateProfileDisplay()
                 }
@@ -1505,18 +1594,20 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 tvStatus.text = "● TX"
                 tvStatus.setTextColor(Color.parseColor("#F43F5E"))
                 tvStatus.setBackgroundResource(R.drawable.badge_status_tx)
-                tvModeBadge.text = "🔥 TX"
+                tvModeBadge.text = "● TX"
                 tvModeBadge.setTextColor(Color.parseColor("#F43F5E"))
                 tvTg.setTextColor(Color.parseColor("#F43F5E"))
                 startStatusPulse(true)
                 startQsoTimer("#F43F5E")
                 hudWaveform.setModeAndLevel(HudWaveformView.Mode.TX, 0.4f)
 
+                // Tampilkan info Last Heard (LH) tepat di atas Callsign User
+                updateLastHeardBanner(isRxActive = false)
+
                 val p = profileStore.getActiveProfile()
                 val call = p?.callsign?.ifBlank { "ME" } ?: "ME"
-                tvCallsignId.text = "$call (${p?.dmrId ?: 0})"
-                startCallsignPulse(Color.parseColor("#EF4444"), Color.parseColor("#FEF08A"))
-                animatePop(tvCallsignId)
+                tvCallsignId.text = CallbookManager.resolveStationLabel(this, p?.dmrId ?: 0, call)
+                startCallsignPulse(Color.parseColor("#FEF08A"), Color.parseColor("#FEF08A"))
                 tvRxInfo.text = "TRANSMIT KE TG ${p?.talkgroup ?: 0} · MIC AKTIF"
                 tvRxInfo.setTextColor(Color.parseColor("#F43F5E"))
                 btnPtt.setBackgroundResource(R.drawable.btn_ptt_active)
@@ -1526,6 +1617,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 startStatusPulse(false)
                 hudWaveform.setModeAndLevel(HudWaveformView.Mode.STANDBY, 0f)
                 hudSmeter.setLevel(0f)
+                updateLastHeardBanner(isRxActive = false)
 
                 val s = dmrService
                 if (s?.isConnected == true) {
@@ -1539,9 +1631,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 if (p != null) {
                     tvTg.text = "TG ${p.talkgroup}"
                     tvTg.setTextColor(Color.parseColor("#38BDF8"))
-                }
-                if (lastHeardDisplay.isNotEmpty()) {
-                    tvCallsignId.text = lastHeardDisplay
+                    tvCallsignId.text = CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign)
                 } else {
                     updateProfileDisplay()
                 }

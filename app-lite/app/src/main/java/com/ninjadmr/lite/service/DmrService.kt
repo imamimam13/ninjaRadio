@@ -63,6 +63,7 @@ class DmrService : Service(), HbpClient.Callback {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var pttReceiver: BroadcastReceiver? = null
+    private var networkReceiver: BroadcastReceiver? = null
 
     var listener: Listener? = null
     var activeProfile: DmrProfile? = null
@@ -70,6 +71,12 @@ class DmrService : Service(), HbpClient.Callback {
 
     // State tracking
     var isConnected = false
+        private set
+    val isConnectingOrConnected: Boolean
+        get() = client != null
+    val currentState: HbpClient.State
+        get() = client?.state ?: HbpClient.State.STOPPED
+    var userManualDisconnect = false
         private set
     var isTx = false
         private set
@@ -128,13 +135,65 @@ class DmrService : Service(), HbpClient.Callback {
         profileStore = ProfileStore(this)
         updateAudioSettings()
         registerPttReceiver()
+        registerNetworkReceiver()
         mainHandler.post(rxTimeoutRunnable)
+        // Auto-connect on startup if enabled and a valid profile is already saved
+        tryAutoConnect()
+    }
+
+    private fun registerNetworkReceiver() {
+        if (networkReceiver != null) return
+        val filter = IntentFilter().apply {
+            addAction("android.net.conn.CONNECTIVITY_CHANGE")
+            addAction("android.net.wifi.STATE_CHANGE")
+        }
+        networkReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                val activeNet = cm?.activeNetworkInfo
+                if (activeNet != null && activeNet.isConnected) {
+                    if (client != null && !isConnected) {
+                        Log.i(TAG, "Network became active (${activeNet.typeName}) - waking HbpClient immediately!")
+                        client?.wakeRetry()
+                    } else if (client == null && !userManualDisconnect) {
+                        tryAutoConnect()
+                    }
+                }
+            }
+        }
+        try {
+            registerReceiver(networkReceiver, filter)
+        } catch (e: Exception) {
+            Log.e(TAG, "registerNetworkReceiver failed: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkReceiver() {
+        networkReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {}
+        }
+        networkReceiver = null
+    }
+
+    fun tryAutoConnect(): Boolean {
+        if (!AudioPreferences.isAutoConnectEnabled(this)) return false
+        if (isConnectingOrConnected || userManualDisconnect) return false
+        val profile = profileStore.getActiveProfile() ?: return false
+        if (profile.host.isBlank() || profile.dmrId <= 0 || profile.talkgroup <= 0) {
+            return false
+        }
+        Log.i(TAG, "Auto-connecting on startup with saved profile: ${profile.name} (${profile.host}:${profile.port})")
+        connectWithProfile(profile)
+        return true
     }
 
     fun updateAudioSettings() {
         val mic = AudioPreferences.getMicGain(this)
         val spk = AudioPreferences.getSpkGain(this)
-        audio.configure(mic, spk)
+        val nc = AudioPreferences.isNoiseCancelEnabled(this)
+        audio.configure(mic, spk, nc)
         syncVoxMonitorState()
     }
 
@@ -160,6 +219,7 @@ class DmrService : Service(), HbpClient.Callback {
         mainHandler.removeCallbacks(rxTimeoutRunnable)
         disconnect()
         unregisterPttReceiver()
+        unregisterNetworkReceiver()
         audio.stopPlayback()
         audio.stopCapture()
         super.onDestroy()
@@ -230,8 +290,9 @@ class DmrService : Service(), HbpClient.Callback {
 
     fun connectWithProfile(profile: DmrProfile) {
         if (client != null) {
-            disconnect()
+            disconnect(manual = false)
         }
+        userManualDisconnect = false
         activeProfile = profile
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NinjaDmr:ServiceWakeLock")
@@ -263,7 +324,10 @@ class DmrService : Service(), HbpClient.Callback {
         startForegroundServiceNotification("Menghubungkan ke ${profile.name}...")
     }
 
-    fun disconnect() {
+    fun disconnect(manual: Boolean = false) {
+        if (manual) {
+            userManualDisconnect = true
+        }
         if (isTx) endTx()
         if (isRx) endRx()
 
@@ -316,22 +380,30 @@ class DmrService : Service(), HbpClient.Callback {
         if (p.isPrivate && p.dst != profile.dmrId) return
         if (p.src == profile.dmrId) return
 
-        // Check frame type: 2 = Terminator or Voice Header
+        // Check frame type: 2 = Data Sync (Voice LC Header = 1, Terminator = 2, others = CSBK/Data)
         if (p.frameType == 2) {
             if (p.dtype == 2) {
                 endRx()
                 return
             } else if (p.dtype == 1) {
-                if (!isRx || p.streamId != rxStream) {
+                rxLastMs = System.currentTimeMillis()
+                if (!isRx || p.src != currentRxSrc) {
                     beginRx(p)
+                } else {
+                    rxStream = p.streamId
                 }
                 return
             }
+            // Ignore non-voice data / CSBK frames
+            return
         }
+        if (p.frameType > 2) return
 
-        // Voice frame
-        if (!isRx || p.streamId != rxStream) {
+        // Voice frame (frameType 0 or 1)
+        if (!isRx || p.src != currentRxSrc) {
             beginRx(p)
+        } else {
+            rxStream = p.streamId
         }
         rxLastMs = System.currentTimeMillis()
 
@@ -360,6 +432,7 @@ class DmrService : Service(), HbpClient.Callback {
 
     private fun beginRx(p: Dmrd) {
         vocoder.resetDecoder()
+        audio.resetRxDsp()
         rxStream = p.streamId
         rxLastMs = System.currentTimeMillis()
         currentRxSrc = p.src
@@ -402,6 +475,7 @@ class DmrService : Service(), HbpClient.Callback {
         }
 
         vocoder.resetEncoder()
+        audio.resetTxDsp()
         txStream = (System.currentTimeMillis() and 0x7FFFFFFF).toInt()
         txSeq = 0
         txVseq = 0

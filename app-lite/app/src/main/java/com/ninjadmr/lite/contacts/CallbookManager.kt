@@ -61,13 +61,24 @@ object CallbookManager {
                 } catch (_: Exception) {}
             }
 
-            // Also load any single lookups from SharedPreferences
+            // Also load any single lookups from SharedPreferences without overwriting full "CALLSIGN (Name)" entries
             val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            var staleKeysRemoved = false
+            val editor = prefs.edit()
             for ((key, value) in prefs.all) {
                 val id = key.toIntOrNull()
                 if (id != null && value is String && value.isNotBlank()) {
-                    memoryCache[id] = value
+                    val existing = memoryCache[id]
+                    if (existing == null || !existing.contains("(") || value.contains("(")) {
+                        memoryCache[id] = value
+                    } else {
+                        editor.remove(key)
+                        staleKeysRemoved = true
+                    }
                 }
+            }
+            if (staleKeysRemoved) {
+                editor.apply()
             }
             isLoaded = true
         }
@@ -90,15 +101,37 @@ object CallbookManager {
     fun getCallsign(context: Context, dmrId: Int): String? {
         if (dmrId <= 0) return null
         ensureLoaded(context)
-        return memoryCache[dmrId]
+        return memoryCache[dmrId] ?: if (dmrId > 9999999) memoryCache[dmrId / 100] else null
+    }
+
+    fun resolveStationLabel(context: Context, dmrId: Int, fallbackCallsign: String = ""): String {
+        val fromBook = getCallsign(context, dmrId)
+        if (!fromBook.isNullOrBlank()) {
+            if (fromBook.contains("(")) return fromBook
+            return "$fromBook ($dmrId)"
+        }
+        val cleanFallback = fallbackCallsign.trim().uppercase()
+        return if (cleanFallback.isNotEmpty()) {
+            if (dmrId > 0) "$cleanFallback ($dmrId)" else cleanFallback
+        } else {
+            "$dmrId"
+        }
     }
 
     fun cacheCallsign(context: Context, dmrId: Int, callsign: String) {
         if (dmrId <= 0 || callsign.isBlank()) return
-        memoryCache[dmrId] = callsign.trim().uppercase()
+        ensureLoaded(context)
+        val trimmed = callsign.trim()
+        val existing = memoryCache[dmrId]
+        // Never overwrite a rich "CALLSIGN (Name)" entry with a bare callsign
+        if (existing != null && existing.contains("(") && !trimmed.contains("(")) {
+            return
+        }
+        val normalized = if (trimmed.contains("(")) trimmed else trimmed.uppercase()
+        memoryCache[dmrId] = normalized
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString(dmrId.toString(), callsign.trim().uppercase())
+            .putString(dmrId.toString(), normalized)
             .apply()
     }
 

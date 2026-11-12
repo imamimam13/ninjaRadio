@@ -104,6 +104,22 @@ class HbpClient(
         }
     }
 
+    /**
+     * Immediately wakes up the retry/handshake loop (e.g. when Wi-Fi or cellular comes online after boot).
+     */
+    fun wakeRetry() {
+        if (running && state != State.CONNECTED) {
+            Log.i(TAG, "wakeRetry() triggered in state $state")
+            attempt = 0
+            wake = true
+            if (state == State.LOGIN || state == State.RETRY) {
+                try {
+                    socket?.close()
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     private fun setState(s: State, info: String) {
         Log.i(TAG, "setState: $s, info: $info")
         state = s
@@ -118,7 +134,7 @@ class HbpClient(
                 Log.i(TAG, "Resolving host $host:$port...")
                 val addr = InetAddress.getByName(host)
                 s = DatagramSocket()
-                s.soTimeout = 1000
+                s.soTimeout = 800
                 s.connect(addr, port)
                 socket = s
 
@@ -138,17 +154,22 @@ class HbpClient(
                         val data = packet.data.copyOf(packet.length)
                         ok = handle(data)
                     } catch (_: SocketTimeoutException) {
-                        // ignore timeout, check keepalives
+                        // ignore timeout, check keepalives / login retry
                     }
 
                     val now = System.currentTimeMillis()
-                    if (state == State.CONNECTED && now - lastPing >= 5000) {
+                    if (state == State.LOGIN && now - lastPing >= 1500) {
+                        // Re-send RPTL quickly if boot network just came up and dropped the first UDP packet
+                        send(Dmr.ascii("RPTL") + id)
+                        lastPing = now
+                    } else if (state == State.CONNECTED && now - lastPing >= 5000) {
                         send(Dmr.ascii("RPTPING") + id)
                         lastPing = now
                     }
-                    if (now - lastRx > 20000) {
-                        errorInfo = "Server timeout (20s)"
-                        Log.w(TAG, "Server timeout (20s) without packets")
+                    val timeoutMs = if (state == State.CONNECTED) 20000L else 4500L
+                    if (now - lastRx > timeoutMs) {
+                        errorInfo = if (state == State.CONNECTED) "Server timeout (20s)" else "Menunggu jaringan/server..."
+                        Log.w(TAG, "Timeout (${timeoutMs}ms) in state $state without packets")
                         ok = false
                     }
                 }
@@ -174,7 +195,11 @@ class HbpClient(
                     errorInfo = if (kickReason.isNotEmpty()) kickReason else "Koneksi terputus"
                 }
                 Log.w(TAG, "Connection lost! errorInfo: '$errorInfo', kicked: $kicked")
-                val delay = if (kicked) 500L else (3000L shl (attempt.coerceAtMost(5))).coerceAtMost(60000L)
+                val delay = when {
+                    kicked -> 300L
+                    attempt < 6 -> 1200L
+                    else -> 2500L
+                }
                 attempt++
                 setState(State.RETRY, "$errorInfo - Hubungi kembali ${delay / 1000}s (#$attempt)")
 
