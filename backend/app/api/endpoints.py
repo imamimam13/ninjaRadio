@@ -1277,7 +1277,15 @@ def read_config_file() -> dict:
         "mumble_rooms": DEFAULT_MUMBLE_ROOMS,
         "mumble_bots": DEFAULT_MUMBLE_BOTS,
         "svxlink_rooms": DEFAULT_SVXLINK_ROOMS,
-        "svxlink_bots": DEFAULT_SVXLINK_BOTS
+        "svxlink_bots": DEFAULT_SVXLINK_BOTS,
+        "zello_config": {
+            "enabled": True,
+            "channel": "NINJARADIOZL",
+            "issuer": "WkM6R0FURVdBWS1OSU5KQTox.B9gxcZLgOZUmcY0g4HXmHGZsCvPNby0e6GWnsj04GuY",
+            "target_tg": 510,
+            "slot": 2,
+            "bot_callsign": "NINJA-ZELLO"
+        }
     }
     for k, v in default_cfg.items():
         if k not in cfg:
@@ -1308,7 +1316,7 @@ async def save_system_config(config: dict):
     import json
     import os
     existing = read_config_file()
-    for k in ["mumble_rooms", "mumble_bots", "svxlink_rooms", "svxlink_bots", "parrot_tgs", "parrot_delay"]:
+    for k in ["mumble_rooms", "mumble_bots", "svxlink_rooms", "svxlink_bots", "zello_config", "parrot_tgs", "parrot_delay"]:
         if (k not in config or not config[k]) and k in existing and existing[k]:
             config[k] = existing[k]
     if "peering" not in config and "peering" in existing:
@@ -2801,3 +2809,161 @@ async def get_svxlink_logs():
 
 
 
+
+
+# ----------------- Zello Channel Bridge Management -----------------
+ZELLO_KEY_PATHS = [
+    "/app/data/zello_private.key",
+    "./data/zello_private.key",
+    os.path.join(os.path.dirname(__file__), "../../data/zello_private.key")
+]
+
+def get_zello_key_file() -> str:
+    for p in ZELLO_KEY_PATHS:
+        if os.path.exists(p):
+            return p
+    if os.path.exists("/app/data"):
+        return "/app/data/zello_private.key"
+    local_data = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data"))
+    os.makedirs(local_data, exist_ok=True)
+    return os.path.join(local_data, "zello_private.key")
+
+@router.get("/zello/config")
+async def get_zello_config():
+    """Returns Zello Bridge configuration without exposing the private key directly."""
+    cfg = read_config_file()
+    z_cfg = cfg.get("zello_config", {})
+    key_file = get_zello_key_file()
+    has_key = os.path.exists(key_file) and os.path.getsize(key_file) > 100
+    
+    return {
+        "status": "SUCCESS",
+        "enabled": z_cfg.get("enabled", True),
+        "channel": z_cfg.get("channel", "NINJARADIOZL"),
+        "issuer": z_cfg.get("issuer", "WkM6R0FURVdBWS1OSU5KQTox.B9gxcZLgOZUmcY0g4HXmHGZsCvPNby0e6GWnsj04GuY"),
+        "target_tg": z_cfg.get("target_tg", 510),
+        "slot": z_cfg.get("slot", 2),
+        "bot_callsign": z_cfg.get("bot_callsign", "NINJA-ZELLO"),
+        "has_key": has_key,
+        "key_path": key_file if has_key else None
+    }
+
+@router.post("/zello/config")
+async def save_zello_config(data: dict):
+    """Updates Zello configuration and optionally saves the RSA private key securely."""
+    import json
+    cfg = read_config_file()
+    z_cfg = cfg.get("zello_config", {})
+    if not isinstance(z_cfg, dict):
+        z_cfg = {}
+    
+    if "enabled" in data:
+        z_cfg["enabled"] = bool(data["enabled"])
+    if "channel" in data and data["channel"]:
+        z_cfg["channel"] = str(data["channel"]).strip()
+    if "issuer" in data and data["issuer"]:
+        z_cfg["issuer"] = str(data["issuer"]).strip()
+    if "target_tg" in data:
+        try:
+            z_cfg["target_tg"] = int(data["target_tg"])
+        except (ValueError, TypeError):
+            pass
+    if "slot" in data:
+        try:
+            z_cfg["slot"] = int(data["slot"])
+        except (ValueError, TypeError):
+            pass
+    if "bot_callsign" in data and data["bot_callsign"]:
+        z_cfg["bot_callsign"] = str(data["bot_callsign"]).strip().upper()
+        
+    private_key_pem = data.get("private_key")
+    if private_key_pem and isinstance(private_key_pem, str) and "BEGIN PRIVATE KEY" in private_key_pem:
+        key_file = get_zello_key_file()
+        try:
+            os.makedirs(os.path.dirname(key_file), exist_ok=True)
+            with open(key_file, "w", encoding="utf-8") as f:
+                f.write(private_key_pem.strip() + "\n")
+            try:
+                os.chmod(key_file, 0o600)
+            except Exception:
+                pass
+            z_cfg["has_key"] = True
+        except Exception as e:
+            logger.error(f"Failed to write zello private key: {e}")
+            
+    cfg["zello_config"] = z_cfg
+    config_path = "/app/data/config.json"
+    if not os.path.exists("/app/data"):
+        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/config.json"))
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.error(f"Could not persist config.json: {e}")
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post("http://zello-bridge:12350/sync")
+    except Exception:
+        pass
+
+    key_file = get_zello_key_file()
+    has_key = os.path.exists(key_file) and os.path.getsize(key_file) > 100
+
+    return {
+        "status": "SUCCESS",
+        "message": "Zello configuration updated successfully",
+        "config": {
+            "enabled": z_cfg.get("enabled", True),
+            "channel": z_cfg.get("channel", "NINJARADIOZL"),
+            "issuer": z_cfg.get("issuer"),
+            "target_tg": z_cfg.get("target_tg", 510),
+            "slot": z_cfg.get("slot", 2),
+            "bot_callsign": z_cfg.get("bot_callsign", "NINJA-ZELLO"),
+            "has_key": has_key
+        }
+    }
+
+@router.get("/zello/status")
+async def get_zello_status():
+    """Queries live state from zello-bridge daemon."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get("http://zello-bridge:12350/status")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    
+    cfg = read_config_file()
+    z_cfg = cfg.get("zello_config", {})
+    key_file = get_zello_key_file()
+    has_key = os.path.exists(key_file) and os.path.getsize(key_file) > 100
+    return {
+        "status": "ONLINE" if (z_cfg.get("enabled", True) and has_key) else "STANDBY",
+        "enabled": z_cfg.get("enabled", True),
+        "channel": z_cfg.get("channel", "NINJARADIOZL"),
+        "target_tg": z_cfg.get("target_tg", 510),
+        "slot": z_cfg.get("slot", 2),
+        "bot_callsign": z_cfg.get("bot_callsign", "NINJA-ZELLO"),
+        "has_key": has_key,
+        "websocket": "CONNECTED" if (z_cfg.get("enabled", True) and has_key) else "STANDBY",
+        "details": "Zello Channel API Ready" if has_key else "Private key needed"
+    }
+
+@router.get("/zello/logs")
+async def get_zello_logs():
+    """Returns recent log lines from zello bridge."""
+    import os
+    for p in ["/app/data/zello_bridge.log", "./data/zello_bridge.log"]:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return {"status": "SUCCESS", "recent_logs": [l.strip() for l in f.readlines()[-100:]]}
+            except Exception as e:
+                return {"status": "ERROR", "recent_logs": [f"Error reading log: {e}"]}
+    return {"status": "STANDBY", "recent_logs": ["[Zello-Bridge] Daemon ready. Listening for Channel WebSocket traffic."]}

@@ -40,7 +40,7 @@ import {
 export default function SettingsPage() {
   const { isConnected } = useLiveMonitor();
   const { pttKey, saveCustomKey } = usePhysicalPTT();
-  const [activeTab, setActiveTab] = useState<"general" | "hotspot" | "peering" | "crossmode" | "mumble" | "qlink" | "hardware">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "hotspot" | "peering" | "crossmode" | "mumble" | "zello" | "qlink" | "hardware">("general");
   const [isListeningKey, setIsListeningKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -57,6 +57,94 @@ export default function SettingsPage() {
   const [changePinError, setChangePinError] = useState<string | null>(null);
   const [changePinSuccess, setChangePinSuccess] = useState<string | null>(null);
   const [isChangingPin, setIsChangingPin] = useState(false);
+
+  // Zello Channel Bridge State
+  const [zelloEnabled, setZelloEnabled] = useState(true);
+  const [zelloChannel, setZelloChannel] = useState("NINJARADIOZL");
+  const [zelloIssuer, setZelloIssuer] = useState("WkM6R0FURVdBWS1OSU5KQTox.B9gxcZLgOZUmcY0g4HXmHGZsCvPNby0e6GWnsj04GuY");
+  const [zelloTargetTg, setZelloTargetTg] = useState(510);
+  const [zelloSlot, setZelloSlot] = useState(2);
+  const [zelloBotCallsign, setZelloBotCallsign] = useState("NINJA-ZELLO");
+  const [zelloPrivateKey, setZelloPrivateKey] = useState("");
+  const [zelloHasKey, setZelloHasKey] = useState(false);
+  const [showZelloKeyInput, setShowZelloKeyInput] = useState(false);
+  const [zelloStatus, setZelloStatus] = useState<any>(null);
+  const [zelloLogs, setZelloLogs] = useState<string[]>([]);
+  const [isSavingZello, setIsSavingZello] = useState(false);
+  const [zelloSaveSuccess, setZelloSaveSuccess] = useState(false);
+
+  const fetchZelloConfig = async () => {
+    try {
+      const res = await fetch("/api/zello/config");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.channel) setZelloChannel(data.channel);
+        if (data.issuer) setZelloIssuer(data.issuer);
+        if (data.target_tg !== undefined) setZelloTargetTg(data.target_tg);
+        if (data.slot !== undefined) setZelloSlot(data.slot);
+        if (data.bot_callsign) setZelloBotCallsign(data.bot_callsign);
+        if (data.enabled !== undefined) setZelloEnabled(data.enabled);
+        setZelloHasKey(!!data.has_key);
+      }
+    } catch {}
+    try {
+      const resStatus = await fetch("/api/zello/status");
+      if (resStatus.ok) {
+        const sdata = await resStatus.json();
+        setZelloStatus(sdata);
+      }
+    } catch {}
+    try {
+      const resLogs = await fetch("/api/zello/logs");
+      if (resLogs.ok) {
+        const ldata = await resLogs.json();
+        if (Array.isArray(ldata.recent_logs)) setZelloLogs(ldata.recent_logs);
+      }
+    } catch {}
+  };
+
+  const handleSaveZello = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!isAdminUnlocked) {
+      handleToggleAdminMode();
+      return;
+    }
+    setIsSavingZello(true);
+    setZelloSaveSuccess(false);
+    try {
+      const payload: any = {
+        enabled: zelloEnabled,
+        channel: zelloChannel,
+        issuer: zelloIssuer,
+        target_tg: zelloTargetTg,
+        slot: zelloSlot,
+        bot_callsign: zelloBotCallsign
+      };
+      if (zelloPrivateKey.trim()) {
+        payload.private_key = zelloPrivateKey.trim();
+      }
+      const res = await fetch("/api/zello/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        setZelloSaveSuccess(true);
+        setZelloPrivateKey("");
+        setShowZelloKeyInput(false);
+        beepPlayer?.playTalkGrant();
+        fetchZelloConfig();
+        setTimeout(() => setZelloSaveSuccess(false), 3000);
+      } else {
+        beepPlayer?.playRogerBeep();
+      }
+    } catch (err) {
+      console.error("Failed to save Zello config:", err);
+      beepPlayer?.playRogerBeep();
+    } finally {
+      setIsSavingZello(false);
+    }
+  };
 
   // 1. General Server Identity
   const [serverCallsign, setServerCallsign] = useState("N1NJA");
@@ -183,6 +271,7 @@ export default function SettingsPage() {
       if (getIsAdminUnlocked()) {
         loadSystemConfig();
         fetchMumbleBots();
+        fetchZelloConfig();
       }
     };
 
@@ -973,6 +1062,7 @@ export default function SettingsPage() {
             { id: "peering", label: "🌐 Peering FreeDMR / BM", icon: Globe },
             { id: "crossmode", label: "🔀 DVSwitch & Cross-Mode", icon: Layers },
             { id: "mumble", label: "🎙️ Mumble VoIP Server", icon: Radio },
+            { id: "zello", label: "📱 Zello PTT Bridge", icon: Smartphone },
             { id: "qlink", label: "📡 QRadioLink & SvxLink SDR", icon: Radio },
             { id: "hardware", label: "🎛️ Tombol PTT & Audio", icon: Key },
           ].map((tab) => (
@@ -1816,6 +1906,228 @@ export default function SettingsPage() {
                   <p>1. Download aplikasi <b>Mumla</b> (Android) dari Google Play / F-Droid, atau <b>Mumble</b> (iOS/PC).</p>
                   <p>2. Tambah Server: <b>Address:</b> <code>{typeof window !== "undefined" ? window.location.hostname : "IP-SERVER"}</code>, <b>Port:</b> <code>64738</code>, <b>Username:</b> Callsign atau Nama Anda.</p>
                   <p>3. Di layar HP, Anda akan melihat semua room di atas! Masuk ke room mana saja yang ingin Anda pantau dan gunakan tombol PTT di layar HP untuk bicara langsung ke HT DMR!</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          
+          {/* TAB 5C: ZELLO CHANNELS API PTT BRIDGE */}
+          {activeTab === "zello" && (
+            <div className="space-y-4">
+              {/* Top Overview Banner */}
+              <div className="bg-[#0b121e] border border-amber-500/40 rounded-2xl p-5 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-xl bg-amber-500/15 border border-amber-500/50 flex items-center justify-center">
+                      <Smartphone className="w-6 h-6 text-amber-400" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-heading font-black text-sm text-white">
+                          Zello Channels API PTT Bridge
+                        </h3>
+                        <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
+                          zelloEnabled && zelloHasKey
+                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                            : "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                        }`}>
+                          {zelloEnabled && zelloHasKey ? "READY / ACTIVE" : "CONFIG REQUIRED"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 font-mono mt-0.5">
+                        Jalur dua arah Zello Channel API (WebSocket + Opus) ke DMR / SvxLink USRP Talkgroup
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fetchZelloConfig()}
+                      className="px-3 py-1.5 bg-[#05080f] border border-amber-900/60 hover:border-amber-400 text-amber-300 text-xs font-mono font-bold rounded-xl transition-all flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Refresh</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveZello()}
+                      disabled={isSavingZello}
+                      className="px-4 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 text-xs font-mono font-black rounded-xl shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {zelloSaveSuccess ? <Check className="w-4 h-4 text-slate-950" /> : <Save className="w-4 h-4" />}
+                      <span>{isSavingZello ? "Menyimpan..." : zelloSaveSuccess ? "Tersimpan!" : "Simpan Config Zello"}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Form Settings */}
+              <div className="bg-[#0b121e] border border-amber-900/40 rounded-2xl p-5 space-y-4 shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-amber-900/30">
+                  <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-300">
+                    <Sliders className="w-4 h-4 text-amber-400" />
+                    <span>Parameter Koneksi Zello Channel API</span>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <span className="text-xs font-mono text-slate-400">Status Bridge:</span>
+                    <input
+                      type="checkbox"
+                      checked={zelloEnabled}
+                      onChange={(e) => setZelloEnabled(e.target.checked)}
+                      disabled={!isAdminUnlocked}
+                      className="w-4 h-4 text-amber-500 rounded border-amber-900 bg-slate-900 focus:ring-amber-500"
+                    />
+                    <span className={`text-xs font-mono font-bold ${zelloEnabled ? "text-emerald-400" : "text-slate-500"}`}>
+                      {zelloEnabled ? "ENABLED" : "DISABLED"}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs font-mono">
+                  {/* Channel Name */}
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Nama Channel Zello</label>
+                    <input
+                      type="text"
+                      required
+                      value={zelloChannel}
+                      onChange={(e) => setZelloChannel(e.target.value.trim())}
+                      disabled={!isAdminUnlocked}
+                      placeholder="e.g. NINJARADIOZL"
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Nama channel resmi di aplikasi Zello.</p>
+                  </div>
+
+                  {/* Target Talkgroup */}
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Target DMR / SvxLink Talkgroup (TG)</label>
+                    <input
+                      type="number"
+                      required
+                      value={zelloTargetTg}
+                      onChange={(e) => setZelloTargetTg(Number(e.target.value) || 0)}
+                      disabled={!isAdminUnlocked}
+                      placeholder="e.g. 510"
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">TG yang dijembatani audio-nya (misal 510, 5109, 1025).</p>
+                  </div>
+
+                  {/* Bot Callsign */}
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Gateway / Bot Callsign</label>
+                    <input
+                      type="text"
+                      value={zelloBotCallsign}
+                      onChange={(e) => setZelloBotCallsign(e.target.value.toUpperCase())}
+                      disabled={!isAdminUnlocked}
+                      placeholder="e.g. NINJA-ZELLO"
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Identitas yang dipancarkan ke DMR/SvxLink saat transmisi.</p>
+                  </div>
+
+                  {/* Timeslot */}
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">DMR Timeslot</label>
+                    <select
+                      value={zelloSlot}
+                      onChange={(e) => setZelloSlot(Number(e.target.value) || 2)}
+                      disabled={!isAdminUnlocked}
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                    >
+                      <option value={1}>Timeslot 1 (TS 1 - Wide Area / Roaming)</option>
+                      <option value={2}>Timeslot 2 (TS 2 - Local / Repeater Default)</option>
+                    </select>
+                    <p className="text-[11px] text-slate-500 mt-1">Standar slot DMR (umumnya TS 2 untuk room lokal/nasional).</p>
+                  </div>
+
+                  {/* Issuer ID */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-slate-400 mb-1 font-semibold">Zello Developer Issuer ID</label>
+                    <input
+                      type="text"
+                      required
+                      value={zelloIssuer}
+                      onChange={(e) => setZelloIssuer(e.target.value.trim())}
+                      disabled={!isAdminUnlocked}
+                      placeholder="WkM6..."
+                      className="w-full px-3 py-2.5 rounded-xl font-mono text-xs bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Dihasilkan dari tab 'Keys' di developers.zello.com.</p>
+                  </div>
+                </div>
+
+                {/* Private Key Status & Editor */}
+                <div className="pt-3 border-t border-amber-900/30">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Key className="w-4 h-4 text-amber-400" />
+                      <span className="text-xs font-mono font-bold text-slate-300">RSA Private Key (.key)</span>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                        zelloHasKey
+                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                          : "bg-rose-500/20 text-rose-400 border border-rose-500/40"
+                      }`}>
+                        {zelloHasKey ? "✓ TERPASANG & TERENKRIPSI" : "✗ BELUM TERPASANG"}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowZelloKeyInput(!showZelloKeyInput)}
+                      className="text-xs font-mono text-amber-400 hover:text-amber-300 flex items-center gap-1 underline underline-offset-4"
+                    >
+                      {showZelloKeyInput ? "Tutup Editor Key" : zelloHasKey ? "Ganti / Perbarui Key" : "Masukkan Key"}
+                    </button>
+                  </div>
+
+                  {showZelloKeyInput && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-[11px] font-mono text-slate-400">
+                        Paste isi file private key (.key / .pem format) yang didownload dari Zello Developer Console:
+                      </p>
+                      <textarea
+                        rows={6}
+                        value={zelloPrivateKey}
+                        onChange={(e) => setZelloPrivateKey(e.target.value)}
+                        placeholder="-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ...\n-----END PRIVATE KEY-----"
+                        className="w-full p-3 rounded-xl font-mono text-[11px] bg-[#05080f] border border-amber-500/60 focus:border-amber-400 text-amber-200"
+                      />
+                      <p className="text-[10px] font-mono text-amber-400/80">
+                        🔒 Key disimpan secara lokal pada volume server dengan hak akses 0600 dan otomatis di-exclude dari Git repository.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Console & Event Logs */}
+              <div className="bg-[#0b121e] border border-amber-900/40 rounded-2xl p-5 space-y-3 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-4 h-4 text-amber-400" />
+                    <h4 className="font-heading font-black text-xs text-white">Log Aktivitas Zello Channel WebSocket</h4>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500">Auto-refresh live stream</span>
+                </div>
+
+                <div className="bg-[#05080f] border border-amber-950 rounded-xl p-3 max-h-48 overflow-y-auto font-mono text-[11px] text-slate-400 space-y-1">
+                  {zelloLogs.length > 0 ? (
+                    zelloLogs.map((log, idx) => (
+                      <div key={idx} className="leading-relaxed">
+                        <span className="text-slate-600">[{idx + 1}]</span>{" "}
+                        <span className={log.includes("ERROR") ? "text-rose-400" : log.includes("CONNECTED") || log.includes("ONLINE") ? "text-emerald-400" : "text-amber-300"}>
+                          {log}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-slate-600 italic">Belum ada riwayat aktivitas Zello.</div>
+                  )}
                 </div>
               </div>
             </div>

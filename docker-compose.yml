@@ -144,6 +144,28 @@ services:
           - svxlink-bridge
           - bridge-svxlink
 
+  # 3d. Zello Channels API <--> DMR / SvxLink USRP Audio Bridge
+  zello-bridge:
+    build:
+      context: ./bridge-zello
+      dockerfile: Dockerfile
+    container_name: ninjaradio_zello_bridge
+    restart: unless-stopped
+    environment:
+      - DMR_USRP_HOST=core
+      - DMR_USRP_PORT=
+      - ZELLO_BRIDGE_HTTP_PORT=12350
+    depends_on:
+      - core
+    volumes:
+      - ./bridge-zello:/app
+      - ninjaradio_data:/app/data
+    networks:
+      ninjaradio_net:
+        aliases:
+          - zello-bridge
+          - bridge-zello
+
   # 4. Backend API & Live WebSocket Hub (FastAPI)
   backend:
     build:
