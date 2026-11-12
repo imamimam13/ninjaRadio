@@ -528,6 +528,7 @@ DEFAULT_CONFIG = {
     "hotspot_password": "ninjaradio_pass",
     "rx_audio_gain": 1.00,
     "tx_audio_gain": 1.00,
+    "enable_legacy_ab_daemons": False,
     "peering": []
 }
 
@@ -1531,11 +1532,13 @@ usrpAGC = -20,10,100
         except Exception as e:
             logger.error(f"Failed to initialize DirectDmrEngine: {e}")
 
-        # Start DVSwitch daemons (md380-emu, Analog_Bridge, MMDVM_Bridge, and Multi-Workers)
-        if bool(self.config.get("enable_legacy_ab_daemons", True)):
+        # Start legacy DVSwitch daemons only if explicitly requested (Pure Direct Z3DMR Engine runs by default)
+        if bool(self.config.get("enable_legacy_ab_daemons", False)):
             self.start_daemons()
             asyncio.create_task(self.run_process_watchdog())
             asyncio.create_task(self.restore_configured_workers())
+        else:
+            logger.info("⚡ [CORE-INIT] Running in Pure Direct Z3DMR & OpenDMR mode (Zero-QEMU, Zero-Daemon crashes, Ultra-lightweight)")
 
         # 1. Listen on UDP 32001 (where Analog_Bridge emits decoded 8kHz 16-bit PCM)
         try:
@@ -2621,7 +2624,7 @@ usrpAGC = -20,10,100
             self.dmr_master_server.server_dmr_id = int(self.config.get("server_dmr_id", 5109999))
             if "parrot_tgs" in self.config and isinstance(self.config["parrot_tgs"], list):
                 self.dmr_master_server.parrot_tgs = [int(x) for x in self.config["parrot_tgs"]]
-        if bool(self.config.get("enable_legacy_ab_daemons", True)):
+        if bool(self.config.get("enable_legacy_ab_daemons", False)):
             ab_running = self.ab_proc is not None and self.ab_proc.poll() is None
             mmdvm_running = self.mmdvm_proc is not None and self.mmdvm_proc.poll() is None
             if not ab_running or not mmdvm_running:
@@ -3394,10 +3397,11 @@ async def get_core_status():
         except Exception:
             pass
 
-    # Analog_Bridge has built-in Software OP25/mbelib AMBE vocoder
-    vocoder_running = ab_running or (engine_mgr.md380_proc is not None and engine_mgr.md380_proc.poll() is None)
+    # Native Direct Z3DMR Engine runs pure native C++ OpenDMR vocoder (Zero-QEMU)
+    direct_dmr_active = engine_mgr.direct_dmr is not None
+    vocoder_running = direct_dmr_active or ab_running or (engine_mgr.md380_proc is not None and engine_mgr.md380_proc.poll() is None)
 
-    mmdvm_running = engine_mgr.mmdvm_proc is not None and engine_mgr.mmdvm_proc.poll() is None
+    mmdvm_running = (engine_mgr.dmr_master_server and engine_mgr.dmr_master_server.running) or (engine_mgr.mmdvm_proc is not None and engine_mgr.mmdvm_proc.poll() is None)
     if not mmdvm_running:
         try:
             r = subprocess.run(["pgrep", "-f", "MMDVM_Bridge"], capture_output=True)
@@ -3409,12 +3413,12 @@ async def get_core_status():
     peers_status = engine_mgr.get_peers_status()
 
     return {
-        "status": "ONLINE" if (ab_running or mmdvm_running or vocoder_running) else "ONLINE",
-        "engine": "Official DVSwitch Native Stack (MMDVM_Bridge + Analog_Bridge + OP25/mbelib Vocoder)",
+        "status": "ONLINE",
+        "engine": "NinjaRadio Pure Direct Z3DMR (Native OpenDMR + FreeDMR Master)" if direct_dmr_active else "Official DVSwitch Native Stack",
         "dvswitch_daemons": {
-            "md380_emu": "RUNNING" if vocoder_running else "STOPPED",
-            "analog_bridge": "RUNNING" if ab_running else "STOPPED",
-            "mmdvm_bridge": "RUNNING" if mmdvm_running else "STOPPED"
+            "md380_emu": "RUNNING (OpenDMR Native)" if direct_dmr_active else ("RUNNING" if vocoder_running else "STOPPED"),
+            "analog_bridge": "STANDBY (DirectDMR Active)" if direct_dmr_active and not ab_running else ("RUNNING" if ab_running else "STOPPED"),
+            "mmdvm_bridge": "STANDBY (DirectDMR Active)" if direct_dmr_active and not mmdvm_running else ("RUNNING" if mmdvm_running else "STOPPED")
         },
         "active_master": f"{engine_mgr.active_peer_host}:{engine_mgr.active_peer_port}",
         "peers": peers_status,
