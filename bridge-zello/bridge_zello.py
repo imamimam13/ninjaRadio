@@ -456,10 +456,14 @@ async def zello_websocket_worker():
                                     bridge_state.dmr_stream_seq = 0
                                     record_log(f"DMR -> Zello TX Started on TG {tg} (slot {slot})")
 
-                                # Upsample 8kHz PCM to 16kHz PCM (2x repeat)
+                                # Smooth 8kHz -> 16kHz linear interpolation with anti-imaging to eliminate treble harshness
                                 pcm_8k_arr = np.frombuffer(pcm_8k, dtype=np.int16)
-                                pcm_16k_arr = np.repeat(pcm_8k_arr, 2)
-                                pcm_16k = pcm_16k_arr.tobytes()
+                                pcm_8k_f = pcm_8k_arr.astype(np.float32)
+                                pcm_16k_arr = np.empty(len(pcm_8k_f) * 2, dtype=np.float32)
+                                pcm_16k_arr[0::2] = pcm_8k_f
+                                pcm_16k_arr[1:-1:2] = 0.5 * (pcm_8k_f[:-1] + pcm_8k_f[1:])
+                                pcm_16k_arr[-1] = pcm_8k_f[-1]
+                                pcm_16k = np.clip(pcm_16k_arr, -32768, 32767).astype(np.int16).tobytes()
 
                                 # Encode 20ms of 16kHz PCM (320 samples = 640 bytes) to Opus
                                 opus_bytes = opus_encoder.encode(pcm_16k, frame_size=320)
@@ -549,9 +553,9 @@ async def zello_websocket_worker():
                                 # Decode Opus to 16kHz PCM
                                 pcm_16k = opus_decoder.decode(opus_payload, frame_size=320)
                                 if pcm_16k:
-                                    # Downsample 16kHz PCM to 8kHz PCM using 2:1 decimation
+                                    # Downsample 16kHz PCM to 8kHz PCM using 2:1 averaging (anti-aliasing)
                                     pcm_16k_arr = np.frombuffer(pcm_16k, dtype=np.int16).astype(np.float32)
-                                    pcm_8k_arr = pcm_16k_arr[::2]
+                                    pcm_8k_arr = 0.5 * (pcm_16k_arr[0::2] + pcm_16k_arr[1::2])
                                     pcm_8k = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
                                     zello_rx_pcm_buffer.extend(pcm_8k)
 
