@@ -588,29 +588,36 @@ export default function RadioPocketMode() {
       if (!rxAudioCtxRef.current) {
         const ctx = new AudioCtx();
 
-        // 1. Communications Low-pass filter (2600 Hz, Q=0.707) to eliminate vocoder quantization hiss & harsh sibilance ("sss"/"tt")
+        // 1. Communications Low-pass filter (2350 Hz, Q=0.707) - eliminates vocoder screech, sibilance & hiss
         const lpf = ctx.createBiquadFilter();
         lpf.type = "lowpass";
-        lpf.frequency.value = 2600;
+        lpf.frequency.value = 2350;
         lpf.Q.value = 0.707;
 
-        // 2. High-pass filter (250 Hz) to eliminate DC offset and sub-bass rumble
+        // 2. High-pass filter (260 Hz) to eliminate DC offset and low rumble
         const hpf = ctx.createBiquadFilter();
         hpf.type = "highpass";
-        hpf.frequency.value = 250;
+        hpf.frequency.value = 260;
         hpf.Q.value = 0.707;
 
-        // 3. De-emphasis High-Shelf: -5.0 dB above 1600 Hz for warm, rounded, natural voice like Opus
+        // 3. De-emphasis High-Shelf: -6.5 dB above 1400 Hz for warm, smooth, rounded voice like Opus
         const deemph = ctx.createBiquadFilter();
         deemph.type = "highshelf";
-        deemph.frequency.value = 1600;
-        deemph.gain.value = -5.0;
+        deemph.frequency.value = 1400;
+        deemph.gain.value = -6.5;
 
-        // 4. Clear voice gain
+        // 4. Soft Formant Notch Filter: -3.5 dB @ 2000 Hz (Q=1.4) to suppress piercing nasal resonance
+        const notch = ctx.createBiquadFilter();
+        notch.type = "peaking";
+        notch.frequency.value = 2000;
+        notch.Q.value = 1.4;
+        notch.gain.value = -3.5;
+
+        // 5. Clear voice gain
         const gainNode = ctx.createGain();
-        gainNode.gain.value = 1.15;
+        gainNode.gain.value = 1.25;
 
-        // 5. Relaxed Dynamics Compressor: gentle peak leveling without robotic distortion
+        // 6. Relaxed Dynamics Compressor: gentle peak leveling without robotic distortion
         const comp = ctx.createDynamicsCompressor();
         comp.threshold.value = -6;
         comp.knee.value = 20;
@@ -618,10 +625,11 @@ export default function RadioPocketMode() {
         comp.attack.value = 0.01;
         comp.release.value = 0.20;
 
-        // Pipeline: source -> hpf -> lpf -> deemph -> gainNode -> comp -> ctx.destination
+        // Pipeline: source -> hpf -> lpf -> deemph -> notch -> gainNode -> comp -> ctx.destination
         hpf.connect(lpf);
         lpf.connect(deemph);
-        deemph.connect(gainNode);
+        deemph.connect(notch);
+        notch.connect(gainNode);
         gainNode.connect(comp);
         comp.connect(ctx.destination);
 
