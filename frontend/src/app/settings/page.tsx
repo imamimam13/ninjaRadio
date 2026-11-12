@@ -69,6 +69,7 @@ export default function SettingsPage() {
   const [zelloSlot, setZelloSlot] = useState(2);
   const [zelloBotCallsign, setZelloBotCallsign] = useState("NINJA-ZELLO");
   const [zelloPrivateKey, setZelloPrivateKey] = useState("");
+  const [zelloUserMappings, setZelloUserMappings] = useState("");
   const [zelloHasKey, setZelloHasKey] = useState(false);
   const [showZelloKeyInput, setShowZelloKeyInput] = useState(false);
   const [zelloStatus, setZelloStatus] = useState<any>(null);
@@ -88,6 +89,12 @@ export default function SettingsPage() {
         if (data.slot !== undefined) setZelloSlot(data.slot);
         if (data.bot_callsign) setZelloBotCallsign(data.bot_callsign);
         if (data.enabled !== undefined) setZelloEnabled(data.enabled);
+        if (data.user_mappings && typeof data.user_mappings === "object") {
+          const mapStr = Object.entries(data.user_mappings)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join("\n");
+          setZelloUserMappings(mapStr);
+        }
         setZelloHasKey(!!data.has_key);
       }
     } catch {}
@@ -128,7 +135,8 @@ export default function SettingsPage() {
         issuer: zelloIssuer,
         target_tg: Number(zelloTargetTg) || 1025,
         slot: zelloSlot,
-        bot_callsign: (zelloBotCallsign || "NINJA-ZELLO").toUpperCase().trim()
+        bot_callsign: (zelloBotCallsign || "NINJA-ZELLO").toUpperCase().trim(),
+        user_mappings: zelloUserMappings.trim()
       };
       if (zelloPrivateKey.trim()) {
         payload.private_key = zelloPrivateKey.trim();
@@ -2091,6 +2099,24 @@ export default function SettingsPage() {
                       className="w-full px-3 py-2.5 rounded-xl font-mono text-xs bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
                     />
                     <p className="text-[11px] text-slate-500 mt-1">Dihasilkan dari tab 'Keys' di developers.zello.com.</p>
+                  </div>
+
+                  {/* Zello User Mappings */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                      <span>Pemetaan Akun Zello ke Callsign (User Mappings)</span>
+                      <span className="text-[10px] text-cyan-400 font-normal">Format: username: CALLSIGN</span>
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={zelloUserMappings}
+                      onChange={(e) => setZelloUserMappings(e.target.value)}
+                      placeholder={"sk8pper13: BD62CAN\nuser_zello_lain: YB0ABC"}
+                      className="w-full px-3 py-2 rounded-xl font-mono text-xs bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-cyan-300 placeholder-slate-600 outline-none"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Kaitkan username Zello ke Callsign (satu baris per akun). Alternatif lainnya: Anda juga bisa cukup mengisi username Zello pada kolom <b>Catatan / Remarks</b> di menu <b>Callbook</b>.
+                    </p>
                   </div>
                 </div>
 

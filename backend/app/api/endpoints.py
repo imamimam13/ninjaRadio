@@ -2894,6 +2894,7 @@ async def get_zello_config():
         "slot": z_cfg.get("slot", 2),
         "bot_callsign": z_cfg.get("bot_callsign", "NINJA-ZELLO"),
         "dev_token": z_cfg.get("dev_token", ""),
+        "user_mappings": z_cfg.get("user_mappings", {}),
         "has_key": has_key,
         "key_path": key_file if has_key else None
     }
@@ -2931,6 +2932,25 @@ async def save_zello_config(data: dict):
             pass
     if "bot_callsign" in data and data["bot_callsign"]:
         z_cfg["bot_callsign"] = str(data["bot_callsign"]).strip().upper()
+    if "user_mappings" in data:
+        raw_map = data["user_mappings"]
+        clean_map = {}
+        if isinstance(raw_map, dict):
+            for k, v in raw_map.items():
+                if k and v:
+                    clean_map[str(k).strip().lower()] = str(v).strip().upper()
+        elif isinstance(raw_map, str):
+            for line in raw_map.splitlines():
+                line = line.strip()
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    if k.strip() and v.strip():
+                        clean_map[k.strip().lower()] = v.strip().upper()
+                elif "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() and v.strip():
+                        clean_map[k.strip().lower()] = v.strip().upper()
+        z_cfg["user_mappings"] = clean_map
         
     private_key_pem = data.get("private_key")
     if private_key_pem and isinstance(private_key_pem, str) and ("PRIVATE KEY" in private_key_pem):
