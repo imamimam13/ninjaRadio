@@ -1919,10 +1919,17 @@ usrpAGC = -20,10,100
                                 pass
                         continue
 
-                    # Handle keepalive PING: simply refresh client activity timestamp (do NOT spam PONG text packets)
+                    # Handle keepalive PING: reply with PONG so DVSwitch Mobile client marks connection ONLINE and does not time out!
                     if payload.startswith(b"PING") or packet_type == 3:
                         if not is_internal:
                             self.registered_usrp_clients[addr] = time.time()
+                            self.dvswitch_client_addrs.add(addr)
+                        pong_payload = b"PONG:" + payload[5:] if payload.startswith(b"PING:") else b"PONG\x00"
+                        pong_pkt = build_usrp_frame(seq, 0, packet_type, pong_payload)
+                        try:
+                            self.usrp_ingress_sock.sendto(pong_pkt, addr)
+                        except Exception:
+                            pass
                         continue
 
                     if payload.startswith(b"MODES:"):
@@ -1941,25 +1948,39 @@ usrpAGC = -20,10,100
                         if not is_internal:
                             self.registered_usrp_clients[addr] = time.time()
                             self.dvswitch_client_addrs.add(addr)
+                        info_raw = payload[5:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                        c_meta = self.client_metadata.get(addr, {})
+                        c_tg = c_meta.get("tg", 0) or default_init_tg
+                        c_slot = c_meta.get("slot", 2)
+                        
+                        # When DVSwitch Mobile queries 'INFO:', reply with active digital mode & talkgroup info
+                        if not info_raw or info_raw == "{}" or not info_raw.startswith("{"):
+                            info_reply = f'{{"tlv":{{"ambe_mode":"DMR","ambeMode":"DMR","tg":{c_tg},"slot":{c_slot}}}}}'.encode("ascii") + b"\x00"
+                            try:
+                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"INFO:" + info_reply), addr)
+                            except Exception:
+                                pass
+                            if not info_raw:
+                                continue
+
                         try:
-                            info_raw = payload[5:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
                             c_call = None
                             c_src = None
-                            c_tg = None
+                            c_tg_in = None
                             if info_raw.startswith("{"):
                                 info_obj = json.loads(info_raw)
                                 dig = info_obj.get("digital", {})
                                 c_call = dig.get("call") or info_obj.get("call")
                                 # Authentic subscriber DMR ID takes priority - NEVER let gateway DMR ID overwrite user ID
                                 c_src = dig.get("src") or dig.get("dmrId") or dig.get("dmr_id") or dig.get("id") or info_obj.get("src") or info_obj.get("dmr_id")
-                                c_tg = dig.get("tg") or info_obj.get("tg")
+                                c_tg_in = dig.get("tg") or info_obj.get("tg")
                             else:
                                 m_c = re.search(r'(?:call|callsign)\s*[:=]\s*([A-Za-z0-9/_-]+)', info_raw, re.IGNORECASE)
                                 m_s = re.search(r'(?:src|dmr_id|id)\s*[:=]\s*(\d+)', info_raw, re.IGNORECASE)
                                 m_t = re.search(r'(?:tg|dst)\s*[:=]\s*(\d+)', info_raw, re.IGNORECASE)
                                 if m_c: c_call = m_c.group(1).upper()
                                 if m_s: c_src = int(m_s.group(1))
-                                if m_t: c_tg = int(m_t.group(1))
+                                if m_t: c_tg_in = int(m_t.group(1))
 
                             if addr not in self.client_metadata:
                                 self.client_metadata[addr] = {"tg": default_init_tg, "slot": 2}
@@ -1971,8 +1992,8 @@ usrpAGC = -20,10,100
                                     self.client_metadata[addr]["callsign"] = c_call_str
                             if c_src and int(c_src) > 0:
                                 self.client_metadata[addr]["src"] = int(c_src)
-                            if c_tg and int(c_tg) > 0:
-                                self.client_metadata[addr]["tg"] = int(c_tg)
+                            if c_tg_in and int(c_tg_in) > 0:
+                                self.client_metadata[addr]["tg"] = int(c_tg_in)
 
                             # Resolve DMR ID from Callbook if only Callsign was provided
                             if self.client_metadata[addr].get("callsign") and not self.client_metadata[addr].get("src"):
@@ -2109,12 +2130,9 @@ usrpAGC = -20,10,100
                             self.tx_identity_sent = False
                             self.active_tx_client_addr = None
                             self.current_tx_tg = 0
-                            call_b_unkey = (active_call or "DVSWITCH").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
-                            unkey_nptt = struct.pack(">4sIIII?16s", b"NSVX", active_id, active_tg, active_slot, 0, False, call_b_unkey)
-                            try:
-                                self.bridge_sock.sendto(unkey_nptt, ("127.0.0.1", WEB_PTT_PORT))
-                            except Exception:
-                                pass
+                            # Cleanly unkey Direct Z3DMR session and send DMR Terminator frame
+                            if self.direct_dmr:
+                                self.direct_dmr.push_web_ptt_pcm(active_call, active_id, active_tg, active_slot, b"", is_tx=False)
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": "DVSwitch Mobile / USRP (32345)",
                                 "host": f"{addr[0]}:{addr[1]}",
@@ -2249,13 +2267,9 @@ usrpAGC = -20,10,100
                         except Exception:
                             pass
 
-                        # Inject into proven rock-solid SvxLink gateway pipeline (b"NSVX") on port 32100 (Zero carrier collisions)
-                        call_b = (target_call or "DVSWITCH").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
-                        nptt_pkt = struct.pack(">4sIIII?16s", b"NSVX", target_dmr_id, target_tg, target_slot, len(chunk_pcm), True, call_b) + chunk_pcm
-                        try:
-                            self.bridge_sock.sendto(nptt_pkt, ("127.0.0.1", WEB_PTT_PORT))
-                        except Exception:
-                            pass
+                        # Encode directly into DMR frames via Direct Z3DMR Vocoder (Zero Analog_Bridge collision)
+                        if self.direct_dmr:
+                            self.direct_dmr.push_web_ptt_pcm(target_call, target_dmr_id, target_tg, target_slot, chunk_pcm, is_tx=True)
 
                         # Forward audio burst to Web Audio Player & keep ACTIVE_STREAMS alive
                         traffic_event = {
