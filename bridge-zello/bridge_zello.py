@@ -86,66 +86,141 @@ def get_db_path() -> Optional[str]:
             return p
     return None
 
-def resolve_zello_identity(username: str) -> Tuple[int, str]:
-    """
-    Extracts DMR ID and Callsign from Zello username and matches against Callbook DB.
-    Supports: Callsign matching (e.g. YB0ABC, BD62BOT), Name+Callsign (Ali - YB0ABC), DMR ID, or deterministic fallback.
-    """
-    clean_name = (username or "ZelloUser").strip()
-
-    # 1. Look for 7-digit DMR ID in string
-    id_match = re.search(r"\b(\d{7})\b", clean_name)
-    found_id = int(id_match.group(1)) if id_match else None
-
-    # 2. Extract potential callsign tokens (e.g. BD62BOT, YB0ABC, JZ11XYZ)
-    tokens = re.findall(r"[A-Za-z0-9]{3,10}", clean_name)
-    found_call = None
-    for token in tokens:
-        token_upper = token.strip("/").upper()
-        if not token_upper.isdigit() and any(c.isdigit() for c in token_upper) and any(c.isalpha() for c in token_upper):
-            found_call = token_upper
-            break
-
-    # 3. Lookup against SQLite Callbook DB (/app/data/ninjaradio.db)
+def resolve_callbook_info_by_id(dmr_id: int) -> Tuple[str, str]:
     db_path = get_db_path()
     if db_path and os.path.exists(db_path):
         try:
             with sqlite3.connect(db_path, timeout=1.0) as conn:
                 cursor = conn.cursor()
-                if found_call:
-                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE UPPER(callsign) = ?", (found_call,))
-                    row = cursor.fetchone()
-                    if row:
-                        return int(row[1]), str(row[0]).strip().upper()
+                clean_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+                cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ?", (clean_id,))
+                row = cursor.fetchone()
+                if row:
+                    c_call = str(row[0]).strip().upper() if row[0] else f"ID {dmr_id}"
+                    c_name = str(row[1]).strip() if row[1] else "DMR Operator"
+                    return c_call, c_name
+        except Exception:
+            pass
+    return f"ID {dmr_id}", "DMR Operator"
 
-                for token in tokens:
-                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE UPPER(callsign) = ?", (token.upper(),))
-                    row = cursor.fetchone()
-                    if row:
-                        return int(row[1]), str(row[0]).strip().upper()
+def resolve_zello_identity(username: str, display_name: str = "") -> Tuple[Optional[int], Optional[str]]:
+    """
+    Extracts DMR ID and Callsign from Zello username and display name and matches against Callbook DB.
+    Strictly returns (dmr_id, callsign) if verified in Callbook DB, or (None, None) if not registered.
+    """
+    u_clean = (username or "").strip()
+    d_clean = (display_name or "").strip()
+    u_lower = u_clean.lower()
+    d_lower = d_clean.lower()
 
+    # 0. Check explicit dynamic user_mappings from config (e.g. {"username": "CALLSIGN"})
+    mapped_call = bridge_state.user_mappings.get(u_lower) or bridge_state.user_mappings.get(d_lower)
+
+    names_to_check = []
+    if mapped_call:
+        names_to_check.append(mapped_call)
+    if d_clean:
+        names_to_check.append(d_clean)
+    if u_clean:
+        names_to_check.append(u_clean)
+
+    db_path = get_db_path()
+    if not db_path or not os.path.exists(db_path):
+        return None, None
+
+    try:
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            for clean_name in names_to_check:
+                # 1. Look for 7-digit DMR ID in string
+                id_match = re.search(r"\b(\d{7})\b", clean_name)
+                found_id = int(id_match.group(1)) if id_match else None
                 if found_id:
                     cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE dmr_id = ?", (found_id,))
                     row = cursor.fetchone()
                     if row:
                         return int(row[1]), str(row[0]).strip().upper()
-        except Exception:
-            pass
 
-    # 4. Fallback if not registered in Callbook DB:
-    if found_id and found_call:
-        return found_id, found_call
-    if found_id:
-        return found_id, f"ID-{found_id}"
-    if found_call:
-        virtual_id = 5100000 + (abs(hash(found_call)) % 90000)
-        return virtual_id, found_call
+                # 2. Extract potential callsign tokens (e.g. BD62CAN, BD62BOT, YB0ABC, JZ11XYZ)
+                tokens = re.findall(r"[A-Za-z0-9]{3,10}", clean_name)
+                for token in tokens:
+                    token_upper = token.strip("/").upper()
+                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE UPPER(callsign) = ?", (token_upper,))
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
 
-    # Fallback from username if not a standard callsign
-    virtual_id = 5100000 + (abs(hash(clean_name)) % 90000)
-    clean_call = re.sub(r'[^A-Za-z0-9]', '', clean_name)[:10].upper()
-    display_call = f"ZL:{clean_call}" if clean_call else f"ZL:{virtual_id%1000:03d}"
-    return virtual_id, display_call
+                # 3. Check if Zello username matches 'remarks' or 'name' in Callbook (e.g. remarks contains "sk8pper13")
+                if len(clean_name) >= 3:
+                    cursor.execute(
+                        "SELECT callsign, dmr_id FROM callbook WHERE LOWER(remarks) LIKE ? OR LOWER(name) LIKE ?",
+                        (f"%{clean_name.lower()}%", f"%{clean_name.lower()}%")
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
+    except Exception as e:
+        logger.debug(f"Callbook lookup error: {e}")
+
+    # User not verified in Callbook DB
+    return None, None
+
+def check_zello_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> Tuple[bool, str]:
+    """
+    Strictly verifies if Zello user has authorization in Callbook and Organization rules to transmit on target_tg.
+    """
+    if not dmr_id or not callsign:
+        return False, "Pengguna Zello belum terdaftar di Callbook"
+
+    db_path = get_db_path()
+    if not db_path or not os.path.exists(db_path):
+        return False, "Database Callbook belum siap"
+
+    try:
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT organization, allowed_tgs_override FROM callbook WHERE UPPER(callsign) = ? OR dmr_id = ?",
+                (callsign.upper(), dmr_id)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False, f"Callsign '{callsign}' tidak terdaftar di Callbook Server NinjaRadio"
+
+            if target_tg == 9990:
+                return True, "Echo Test"
+
+            # 1. User specific TG override
+            if row[1]:
+                override = str(row[1]).strip()
+                if override.upper() in ("*", "ALL"):
+                    return True, "User Override (*)"
+                allowed = [int(x.strip()) for x in override.split(",") if x.strip().isdigit()]
+                if target_tg in allowed:
+                    return True, "User Override"
+                return False, f"Hanya diizinkan di TG: {override}"
+
+            # 2. Organization policy
+            org_code = row[0] if row[0] else None
+            if org_code:
+                cursor.execute("SELECT code, allowed_tgs, allow_tx FROM organizations WHERE UPPER(code) = ?", (str(org_code).upper(),))
+                target_org_row = cursor.fetchone()
+                if target_org_row:
+                    org_c, allowed_tgs, allow_tx = target_org_row
+                    if not allow_tx:
+                        return False, f"Organisasi {org_c} saat ini diset Monitor-Only"
+                    rule = (allowed_tgs or "*").strip()
+                    if rule.upper() in ("*", "ALL", ""):
+                        return True, org_c
+                    allowed = [int(x.strip()) for x in rule.split(",") if x.strip().isdigit()]
+                    if target_tg in allowed:
+                        return True, org_c
+                    return False, f"Organisasi {org_c} tidak diizinkan di TG {target_tg}"
+
+            return True, "Callbook Verified"
+    except Exception as e:
+        logger.debug(f"check_zello_tx_permission error: {e}")
+        return False, f"DB Error: {e}"
 
 # ---------------- Native libopus Transcoder via ctypes ----------------
 _opus_lib = None
@@ -249,6 +324,7 @@ class ZelloBridgeState:
         self.slot = 2
         self.bot_callsign = "NINJA-ZELLO"
         self.dev_token = ""
+        self.user_mappings: Dict[str, str] = {}
         self.has_key = False
         self.private_key_obj = None
         self.ws_connected = False
@@ -256,6 +332,7 @@ class ZelloBridgeState:
         self.active_speaker = None
         self.active_speaker_id = 0
         self.active_speaker_call = None
+        self.active_speaker_allowed = False
         self.active_stream_id = None
         self.last_tx_time = 0.0
         self.last_rx_time = 0.0
@@ -311,6 +388,9 @@ def load_bridge_config():
                     bridge_state.slot = int(z.get("slot", 2))
                     bridge_state.bot_callsign = str(z.get("bot_callsign", "NINJA-ZELLO")).strip().upper()
                     bridge_state.dev_token = str(z.get("dev_token", "")).strip()
+                    if "user_mappings" in z and isinstance(z["user_mappings"], dict):
+                        for mk, mv in z["user_mappings"].items():
+                            bridge_state.user_mappings[str(mk).lower().strip()] = str(mv).upper().strip()
                 break
             except Exception as e:
                 logger.warning(f"Could not read config from {p}: {e}")
@@ -536,6 +616,20 @@ async def zello_websocket_worker():
                                     bridge_state.dmr_stream_seq = 0
                                     record_log(f"DMR -> Zello TX Started on TG {tg} (slot {slot})")
 
+                                    # Send text notification into Zello channel with talker callsign & name
+                                    talker_call, talker_name = resolve_callbook_info_by_id(src_id)
+                                    text_cmd = {
+                                        "command": "send_text_message",
+                                        "seq": bridge_state.seq_counter,
+                                        "channel": bridge_state.channel,
+                                        "text": f"🎙️ [DMR TX] {talker_call} ({talker_name}) -> TG {tg}"
+                                    }
+                                    bridge_state.seq_counter += 1
+                                    try:
+                                        await ws.send(json.dumps(text_cmd))
+                                    except Exception as te:
+                                        logger.debug(f"Error sending text notification to Zello: {te}")
+
                                 # Smooth 8kHz -> 16kHz linear interpolation with anti-imaging to eliminate treble harshness
                                 pcm_8k_arr = np.frombuffer(pcm_8k, dtype=np.int16)
                                 pcm_8k_f = pcm_8k_arr.astype(np.float32)
@@ -593,30 +687,74 @@ async def zello_websocket_worker():
                                 # Remote speaker started talking on Zello
                                 if cmd == "on_stream_start":
                                     stream_id = data.get("stream_id")
-                                    speaker = data.get("from") or "ZelloUser"
-                                    user_dmr_id, user_callsign = resolve_zello_identity(speaker)
-                                    bridge_state.active_speaker = speaker
-                                    bridge_state.active_speaker_id = user_dmr_id
-                                    bridge_state.active_speaker_call = user_callsign
+                                    speaker_user = (data.get("from") or "").strip()
+                                    speaker_disp = (data.get("display_name") or data.get("name") or "").strip()
+                                    speaker_label = speaker_disp or speaker_user or "ZelloUser"
+                                    user_dmr_id, user_callsign = resolve_zello_identity(speaker_user, speaker_disp)
+                                    bridge_state.active_speaker = speaker_label
                                     bridge_state.active_stream_id = stream_id
                                     bridge_state.last_rx_time = time.time()
                                     zello_rx_pcm_buffer.clear()
-                                    record_log(f"Zello RX Started: '{speaker}' (Ident: {user_callsign}, ID: {user_dmr_id}) on stream {stream_id}")
+
+                                    # Strict TX Firewall: Must exist in Callbook DB to transmit to DMR/Repeaters
+                                    if not user_dmr_id or not user_callsign:
+                                        bridge_state.active_speaker_allowed = False
+                                        bridge_state.active_speaker_id = 0
+                                        bridge_state.active_speaker_call = None
+                                        reject_msg = f"🛑 [BLOCKED] Akun Zello '{speaker_label}' ({speaker_user}) tidak terdaftar di Callbook NinjaRadio. Transmisi ditolak."
+                                        record_log(f"🛑 [ZELLO-FIREWALL] Blocked TX from unverified Zello user: '{speaker_label}' (from: '{speaker_user}') on stream {stream_id}")
+                                        text_cmd = {
+                                            "command": "send_text_message",
+                                            "seq": bridge_state.seq_counter,
+                                            "channel": bridge_state.channel,
+                                            "text": reject_msg
+                                        }
+                                        bridge_state.seq_counter += 1
+                                        try:
+                                            await ws.send(json.dumps(text_cmd))
+                                        except Exception as te:
+                                            logger.debug(f"Error sending reject text to Zello: {te}")
+                                    else:
+                                        allowed, reason = check_zello_tx_permission(user_dmr_id, user_callsign, bridge_state.target_tg)
+                                        if not allowed:
+                                            bridge_state.active_speaker_allowed = False
+                                            bridge_state.active_speaker_id = 0
+                                            bridge_state.active_speaker_call = None
+                                            reject_msg = f"🛑 [BLOCKED] {user_callsign} ({speaker_label}): {reason}. Transmisi ditolak."
+                                            record_log(f"🛑 [ZELLO-FIREWALL] Blocked TX for {user_callsign}: {reason}")
+                                            text_cmd = {
+                                                "command": "send_text_message",
+                                                "seq": bridge_state.seq_counter,
+                                                "channel": bridge_state.channel,
+                                                "text": reject_msg
+                                            }
+                                            bridge_state.seq_counter += 1
+                                            try:
+                                                await ws.send(json.dumps(text_cmd))
+                                            except Exception as te:
+                                                logger.debug(f"Error sending reject text to Zello: {te}")
+                                        else:
+                                            bridge_state.active_speaker_allowed = True
+                                            bridge_state.active_speaker_id = user_dmr_id
+                                            bridge_state.active_speaker_call = user_callsign
+                                            record_log(f"✓ [ZELLO-FIREWALL] Authorized Zello TX: '{speaker_label}' as {user_callsign} ({user_dmr_id}) -> TG {bridge_state.target_tg} (Slot {bridge_state.slot})")
 
                                 # Remote speaker stopped talking on Zello
                                 elif cmd == "on_stream_stop":
                                     stream_id = data.get("stream_id")
                                     record_log(f"Zello RX Ended for stream {stream_id}")
                                     
-                                    # Send unkey frame to DirectDmrEngine (port 32100)
-                                    cur_dmr_id = bridge_state.active_speaker_id or 1022057
-                                    cur_call = bridge_state.active_speaker_call or (bridge_state.bot_callsign or "ZELLO")
-                                    call_b = cur_call.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                                    unkey_nptt = struct.pack(">4sIIII?16s", b"NZEL", int(cur_dmr_id), int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
-                                    try:
-                                        udp_tx_sock.sendto(unkey_nptt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
-                                    except Exception:
-                                        pass
+                                    # Send unkey frame to DirectDmrEngine only if session was authorized
+                                    if getattr(bridge_state, "active_speaker_allowed", False) and bridge_state.active_speaker_id:
+                                        cur_dmr_id = bridge_state.active_speaker_id
+                                        cur_call = bridge_state.active_speaker_call or (bridge_state.bot_callsign or "ZELLO")
+                                        call_b = cur_call.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                        unkey_nptt = struct.pack(">4sIIII?16s", b"NZEL", int(cur_dmr_id), int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
+                                        try:
+                                            udp_tx_sock.sendto(unkey_nptt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
+                                        except Exception:
+                                            pass
+                                    bridge_state.active_speaker_allowed = False
                                     bridge_state.active_speaker = None
                                     bridge_state.active_speaker_id = 0
                                     bridge_state.active_speaker_call = None
@@ -634,6 +772,12 @@ async def zello_websocket_worker():
                             # Binary audio packet from Zello: [0x01][4B stream_id][4B packet_seq][Opus payload]
                             if len(msg) > 9 and msg[0] == 0x01:
                                 bridge_state.last_rx_time = time.time()
+                                
+                                # Discard audio if speaker is NOT authorized by TX Firewall
+                                if not getattr(bridge_state, "active_speaker_allowed", False) or not bridge_state.active_speaker_id:
+                                    zello_rx_pcm_buffer.clear()
+                                    continue
+
                                 opus_payload = msg[9:]
                                 
                                 # Decode Opus to 16kHz PCM (supports 20ms, 40ms, 60ms frames from Zello)
@@ -646,7 +790,7 @@ async def zello_websocket_worker():
                                     zello_rx_pcm_buffer.extend(pcm_8k)
 
                                     # Buffer into 320-byte (20ms) frames and transmit directly to DirectDmrEngine
-                                    cur_dmr_id = bridge_state.active_speaker_id or 1022057
+                                    cur_dmr_id = bridge_state.active_speaker_id
                                     cur_call = bridge_state.active_speaker_call or (bridge_state.bot_callsign or "ZELLO")
                                     call_b = cur_call.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                                     while len(zello_rx_pcm_buffer) >= 320:
