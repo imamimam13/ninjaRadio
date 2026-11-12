@@ -1919,17 +1919,11 @@ usrpAGC = -20,10,100
                                 pass
                         continue
 
-                    # Handle keepalive PING: reply with PONG so DVSwitch Mobile client marks connection ONLINE and does not time out!
+                    # Handle keepalive PING: simply refresh client activity timestamp (do NOT reply PONG to prevent client crash)
                     if payload.startswith(b"PING") or packet_type == 3:
                         if not is_internal:
                             self.registered_usrp_clients[addr] = time.time()
                             self.dvswitch_client_addrs.add(addr)
-                        pong_payload = b"PONG:" + payload[5:] if payload.startswith(b"PING:") else b"PONG\x00"
-                        pong_pkt = build_usrp_frame(seq, 0, packet_type, pong_payload)
-                        try:
-                            self.usrp_ingress_sock.sendto(pong_pkt, addr)
-                        except Exception:
-                            pass
                         continue
 
                     if payload.startswith(b"MODES:"):
@@ -1948,22 +1942,10 @@ usrpAGC = -20,10,100
                         if not is_internal:
                             self.registered_usrp_clients[addr] = time.time()
                             self.dvswitch_client_addrs.add(addr)
-                        info_raw = payload[5:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
-                        c_meta = self.client_metadata.get(addr, {})
-                        c_tg = c_meta.get("tg", 0) or default_init_tg
-                        c_slot = c_meta.get("slot", 2)
-                        
-                        # When DVSwitch Mobile queries 'INFO:', reply with active digital mode & talkgroup info
-                        if not info_raw or info_raw == "{}" or not info_raw.startswith("{"):
-                            info_reply = f'{{"tlv":{{"ambe_mode":"DMR","ambeMode":"DMR","tg":{c_tg},"slot":{c_slot}}}}}'.encode("ascii") + b"\x00"
-                            try:
-                                self.usrp_ingress_sock.sendto(build_usrp_frame(seq, 0, USRP_TYPE_TEXT, b"INFO:" + info_reply), addr)
-                            except Exception:
-                                pass
-                            if not info_raw:
-                                continue
-
                         try:
+                            info_raw = payload[5:].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                            if not info_raw or info_raw == "{}":
+                                continue
                             c_call = None
                             c_src = None
                             c_tg_in = None
@@ -2318,7 +2300,7 @@ usrpAGC = -20,10,100
                 self.initialized_usrp_clients.pop(client_addr, None)
                 self.dvswitch_client_addrs.discard(client_addr)
                 continue
-            if client_addr[0] == "127.0.0.1" or client_addr == exclude_addr:
+            if client_addr[0] == "127.0.0.1" or client_addr == exclude_addr or client_addr == getattr(self, "active_tx_client_addr", None):
                 continue
 
             # Exclude internal docker container sockets (e.g. backend / bridge-mumble)
