@@ -269,13 +269,13 @@ def sync_callbook_to_subscriber_csv(default_id: int = 5109999, default_call: str
             pass
 
 
-def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int, is_svx: bool = False) -> tuple:
+def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int, is_svx: bool = False, is_gateway: bool = False) -> tuple:
     """
     Validates whether the incoming DMR/USRP operator is allowed to transmit on target_tg.
     Returns (is_allowed: bool, reason: str).
     """
-    if is_svx:
-        return True, "SvxLink Gateway Authenticated"
+    if is_svx or is_gateway:
+        return True, "Gateway Authenticated"
 
     call_upper = (callsign or "").strip().upper()
     if (
@@ -2329,11 +2329,12 @@ usrpAGC = -20,10,100
         while self.running:
             try:
                 data, addr = await loop.sock_recvfrom(self.web_ptt_sock, 4096)
-                if len(data) >= 37 and data[:4] in (b"NWEB", b"NMUM", b"NSVX", b"NPTT"):
+                if len(data) >= 37 and data[:4] in (b"NWEB", b"NMUM", b"NSVX", b"NZEL", b"NPTT"):
                     magic = data[:4]
                     is_svx = (magic == b"NSVX")
                     is_mumble = (magic == b"NMUM")
-                    is_webrtc = (magic == b"NWEB") or (magic == b"NPTT" and not is_svx and not is_mumble)
+                    is_zello = (magic == b"NZEL")
+                    is_webrtc = (magic == b"NWEB") or (magic == b"NPTT" and not is_svx and not is_mumble and not is_zello)
                     dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
@@ -2343,10 +2344,12 @@ usrpAGC = -20,10,100
                         net_label = "SVX / SDR"
                     elif is_mumble:
                         net_label = "Direct DMR (Mumble)"
+                    elif is_zello:
+                        net_label = "Direct DMR (Zello)"
                     else:
                         net_label = "Direct DMR (WebRTC)"
                     if is_tx:
-                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx)
+                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx, is_gateway=(is_svx or is_mumble or is_zello))
                         if not is_allowed:
                             if now - getattr(self, "_last_web_fw_alert", 0) > 3.0:
                                 self._last_web_fw_alert = now
@@ -2413,10 +2416,11 @@ usrpAGC = -20,10,100
                                             self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                                         except Exception:
                                             pass
-                                    try:
-                                        self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                                    except Exception:
-                                        pass
+                                    if not is_zello:
+                                        try:
+                                            self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                                        except Exception:
+                                            pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": net_label,
                                 "host": f"{addr[0]}:32100",
@@ -2454,10 +2458,11 @@ usrpAGC = -20,10,100
                                     self.bridge_sock.sendto(mumble_unkey, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                                 except Exception:
                                     pass
-                            try:
-                                self.bridge_sock.sendto(mumble_unkey, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                            except Exception:
-                                pass
+                            if not is_zello:
+                                try:
+                                    self.bridge_sock.sendto(mumble_unkey, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                                except Exception:
+                                    pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": net_label,
                                 "host": f"{addr[0]}:32100",
@@ -2573,7 +2578,7 @@ usrpAGC = -20,10,100
                         # Peer isolation: if untagged original packet, check if this client has a per-peer remapped rule for r_tg
                         if not r_peer:
                             has_remapped_rule = any(
-                                row[2] and row[10] and row[10].strip().lower() in c_name and int(row[4] or 0) == r_tg
+                                row[2] and row[10] and row[10].strip().lower() in c_name and int(row[4] or 0) == r_tg and (int(row[7] or 0) != r_tg or int(row[8] or 2) != r_slot)
                                 for row in _get_cached_bridge_routes() if len(row) > 10
                             )
                             if has_remapped_rule:
@@ -2900,7 +2905,7 @@ usrpAGC = -20,10,100
                             # Peer isolation: if untagged original packet, check if this client has a per-peer remapped rule for r_tg
                             if not r_peer:
                                 has_remapped_rule = any(
-                                    row[2] and row[10] and row[10].strip().lower() in c_name and int(row[4] or 0) == r_tg
+                                    row[2] and row[10] and row[10].strip().lower() in c_name and int(row[4] or 0) == r_tg and (int(row[7] or 0) != r_tg or int(row[8] or 2) != r_slot)
                                     for row in _get_cached_bridge_routes() if len(row) > 10
                                 )
                                 if has_remapped_rule:
@@ -2938,7 +2943,8 @@ usrpAGC = -20,10,100
                     pass
 
             seen_web_tgs = set()
-            for r_tg, r_slot, _ in packets_to_route:
+            for r_item in packets_to_route:
+                r_tg, r_slot = r_item[0], r_item[1]
                 if r_tg in seen_web_tgs:
                     continue
                 seen_web_tgs.add(r_tg)
