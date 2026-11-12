@@ -9,7 +9,9 @@ import json
 import base64
 import asyncio
 import ctypes
-from typing import Optional, List, Dict, Any
+import re
+import sqlite3
+from typing import Optional, List, Dict, Any, Tuple
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 import numpy as np
@@ -68,6 +70,82 @@ def record_log(msg: str):
     recent_logs.append(f"[{timestamp}] {msg}")
     if len(recent_logs) > 120:
         recent_logs.pop(0)
+
+def get_db_path() -> Optional[str]:
+    candidates = [
+        os.environ.get("NINJARADIO_DB_PATH", ""),
+        "/app/data/ninjaradio.db",
+        "/home/ubuntu/ninjaRadio/data/ninjaradio.db",
+        os.path.join(os.path.dirname(__file__), "../data/ninjaradio.db"),
+        os.path.join(os.path.dirname(__file__), "data/ninjaradio.db"),
+        "./data/ninjaradio.db",
+        "./ninjaradio.db"
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+def resolve_zello_identity(username: str) -> Tuple[int, str]:
+    """
+    Extracts DMR ID and Callsign from Zello username and matches against Callbook DB.
+    Supports: Callsign matching (e.g. YB0ABC, BD62BOT), Name+Callsign (Ali - YB0ABC), DMR ID, or deterministic fallback.
+    """
+    clean_name = (username or "ZelloUser").strip()
+
+    # 1. Look for 7-digit DMR ID in string
+    id_match = re.search(r"\b(\d{7})\b", clean_name)
+    found_id = int(id_match.group(1)) if id_match else None
+
+    # 2. Extract potential callsign tokens (e.g. BD62BOT, YB0ABC, JZ11XYZ)
+    tokens = re.findall(r"[A-Za-z0-9]{3,10}", clean_name)
+    found_call = None
+    for token in tokens:
+        token_upper = token.strip("/").upper()
+        if not token_upper.isdigit() and any(c.isdigit() for c in token_upper) and any(c.isalpha() for c in token_upper):
+            found_call = token_upper
+            break
+
+    # 3. Lookup against SQLite Callbook DB (/app/data/ninjaradio.db)
+    db_path = get_db_path()
+    if db_path and os.path.exists(db_path):
+        try:
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
+                if found_call:
+                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE UPPER(callsign) = ?", (found_call,))
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
+
+                for token in tokens:
+                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE UPPER(callsign) = ?", (token.upper(),))
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
+
+                if found_id:
+                    cursor.execute("SELECT callsign, dmr_id FROM callbook WHERE dmr_id = ?", (found_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        return int(row[1]), str(row[0]).strip().upper()
+        except Exception:
+            pass
+
+    # 4. Fallback if not registered in Callbook DB:
+    if found_id and found_call:
+        return found_id, found_call
+    if found_id:
+        return found_id, f"ID-{found_id}"
+    if found_call:
+        virtual_id = 5100000 + (abs(hash(found_call)) % 90000)
+        return virtual_id, found_call
+
+    # Fallback from username if not a standard callsign
+    virtual_id = 5100000 + (abs(hash(clean_name)) % 90000)
+    clean_call = re.sub(r'[^A-Za-z0-9]', '', clean_name)[:10].upper()
+    display_call = f"ZL:{clean_call}" if clean_call else f"ZL:{virtual_id%1000:03d}"
+    return virtual_id, display_call
 
 # ---------------- Native libopus Transcoder via ctypes ----------------
 _opus_lib = None
@@ -176,6 +254,8 @@ class ZelloBridgeState:
         self.ws_connected = False
         self.channel_joined = False
         self.active_speaker = None
+        self.active_speaker_id = 0
+        self.active_speaker_call = None
         self.active_stream_id = None
         self.last_tx_time = 0.0
         self.last_rx_time = 0.0
@@ -514,27 +594,33 @@ async def zello_websocket_worker():
                                 if cmd == "on_stream_start":
                                     stream_id = data.get("stream_id")
                                     speaker = data.get("from") or "ZelloUser"
+                                    user_dmr_id, user_callsign = resolve_zello_identity(speaker)
                                     bridge_state.active_speaker = speaker
+                                    bridge_state.active_speaker_id = user_dmr_id
+                                    bridge_state.active_speaker_call = user_callsign
                                     bridge_state.active_stream_id = stream_id
                                     bridge_state.last_rx_time = time.time()
                                     zello_rx_pcm_buffer.clear()
-                                    record_log(f"Zello RX Started: '{speaker}' on stream {stream_id}")
+                                    record_log(f"Zello RX Started: '{speaker}' (Ident: {user_callsign}, ID: {user_dmr_id}) on stream {stream_id}")
 
                                 # Remote speaker stopped talking on Zello
                                 elif cmd == "on_stream_stop":
                                     stream_id = data.get("stream_id")
                                     record_log(f"Zello RX Ended for stream {stream_id}")
-                                    bridge_state.active_speaker = None
-                                    bridge_state.active_stream_id = None
                                     
                                     # Send unkey frame to DirectDmrEngine (port 32100)
-                                    call_str = f"ZL:{bridge_state.active_speaker[:12]}" if bridge_state.active_speaker else (bridge_state.bot_callsign or "ZELLO")
-                                    call_b = call_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                                    unkey_nptt = struct.pack(">4sIIII?16s", b"NZEL", 1022057, int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
+                                    cur_dmr_id = bridge_state.active_speaker_id or 1022057
+                                    cur_call = bridge_state.active_speaker_call or (bridge_state.bot_callsign or "ZELLO")
+                                    call_b = cur_call.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                    unkey_nptt = struct.pack(">4sIIII?16s", b"NZEL", int(cur_dmr_id), int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
                                     try:
                                         udp_tx_sock.sendto(unkey_nptt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
                                     except Exception:
                                         pass
+                                    bridge_state.active_speaker = None
+                                    bridge_state.active_speaker_id = 0
+                                    bridge_state.active_speaker_call = None
+                                    bridge_state.active_stream_id = None
                                     zello_rx_pcm_buffer.clear()
 
                                 elif data.get("success") is False:
@@ -560,15 +646,16 @@ async def zello_websocket_worker():
                                     zello_rx_pcm_buffer.extend(pcm_8k)
 
                                     # Buffer into 320-byte (20ms) frames and transmit directly to DirectDmrEngine
-                                    call_str = f"ZL:{bridge_state.active_speaker[:12]}" if bridge_state.active_speaker else (bridge_state.bot_callsign or "ZELLO")
-                                    call_b = call_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                    cur_dmr_id = bridge_state.active_speaker_id or 1022057
+                                    cur_call = bridge_state.active_speaker_call or (bridge_state.bot_callsign or "ZELLO")
+                                    call_b = cur_call.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                                     while len(zello_rx_pcm_buffer) >= 320:
                                         chunk = bytes(zello_rx_pcm_buffer[:320])
                                         del zello_rx_pcm_buffer[:320]
                                         nptt_pkt = struct.pack(
                                             ">4sIIII?16s",
                                             b"NZEL",
-                                            1022057,
+                                            int(cur_dmr_id),
                                             int(bridge_state.target_tg),
                                             int(bridge_state.slot),
                                             len(chunk),

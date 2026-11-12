@@ -1122,17 +1122,22 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
             _CALLBOOK_CACHE[src_id] = cb_entry
 
     if not cb_entry and custom_call:
-        if custom_call in _CALLBOOK_CACHE:
-            cb_entry = _CALLBOOK_CACHE[custom_call]
+        clean_lookup = custom_call[3:] if custom_call.startswith("ZL:") else custom_call
+        if clean_lookup in _CALLBOOK_CACHE:
+            cb_entry = _CALLBOOK_CACHE[clean_lookup]
         else:
-            cb_entry = await CallbookService.get_by_callsign(session, custom_call)
+            cb_entry = await CallbookService.get_by_callsign(session, clean_lookup)
             if cb_entry:
-                _CALLBOOK_CACHE[custom_call] = cb_entry
+                _CALLBOOK_CACHE[clean_lookup] = cb_entry
 
     if cb_entry:
         callsign = cb_entry.callsign
         name = cb_entry.name
         category = cb_entry.organization or "Amatir"
+    elif custom_call and custom_call.startswith("ZL:"):
+        callsign = custom_call
+        name = f"Zello User ({custom_call[3:]})"
+        category = "Zello"
 
     tg_name = TG_NAMES.get(dst_tg, f"Talkgroup {dst_tg}")
 
