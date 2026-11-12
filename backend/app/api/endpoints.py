@@ -2992,12 +2992,25 @@ async def get_zello_status():
 @router.get("/zello/logs")
 async def get_zello_logs():
     """Returns recent log lines from zello bridge."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get("http://zello-bridge:12350/logs")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("recent_logs"):
+                    return data
+    except Exception:
+        pass
+
     import os
     for p in ["/app/data/zello_bridge.log", "./data/zello_bridge.log"]:
         if os.path.exists(p):
             try:
                 with open(p, "r", encoding="utf-8") as f:
-                    return {"status": "SUCCESS", "recent_logs": [l.strip() for l in f.readlines()[-100:]]}
+                    lines = [l.strip() for l in f.readlines() if l.strip()]
+                    if lines:
+                        return {"status": "SUCCESS", "recent_logs": lines[-100:]}
             except Exception as e:
                 return {"status": "ERROR", "recent_logs": [f"Error reading log: {e}"]}
     return {"status": "STANDBY", "recent_logs": ["[Zello-Bridge] Daemon ready. Listening for Channel WebSocket traffic."]}
