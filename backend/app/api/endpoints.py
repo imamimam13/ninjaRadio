@@ -2461,6 +2461,40 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
             "sw": "MMDVM_Host"
         })
 
+    # 7. Connected Zello Channel Bridge Node
+    z_cfg = read_config_file().get("zello_config", {})
+    if z_cfg.get("enabled", True):
+        z_call = str(z_cfg.get("bot_callsign") or "NINJA-ZELLO").upper()
+        z_tg = int(z_cfg.get("target_tg") or 510)
+        z_slot = int(z_cfg.get("slot") or 2)
+        z_channel = str(z_cfg.get("channel") or "NINJARADIOZL")
+        stream = active_streams_by_tg.get(str(z_tg)) or active_streams_by_tg.get(z_tg)
+        is_talking = bool(stream)
+        talker_call = stream.get("callsign", "") if stream else ""
+        talk_dur = stream.get("duration_sec", 2) if stream else 0
+        key_file = get_zello_key_file()
+        has_key = os.path.exists(key_file) and os.path.getsize(key_file) > 100
+
+        unified_nodes.append({
+            "id": f"zello_{z_call}",
+            "callsign": z_call,
+            "category": "Zello",
+            "sourceType": "Network",
+            "bridgeLabel": f"Zello Channel '{z_channel}'",
+            "hostLabel": "wss://zello.io/ws",
+            "routeFrom": f"Zello ({z_channel})",
+            "routeTo": f"DMR/SVX TG {z_tg}",
+            "tg": z_tg,
+            "slot": z_slot,
+            "monitoredTGs": [z_tg],
+            "isTalking": is_talking,
+            "talkerCallsign": talker_call,
+            "talkingDurationSec": talk_dur,
+            "connected": has_key,
+            "sysop": f"ZELLO GATEWAY · {z_channel}",
+            "sw": "Zello Channel API"
+        })
+
     mappings = DEFAULT_SVXLINK_ROOMS
     config_path = "/app/data/config.json"
     if os.path.exists(config_path):
