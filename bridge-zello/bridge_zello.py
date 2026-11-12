@@ -45,10 +45,19 @@ logger = logging.getLogger("zello-bridge")
 CONFIG_PATH = os.getenv("CONFIG_PATH", "/app/data/config.json")
 ZELLO_KEY_PATH = os.getenv("ZELLO_KEY_PATH", "/app/data/zello_private.key")
 
+def _get_int_env(key: str, default: int) -> int:
+    val = os.getenv(key, "").strip()
+    if not val:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
 USRP_HOST = os.getenv("DMR_USRP_HOST", "core")
-USRP_PORT = int(os.getenv("DMR_USRP_PORT", "32345"))
-USRP_RX_PORT = int(os.getenv("ZELLO_USRP_RX_PORT", "32101"))
-BRIDGE_HTTP_PORT = int(os.getenv("ZELLO_BRIDGE_HTTP_PORT", "12350"))
+USRP_PORT = _get_int_env("DMR_USRP_PORT", 32345)
+USRP_RX_PORT = _get_int_env("ZELLO_USRP_RX_PORT", 32101)
+BRIDGE_HTTP_PORT = _get_int_env("ZELLO_BRIDGE_HTTP_PORT", 12350)
 
 recent_logs: List[str] = []
 def record_log(msg: str):
@@ -126,10 +135,10 @@ def load_bridge_config():
             try:
                 with open(kp, "rb") as kf:
                     key_bytes = kf.read()
-                if b"BEGIN PRIVATE KEY" in key_bytes and CRYPTO_AVAILABLE:
+                if (b"PRIVATE KEY" in key_bytes or b"RSA PRIVATE KEY" in key_bytes) and CRYPTO_AVAILABLE:
                     bridge_state.private_key_obj = load_pem_private_key(key_bytes, password=None)
                     bridge_state.has_key = True
-                    logger.info(f"Loaded RSA Private Key from {kp} (Size: {bridge_state.private_key_obj.key_size} bits)")
+                    logger.info(f"Loaded RSA Private Key from {kp} (Size: {getattr(bridge_state.private_key_obj, 'key_size', 'unknown')} bits)")
                 break
             except Exception as e:
                 logger.error(f"Failed to load private key from {kp}: {e}")

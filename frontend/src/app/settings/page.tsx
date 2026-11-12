@@ -63,7 +63,7 @@ export default function SettingsPage() {
   const [zelloEnabled, setZelloEnabled] = useState(true);
   const [zelloChannel, setZelloChannel] = useState("NINJARADIOZL");
   const [zelloIssuer, setZelloIssuer] = useState("WkM6R0FURVdBWS1OSU5KQTox.B9gxcZLgOZUmcY0g4HXmHGZsCvPNby0e6GWnsj04GuY");
-  const [zelloTargetTg, setZelloTargetTg] = useState(510);
+  const [zelloTargetTg, setZelloTargetTg] = useState<number | string>(510);
   const [zelloSlot, setZelloSlot] = useState(2);
   const [zelloBotCallsign, setZelloBotCallsign] = useState("NINJA-ZELLO");
   const [zelloPrivateKey, setZelloPrivateKey] = useState("");
@@ -1977,7 +1977,6 @@ export default function SettingsPage() {
                       type="checkbox"
                       checked={zelloEnabled}
                       onChange={(e) => setZelloEnabled(e.target.checked)}
-                      disabled={!isAdminUnlocked}
                       className="w-4 h-4 text-amber-500 rounded border-amber-900 bg-slate-900 focus:ring-amber-500"
                     />
                     <span className={`text-xs font-mono font-bold ${zelloEnabled ? "text-emerald-400" : "text-slate-500"}`}>
@@ -1995,7 +1994,6 @@ export default function SettingsPage() {
                       required
                       value={zelloChannel}
                       onChange={(e) => setZelloChannel(e.target.value.trim())}
-                      disabled={!isAdminUnlocked}
                       placeholder="e.g. NINJARADIOZL"
                       className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
                     />
@@ -2006,12 +2004,11 @@ export default function SettingsPage() {
                   <div>
                     <label className="block text-slate-400 mb-1 font-semibold">Target DMR / SvxLink Talkgroup (TG)</label>
                     <input
-                      type="number"
+                      type="text"
                       required
                       value={zelloTargetTg}
-                      onChange={(e) => setZelloTargetTg(Number(e.target.value) || 0)}
-                      disabled={!isAdminUnlocked}
-                      placeholder="e.g. 510"
+                      onChange={(e) => setZelloTargetTg(e.target.value.replace(/\D/g, ""))}
+                      placeholder="e.g. 1025"
                       className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
                     />
                     <p className="text-[11px] text-slate-500 mt-1">TG yang dijembatani audio-nya (misal 510, 5109, 1025).</p>
@@ -2024,7 +2021,6 @@ export default function SettingsPage() {
                       type="text"
                       value={zelloBotCallsign}
                       onChange={(e) => setZelloBotCallsign(e.target.value.toUpperCase())}
-                      disabled={!isAdminUnlocked}
                       placeholder="e.g. NINJA-ZELLO"
                       className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
                     />
@@ -2037,7 +2033,6 @@ export default function SettingsPage() {
                     <select
                       value={zelloSlot}
                       onChange={(e) => setZelloSlot(Number(e.target.value) || 2)}
-                      disabled={!isAdminUnlocked}
                       className="w-full px-3 py-2.5 rounded-xl font-mono text-sm bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
                     >
                       <option value={1}>Timeslot 1 (TS 1 - Wide Area / Roaming)</option>
@@ -2054,7 +2049,6 @@ export default function SettingsPage() {
                       required
                       value={zelloIssuer}
                       onChange={(e) => setZelloIssuer(e.target.value.trim())}
-                      disabled={!isAdminUnlocked}
                       placeholder="WkM6..."
                       className="w-full px-3 py-2.5 rounded-xl font-mono text-xs bg-[#05080f] border border-amber-900/60 focus:border-amber-400 text-amber-300"
                     />
