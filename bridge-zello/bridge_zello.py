@@ -388,6 +388,7 @@ def load_bridge_config():
                     bridge_state.slot = int(z.get("slot", 2))
                     bridge_state.bot_callsign = str(z.get("bot_callsign", "NINJA-ZELLO")).strip().upper()
                     bridge_state.dev_token = str(z.get("dev_token", "")).strip()
+                    bridge_state.user_mappings.clear()
                     if "user_mappings" in z and isinstance(z["user_mappings"], dict):
                         for mk, mv in z["user_mappings"].items():
                             bridge_state.user_mappings[str(mk).lower().strip()] = str(mv).upper().strip()
