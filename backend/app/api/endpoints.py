@@ -806,8 +806,8 @@ def send_direct_dmr_pcm_to_core(callsign: str, dmr_id: int, tg: int, slot: int, 
         safe_slot = slot if slot in (1, 2) else 2
         payload = pcm_payload or b""
         call_b = (callsign or "WEB-OP").encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
-        # Header: b"NWEB" (4B) + dmr_id(4B) + tg(4B) + slot(4B) + pcm_len(4B) + is_tx(1B) + callsign(16B) = 37 bytes
-        hdr = b"NWEB" + struct.pack(">IIII?16s", safe_dmr_id, safe_tg, safe_slot, len(payload), bool(is_tx), call_b)
+        # Route Web PTT via proven rock-solid SvxLink gateway pipeline (magic: b"NSVX")
+        hdr = b"NSVX" + struct.pack(">IIII?16s", safe_dmr_id, safe_tg, safe_slot, len(payload), bool(is_tx), call_b)
         _direct_dmr_sock.sendto(hdr + payload, (_get_core_ip(), CORE_DIRECT_DMR_PORT))
     except Exception as e:
         logger.error(f"Failed to send direct DMR PCM to core ({CORE_USRP_HOST}:{CORE_DIRECT_DMR_PORT}): {e}")
