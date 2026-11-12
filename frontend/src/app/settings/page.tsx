@@ -34,7 +34,8 @@ import {
   Edit2,
   Bot,
   ArrowRightLeft,
-  RefreshCw
+  RefreshCw,
+  Smartphone
 } from "lucide-react";
 
 export default function SettingsPage() {
