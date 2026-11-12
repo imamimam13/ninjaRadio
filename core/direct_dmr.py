@@ -683,6 +683,24 @@ HPF_300HZ_A = [1.0, -1.669200875, 0.716631541]
 LPF_3200HZ_B = [0.638943726, 1.277887452, 0.638943726]
 LPF_3200HZ_A = [1.0, 1.142977284, 0.412797620]
 
+# 2600Hz Low-pass filter (2nd order Butterworth, fs=8000Hz) - cuts off vocoder hash, hiss, and unvoiced sizzle
+LPF_2600HZ_B = [0.445997646, 0.891995291, 0.445997646]
+LPF_2600HZ_A = [1.0, 0.557028933, 0.226961650]
+
+class DeemphasisFilter:
+    """Standard communications 350us De-emphasis filter: strips harsh sibilance ('tsshh'/'kssh') and vocoder sizzle."""
+    def __init__(self, alpha: float = 0.72):
+        self.alpha = alpha
+        self.prev = 0.0
+
+    def process(self, x: float) -> float:
+        y = (1.0 - self.alpha) * x + self.alpha * self.prev
+        self.prev = y
+        return y
+
+    def reset(self):
+        self.prev = 0.0
+
 
 class DirectDmrEngine:
     """
@@ -953,30 +971,32 @@ class DirectDmrEngine:
         if not raw_pcm or len(raw_pcm) < BURST_PCM_BYTES:
             return raw_pcm
 
-        # Isolated telecom filter pair per slot/stream to prevent inter-talker phase distortion
+        # Isolated telecom filter trio per slot/stream to prevent inter-talker phase distortion
         if not hasattr(self, "_rx_filters"):
             self._rx_filters = {}
         if stream_key not in self._rx_filters:
             self._rx_filters[stream_key] = (
                 BiquadFilter(HPF_300HZ_B, HPF_300HZ_A),
-                BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
+                BiquadFilter(LPF_2600HZ_B, LPF_2600HZ_A),
+                DeemphasisFilter(alpha=0.72)
             )
-        hpf, lpf = self._rx_filters[stream_key]
+        hpf, lpf, deemph = self._rx_filters[stream_key]
 
         import math
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
         processed = []
         for s in samples:
-            # 1. High-pass (300Hz) & Low-pass (3200Hz)
-            f_val = lpf.process(hpf.process(float(s)))
+            # 1. High-pass (300Hz), Low-pass (2600Hz), and De-emphasis (350us)
+            # Post-gain 1.85x restores full, warm, natural vocal body after de-emphasis
+            f_val = deemph.process(lpf.process(hpf.process(float(s)))) * 1.85
             # 2. Transparent soft-knee limiter to prevent digital clipping/kresek on loud voice peaks
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)
-            if x <= 14000.0:
+            if x <= 16000.0:
                 y = x
             else:
-                y = 14000.0 + 3500.0 * math.tanh((x - 14000.0) / 6000.0)
-            processed.append(int(sign * y))
+                y = 16000.0 + 8000.0 * math.tanh((x - 16000.0) / 10000.0)
+            processed.append(int(max(-32767.0, min(32767.0, sign * y))))
 
         return struct.pack("<480h", *processed)
 
@@ -984,6 +1004,5 @@ class DirectDmrEngine:
         stream_key = f"tg_{tg}_ts_{slot}" if tg > 0 else f"slot_{slot}"
         self.vocoder.reset_stream_decoder(stream_key)
         if hasattr(self, "_rx_filters") and stream_key in self._rx_filters:
-            hpf, lpf = self._rx_filters[stream_key]
-            hpf.reset()
-            lpf.reset()
+            for f in self._rx_filters[stream_key]:
+                f.reset()
