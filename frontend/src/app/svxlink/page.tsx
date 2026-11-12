@@ -59,7 +59,7 @@ interface SvxBot {
 interface UnifiedNode {
   id: string;
   callsign: string;
-  category: "SvxLink" | "DMR" | "DVSwitch" | "Mumble" | "Hotspot";
+  category: "SvxLink" | "DMR" | "DVSwitch" | "Mumble" | "Hotspot" | "Zello";
   sourceType: "Local" | "Network" | "Ext SVX";
   bridgeLabel: string;
   hostLabel: string;
@@ -473,6 +473,7 @@ export default function SvxLinkPage() {
               const cls = `w-4 h-4 ${talking ? "text-emerald-400 animate-pulse" : "text-cyan-400"}`;
               if (cat === "DVSwitch") return <Smartphone className={cls} />;
               if (cat === "Mumble") return <Headphones className={cls} />;
+              if (cat === "Zello") return <Smartphone className={cls} />;
               if (cat === "DMR") return <Globe className={cls} />;
               if (cat === "Hotspot") return <Wifi className={cls} />;
               return <Radio className={cls} />;
@@ -506,6 +507,15 @@ export default function SvxLinkPage() {
                       >
                         🎙️ <strong className="text-emerald-400">{talkingCount}</strong> Talking
                       </span>
+
+                      <a
+                        href="/settings"
+                        className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/40 text-amber-300 font-bold hover:border-amber-400 transition-all flex items-center gap-1.5"
+                        title="Klik untuk konfigurasi Talkgroup Zello di Settings"
+                      >
+                        <Smartphone className="w-3.5 h-3.5 text-amber-400" />
+                        <span>📱 Zello Bridge</span>
+                      </a>
                     </div>
                   </div>
 
@@ -575,7 +585,7 @@ export default function SvxLinkPage() {
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
                       TYPE:
                     </span>
-                    {["All", "SvxLink", "DMR", "DVSwitch", "Mumble", "Hotspot"].map((t) => (
+                    {["All", "SvxLink", "DMR", "DVSwitch", "Mumble", "Zello", "Hotspot"].map((t) => (
                       <button
                         key={t}
                         onClick={() => setTypeFilter(t)}
