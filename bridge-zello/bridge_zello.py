@@ -113,11 +113,11 @@ class OpusDecoderWrapper:
         self.sample_rate = sample_rate
         self.channels = channels
 
-    def decode(self, data: bytes, frame_size=320) -> bytes:
+    def decode(self, data: bytes, max_frame_size=1920) -> bytes:
         if not self.dec or not data:
             return b""
-        out_buf = (ctypes.c_int16 * (frame_size * self.channels))()
-        ret = _opus_lib.opus_decode(self.dec, data, len(data), out_buf, frame_size, 0)
+        out_buf = (ctypes.c_int16 * (max_frame_size * self.channels))()
+        ret = _opus_lib.opus_decode(self.dec, data, len(data), out_buf, max_frame_size, 0)
         if ret > 0:
             return bytes(out_buf[:ret * self.channels])
         return b""
@@ -550,8 +550,8 @@ async def zello_websocket_worker():
                                 bridge_state.last_rx_time = time.time()
                                 opus_payload = msg[9:]
                                 
-                                # Decode Opus to 16kHz PCM
-                                pcm_16k = opus_decoder.decode(opus_payload, frame_size=320)
+                                # Decode Opus to 16kHz PCM (supports 20ms, 40ms, 60ms frames from Zello)
+                                pcm_16k = opus_decoder.decode(opus_payload, max_frame_size=1920)
                                 if pcm_16k:
                                     # Downsample 16kHz PCM to 8kHz PCM using 2:1 averaging (anti-aliasing)
                                     pcm_16k_arr = np.frombuffer(pcm_16k, dtype=np.int16).astype(np.float32)
