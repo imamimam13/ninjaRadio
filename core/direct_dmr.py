@@ -981,9 +981,9 @@ class DirectDmrEngine:
         if stream_key not in self._rx_filters:
             self._rx_filters[stream_key] = (
                 BiquadFilter(HPF_300HZ_B, HPF_300HZ_A),
-                BiquadFilter(LPF_2350HZ_B, LPF_2350HZ_A),
+                BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A),
                 BiquadFilter(NOTCH_2000HZ_B, NOTCH_2000HZ_A),
-                DeemphasisFilter(alpha=0.82)
+                DeemphasisFilter(alpha=0.45)
             )
         hpf, lpf, notch, deemph = self._rx_filters[stream_key]
 
@@ -991,9 +991,9 @@ class DirectDmrEngine:
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
         processed = []
         for s in samples:
-            # 1. High-pass (300Hz), Low-pass (2350Hz), Notch (2000Hz), and De-emphasis (alpha=0.82)
-            # Post-gain 2.35x restores warm, rich, broadcast-grade speech after de-emphasis
-            f_val = deemph.process(notch.process(lpf.process(hpf.process(float(s))))) * 2.35
+            # 1. High-pass (300Hz), Low-pass (3200Hz), Notch (2000Hz), and gentle De-emphasis (alpha=0.45)
+            # Post-gain 1.45x preserves natural vocal clarity without muffled low-end rolloff
+            f_val = deemph.process(notch.process(lpf.process(hpf.process(float(s))))) * 1.45
             # 2. Transparent soft-knee limiter to prevent clipping on loud voice peaks
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)
