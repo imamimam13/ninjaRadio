@@ -20,12 +20,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libogg-dev \
     libcurl4-openssl-dev \
     tcl-dev \
-    tcl
+    tcl \
+    python3
 
 # Create svxlink user required during CMake configuration and install
 RUN useradd -r -g daemon svxlink || true
 
 RUN git clone --depth 1 https://github.com/sm0svx/svxlink.git /src/svxlink
+
+COPY patch_talker_override.py /tmp/patch_talker_override.py
+RUN python3 /tmp/patch_talker_override.py
 
 WORKDIR /src/svxlink/src/build
 
