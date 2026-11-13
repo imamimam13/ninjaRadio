@@ -558,7 +558,6 @@ PREEMPHASIS=0
             return
         self.running = True
         threading.Thread(target=self._audio_tx_from_svx_loop, daemon=True).start()
-        threading.Thread(target=self._rx_pacer_loop, daemon=True).start()
         threading.Thread(target=self._squelch_watchdog_loop, daemon=True).start()
         threading.Thread(target=self._process_supervisor_loop, daemon=True).start()
 
@@ -691,48 +690,9 @@ PREEMPHASIS=0
             self._prev_rx_sample = float(samples_8k[-1])
 
             pcm_16k_bytes = np.clip(samples_16k, -32768, 32767).astype(np.int16).tobytes()
-            with self._rx_queue_lock:
-                for off in range(0, len(pcm_16k_bytes), 640):
-                    chunk = pcm_16k_bytes[off:off + 640]
-                    if chunk:
-                        self._rx_pcm_queue.append(chunk)
+            self.usrp_sock.sendto(pcm_16k_bytes, ("127.0.0.1", self.udp_rx_into_svx))
         except Exception as e:
             logger.debug(f"[{self.bot_user}] play_pcm_8k error: {e}")
-
-    def _rx_pacer_loop(self):
-        """Feeds 16kHz PCM frames to SvxLink Rx1 UDP socket at a steady 20ms cadence to prevent DMR 60ms burst underruns."""
-        next_tick = time.perf_counter()
-        buffering = True
-        while self.running:
-            with self._rx_queue_lock:
-                q_len = len(self._rx_pcm_queue)
-                if buffering:
-                    if q_len >= 5:
-                        buffering = False
-                        chunk = self._rx_pcm_queue.popleft()
-                        next_tick = time.perf_counter()
-                    else:
-                        chunk = None
-                else:
-                    if q_len > 0:
-                        chunk = self._rx_pcm_queue.popleft()
-                    else:
-                        chunk = None
-                        buffering = True
-
-            if chunk:
-                try:
-                    self.usrp_sock.sendto(chunk, ("127.0.0.1", self.udp_rx_into_svx))
-                except Exception:
-                    pass
-                next_tick += 0.020
-                sleep_for = next_tick - time.perf_counter()
-                if sleep_for > 0:
-                    time.sleep(sleep_for)
-                elif sleep_for < -0.1:
-                    next_tick = time.perf_counter()
-            else:
-                time.sleep(0.010)
 
     def _squelch_watchdog_loop(self):
         """Closes SvxLink Rx1 squelch cleanly when DMR RX stream stops, and unkeys DMR when SvxLink talker stops."""
