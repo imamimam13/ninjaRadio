@@ -989,11 +989,23 @@ class DirectDmrEngine:
 
         import math
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
+        filtered = [deemph.process(notch.process(lpf.process(hpf.process(float(s))))) for s in samples]
+
+        # Smooth per-stream RX AGC so quiet DMR peer/HT stations match normal loudness
+        if not hasattr(self, "_rx_agc"):
+            self._rx_agc = {}
+        cur_gain = self._rx_agc.get(stream_key, 1.45)
+        rms = math.sqrt(sum(v * v for v in filtered) / len(filtered)) if filtered else 0.0
+        if rms >= 60.0:
+            desired_gain = min(3.5, max(1.2, 4500.0 / rms))
+            alpha = 0.25 if desired_gain < cur_gain else 0.08
+            cur_gain = (1.0 - alpha) * cur_gain + alpha * desired_gain
+            self._rx_agc[stream_key] = cur_gain
+
         processed = []
-        for s in samples:
-            # 1. High-pass (300Hz), Low-pass (3200Hz), Notch (2000Hz), and gentle De-emphasis (alpha=0.45)
-            # Post-gain 1.45x preserves natural vocal clarity without muffled low-end rolloff
-            f_val = deemph.process(notch.process(lpf.process(hpf.process(float(s))))) * 1.45
+        for v in filtered:
+            # 1. Apply smooth RX AGC gain
+            f_val = v * cur_gain
             # 2. Transparent soft-knee limiter to prevent clipping on loud voice peaks
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)
@@ -1011,3 +1023,5 @@ class DirectDmrEngine:
         if hasattr(self, "_rx_filters") and stream_key in self._rx_filters:
             for f in self._rx_filters[stream_key]:
                 f.reset()
+        if hasattr(self, "_rx_agc"):
+            self._rx_agc[stream_key] = 1.45
