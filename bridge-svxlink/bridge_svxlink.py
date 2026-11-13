@@ -712,7 +712,7 @@ PREEMPHASIS=0
                     self._set_squelch(False)
                     if self._last_delegated_call:
                         self._notify_reflector_talker("", self.tg)
-                elif gap > 0.045:
+                elif gap > 0.100:
                     try:
                         self.usrp_sock.sendto(silence_16k_20ms, ("127.0.0.1", self.udp_rx_into_svx))
                     except Exception:
