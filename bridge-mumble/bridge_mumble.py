@@ -958,6 +958,7 @@ class MumbleGatewayBot:
         self.running = False
         self.thread = None
         self.last_rx_play_time = 0.0
+        self._prev_rx_sample = 0.0
         self.tx_pcm_buffer = bytearray()
         from ambe_dsp import AmbeAudioConditioner
         self.tx_conditioner = AmbeAudioConditioner(
@@ -1016,15 +1017,27 @@ class MumbleGatewayBot:
     def play_pcm_8k(self, pcm_8k: bytes):
         if self.mumble and self.mumble.is_alive() and len(pcm_8k) > 0:
             try:
-                self.last_rx_play_time = time.time()
+                now_ts = time.time()
+                prev_play_time = self.last_rx_play_time
+                self.last_rx_play_time = now_ts
                 samples_8k = np.frombuffer(pcm_8k, dtype=np.int16).astype(np.float32)
                 if len(samples_8k) == 0:
                     return
 
-                # High quality upsampling 8kHz -> 48kHz (6x linear interpolation)
-                idx_orig = np.arange(len(samples_8k))
-                idx_target = np.linspace(0, len(samples_8k) - 1, len(samples_8k) * 6)
-                samples_48k_f = np.interp(idx_target, idx_orig, samples_8k)
+                # Phase-continuous 6x linear upsampling 8kHz -> 48kHz (zero frame-boundary discontinuity)
+                if now_ts - prev_play_time > 0.25:
+                    self._prev_rx_sample = float(samples_8k[0])
+                n = len(samples_8k)
+                prev = np.empty(n, dtype=np.float32)
+                prev[0] = self._prev_rx_sample
+                if n > 1:
+                    prev[1:] = samples_8k[:-1]
+                self._prev_rx_sample = float(samples_8k[-1])
+
+                diff = samples_8k - prev
+                samples_48k_f = np.empty(n * 6, dtype=np.float32)
+                for k in range(6):
+                    samples_48k_f[k::6] = prev + diff * ((k + 1) / 6.0)
                 samples_48k = np.clip(samples_48k_f, -32768, 32767).astype(np.int16)
 
                 self.mumble.sound_output.add_sound(samples_48k.tobytes())
