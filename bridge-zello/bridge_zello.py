@@ -795,7 +795,7 @@ async def zello_websocket_worker():
                                     record_log(f"Zello error: {err}")
 
                             except Exception as pe:
-                                logger.debug(f"JSON parse error: {pe}")
+                                logger.warning(f"Zello WS message handler error: {pe}", exc_info=True)
 
                         elif isinstance(msg, bytes):
                             # Binary audio packet from Zello: [0x01][4B stream_id][4B packet_seq][Opus payload]
