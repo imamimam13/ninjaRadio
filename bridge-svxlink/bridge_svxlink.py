@@ -496,14 +496,12 @@ DTMF_CTRL_PTY={self.dtmf_pty_path}
 
 [ReflectorLogic]
 TYPE=Reflector
-HOST={SVX_HOST}
 HOSTS={SVX_HOST}
-PORT={SVX_PORT}
 HOST_PORT={SVX_PORT}
 CALLSIGN={self.bot_user}
 AUTH_KEY="{SVX_AUTH_KEY}"
 DEFAULT_TG={self.tg}
-TG_SELECT_TIMEOUT=0
+TG_SELECT_TIMEOUT=60
 MONITOR_TGS={monitored_tgs_str}
 AUDIO_CODEC=OPUS
 EVENT_HANDLER={events_tcl_path}
