@@ -959,6 +959,8 @@ class MumbleGatewayBot:
         self.thread = None
         self.last_rx_play_time = 0.0
         self._prev_rx_sample = 0.0
+        self._rx_agc_gain = 1.0
+        self._tx_agc_gain = 1.0
         self.tx_pcm_buffer = bytearray()
         from ambe_dsp import AmbeAudioConditioner
         self.tx_conditioner = AmbeAudioConditioner(
@@ -1027,6 +1029,18 @@ class MumbleGatewayBot:
                 # Phase-continuous 6x linear upsampling 8kHz -> 48kHz (zero frame-boundary discontinuity)
                 if now_ts - prev_play_time > 0.25:
                     self._prev_rx_sample = float(samples_8k[0])
+                    self._rx_agc_gain = 1.0
+
+                rms_8k = float(np.sqrt(np.mean(samples_8k ** 2)))
+                if rms_8k >= 45.0:
+                    desired_gain = min(4.5, max(1.0, 4800.0 / rms_8k))
+                    alpha = 0.25 if desired_gain < self._rx_agc_gain else 0.08
+                    self._rx_agc_gain = (1.0 - alpha) * self._rx_agc_gain + alpha * desired_gain
+                samples_8k = samples_8k * self._rx_agc_gain
+                peak_8k = float(np.max(np.abs(samples_8k)))
+                if peak_8k > 22000.0:
+                    samples_8k = samples_8k * (22000.0 / peak_8k)
+
                 n = len(samples_8k)
                 prev = np.empty(n, dtype=np.float32)
                 prev[0] = self._prev_rx_sample
@@ -1107,17 +1121,23 @@ class MumbleGatewayBot:
                         if not active_mumble_tx:
                             logger.info(f"[MUMBLE-TX] 🔴 DIRECT DMR TRANSMIT from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {self.tg} Slot {self.slot}")
                             self.tx_pcm_buffer.clear()
+                            self._tx_agc_gain = 1.0
                             self.tx_conditioner.reset()
 
-                        # Downsample 48kHz Opus PCM to 8kHz PCM using clean 6:1 block decimation
-                        # (Zero boundary attenuation, zero latency, avoids brick-wall gating cuts)
+                        # Downsample 48kHz Opus PCM to 8kHz PCM using clean 6:1 block decimation + smooth AGC
                         pcm_arr = np.frombuffer(pcm_48k, dtype=np.int16).astype(np.float32)
                         n_8k = len(pcm_arr) // 6
                         if n_8k > 0:
                             pcm_8k_arr = pcm_arr[:n_8k * 6].reshape(-1, 6).mean(axis=1)
+                            rms_8k = float(np.sqrt(np.mean(pcm_8k_arr ** 2)))
+                            if rms_8k >= 45.0:
+                                desired_gain = min(4.5, max(1.0, 4800.0 / rms_8k))
+                                alpha = 0.25 if desired_gain < self._tx_agc_gain else 0.08
+                                self._tx_agc_gain = (1.0 - alpha) * self._tx_agc_gain + alpha * desired_gain
+                            pcm_8k_arr = pcm_8k_arr * self._tx_agc_gain
                             peak = float(np.max(np.abs(pcm_8k_arr))) if len(pcm_8k_arr) > 0 else 0
-                            if peak > 24000.0:
-                                pcm_8k_arr = pcm_8k_arr * (24000.0 / peak)
+                            if peak > 22000.0:
+                                pcm_8k_arr = pcm_8k_arr * (22000.0 / peak)
                             pcm_8k = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
                         else:
                             pcm_8k = b""
