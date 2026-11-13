@@ -496,7 +496,9 @@ DTMF_CTRL_PTY={self.dtmf_pty_path}
 
 [ReflectorLogic]
 TYPE=Reflector
+HOST={SVX_HOST}
 HOSTS={SVX_HOST}
+PORT={SVX_PORT}
 HOST_PORT={SVX_PORT}
 CALLSIGN={self.bot_user}
 AUTH_KEY="{SVX_AUTH_KEY}"
