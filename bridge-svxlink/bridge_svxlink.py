@@ -632,7 +632,7 @@ PREEMPHASIS=0
             except Exception as e:
                 logger.warning(f"[{self.bot_user}] _set_squelch({open_sql}) failed: {e}")
 
-    def _notify_reflector_talker(self, caller_call: str, tg: int = 0):
+    def _notify_reflector_talker(self, caller_call: str, tg: int = 0, sync: bool = False):
         """Delegates active DMR/Web/Zello talker callsign to SvxReflector for native QSOLink/SvxLink carry-over."""
         clean_call = re.sub(r"[^A-Za-z0-9\-/]", "", (caller_call or "").strip().upper())[:15]
         now = time.time()
@@ -647,12 +647,15 @@ PREEMPHASIS=0
                 requests.get(
                     f"http://{SVX_HOST}:{SVX_HTTP_PORT}/set_talker",
                     params={"node": self.bot_user, "call": clean_call, "tg": target_tg},
-                    timeout=0.35,
+                    timeout=0.15 if sync else 0.35,
                 )
             except Exception:
                 pass
 
-        threading.Thread(target=_send, daemon=True).start()
+        if sync:
+            _send()
+        else:
+            threading.Thread(target=_send, daemon=True).start()
 
     def play_pcm_8k(self, pcm_8k: bytes, tg: int = None):
         """
@@ -671,7 +674,7 @@ PREEMPHASIS=0
 
             tx_call = getattr(self, "current_tx_call", None)
             if tx_call:
-                self._notify_reflector_talker(tx_call, tg or self.tg)
+                self._notify_reflector_talker(tx_call, tg or self.tg, sync=(not self.squelch_is_open))
 
             self.last_dmr_rx_play = time.time()
             self._set_squelch(True)
@@ -695,17 +698,25 @@ PREEMPHASIS=0
             logger.debug(f"[{self.bot_user}] play_pcm_8k error: {e}")
 
     def _squelch_watchdog_loop(self):
-        """Closes SvxLink Rx1 squelch cleanly when DMR RX stream stops, and unkeys DMR when SvxLink talker stops."""
+        """Closes SvxLink Rx1 squelch cleanly when DMR RX stream stops, keeps LocalRx fed during brief jitter, and unkeys DMR when SvxLink talker stops."""
         global last_svx_tx
+        silence_16k_20ms = b"\x00" * 640
         while self.running:
-            time.sleep(0.05)
+            time.sleep(0.02)
             now = time.time()
 
-            # 1. Close Rx1 squelch 250ms after DMR RX stops
-            if self.squelch_is_open and (now - self.last_dmr_rx_play > 0.25):
-                self._set_squelch(False)
-                if self._last_delegated_call:
-                    self._notify_reflector_talker("", self.tg)
+            # 1. Close Rx1 squelch 350ms after DMR RX stops; feed 20ms comfort silence during brief jitter gaps
+            if self.squelch_is_open:
+                gap = now - self.last_dmr_rx_play
+                if gap > 0.35:
+                    self._set_squelch(False)
+                    if self._last_delegated_call:
+                        self._notify_reflector_talker("", self.tg)
+                elif gap > 0.045:
+                    try:
+                        self.usrp_sock.sendto(silence_16k_20ms, ("127.0.0.1", self.udp_rx_into_svx))
+                    except Exception:
+                        pass
 
             # 2. Release Direct DMR PTT 450ms after SvxLink Tx1 audio stops
             if self.is_transmitting_to_dmr and (now - self.last_svx_audio_rx > 0.45):
