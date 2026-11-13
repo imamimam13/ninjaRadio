@@ -794,6 +794,10 @@ PREEMPHASIS=0
                 tx_tg = self.tg if self.tg > 0 else (getattr(self, "active_talker_tg", None) or 510)
                 tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
 
+                # Prevent Any-TG gateway (self.tg == 0) from double-transmitting a TG handled by a dedicated bot
+                if self.tg == 0 and any(b is not self and b.tg == tx_tg and b.connected for b in GATEWAY_POOL.values()):
+                    continue
+
                 is_allowed, reason = check_svxlink_tx_permission(user_dmr_id, user_callsign, tx_tg)
                 if not is_allowed:
                     continue
