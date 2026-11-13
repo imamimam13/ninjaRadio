@@ -339,6 +339,8 @@ class SvxGatewayBot:
         # Active DMR RX streaming into SvxLink
         self.last_dmr_rx_play: float = 0.0
         self.squelch_is_open: bool = False
+        self._last_delegated_call: str = ""
+        self._last_delegated_ts: float = 0.0
 
         self.tx_pcm_buffer = bytearray()
         from ambe_dsp import AmbeAudioConditioner
@@ -622,6 +624,28 @@ PREEMPHASIS=0
             except Exception:
                 pass
 
+    def _notify_reflector_talker(self, caller_call: str, tg: int = 0):
+        """Delegates active DMR/Web/Zello talker callsign to SvxReflector for native QSOLink/SvxLink carry-over."""
+        clean_call = re.sub(r"[^A-Za-z0-9\-/]", "", (caller_call or "").strip().upper())[:15]
+        now = time.time()
+        if clean_call == self._last_delegated_call and (not clean_call or now - self._last_delegated_ts < 2.0):
+            return
+        self._last_delegated_call = clean_call
+        self._last_delegated_ts = now
+        target_tg = int(tg or self.tg or 0)
+
+        def _send():
+            try:
+                requests.get(
+                    f"http://{SVX_HOST}:{SVX_HTTP_PORT}/set_talker",
+                    params={"node": self.bot_user, "call": clean_call, "tg": target_tg},
+                    timeout=0.35,
+                )
+            except Exception:
+                pass
+
+        threading.Thread(target=_send, daemon=True).start()
+
     def play_pcm_8k(self, pcm_8k: bytes, tg: int = None):
         """
         Receives 8kHz 16-bit mono PCM from NinjaRadio DirectDmrEngine (UDP 12348),
@@ -636,6 +660,10 @@ PREEMPHASIS=0
         try:
             if tg and tg > 0:
                 self.select_talkgroup(tg)
+
+            tx_call = getattr(self, "current_tx_call", None)
+            if tx_call:
+                self._notify_reflector_talker(tx_call, tg or self.tg)
 
             self.last_dmr_rx_play = time.time()
             self._set_squelch(True)
@@ -663,6 +691,8 @@ PREEMPHASIS=0
             # 1. Close Rx1 squelch 250ms after DMR RX stops
             if self.squelch_is_open and (now - self.last_dmr_rx_play > 0.25):
                 self._set_squelch(False)
+                if self._last_delegated_call:
+                    self._notify_reflector_talker("", self.tg)
 
             # 2. Release Direct DMR PTT 450ms after SvxLink Tx1 audio stops
             if self.is_transmitting_to_dmr and (now - self.last_svx_audio_rx > 0.45):
@@ -842,7 +872,12 @@ PREEMPHASIS=0
 
                         if ev_type in ("TALKER_START", "ECHOLINK_START"):
                             internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
-                            if ev_call and ev_call.upper() != self.bot_user.upper() and ev_call.upper() not in internal_bot_names and not ev_call.upper().startswith("SVX-"):
+                            is_delegated_echo = bool(
+                                ev_call
+                                and (self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 2.0))
+                                and ev_call.upper() in {self._last_delegated_call.upper(), (getattr(self, "current_tx_call", None) or "").upper()}
+                            )
+                            if ev_call and not is_delegated_echo and ev_call.upper() != self.bot_user.upper() and ev_call.upper() not in internal_bot_names and not ev_call.upper().startswith("SVX-"):
                                 self.active_talker_call = ev_call
                                 try:
                                     parsed_tg = int(ev_tg)
@@ -871,7 +906,12 @@ PREEMPHASIS=0
                                 self.active_talker_tg = self.tg
                             t_call = m.group(2).strip()
                             internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
-                            if t_call.upper() != self.bot_user.upper() and t_call.upper() not in internal_bot_names and not t_call.upper().startswith("SVX-"):
+                            is_delegated_echo = bool(
+                                t_call
+                                and (self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 2.0))
+                                and t_call.upper() in {self._last_delegated_call.upper(), (getattr(self, "current_tx_call", None) or "").upper()}
+                            )
+                            if not is_delegated_echo and t_call.upper() != self.bot_user.upper() and t_call.upper() not in internal_bot_names and not t_call.upper().startswith("SVX-"):
                                 self.active_talker_call = t_call
                                 dmr_id, _ = resolve_svxlink_identity(t_call)
                                 self.active_talker_dmr_id = dmr_id
