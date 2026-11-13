@@ -674,6 +674,7 @@ async def zello_websocket_worker():
                 dmr_fwd_task = asyncio.create_task(dmr_to_zello_task())
 
                 # 2. Incoming Zello WebSocket Message Loop (Zello -> DMR)
+                zello_agc_gain = 1.6
                 try:
                     async for msg in ws:
                         if isinstance(msg, str):
@@ -703,6 +704,7 @@ async def zello_websocket_worker():
                                     bridge_state.last_rx_time = time.time()
                                     bridge_state.rx_packet_count = 0
                                     zello_rx_pcm_buffer.clear()
+                                    zello_agc_gain = 1.6
 
                                     # Parse codec_header to detect exact audio sample rate from Zello
                                     codec_hdr_b64 = data.get("codec_header")
@@ -786,6 +788,7 @@ async def zello_websocket_worker():
                                     bridge_state.active_stream_id = None
                                     bridge_state.rx_packet_count = 0
                                     zello_rx_pcm_buffer.clear()
+                                    zello_agc_gain = 1.6
 
                                 elif data.get("success") is False:
                                     err = data.get("error", "Unknown Zello error")
@@ -829,8 +832,13 @@ async def zello_websocket_worker():
                                             pcm_arr
                                         )
 
-                                    # Boost gain by 1.6x with soft tanh saturation for robust DMR modulation
-                                    pcm_boosted = np.tanh(pcm_8k_arr / 32768.0 * 1.6) * 32767.0
+                                    # Smooth AGC + soft tanh saturation so quiet Zello mics stay clear & loud enough for DMR/Dashboard
+                                    rms_8k = float(np.sqrt(np.mean(pcm_8k_arr ** 2))) if len(pcm_8k_arr) > 0 else 0.0
+                                    if rms_8k >= 45.0:
+                                        desired_gain = min(4.5, max(1.6, 4800.0 / rms_8k))
+                                        alpha = 0.25 if desired_gain < zello_agc_gain else 0.08
+                                        zello_agc_gain = (1.0 - alpha) * zello_agc_gain + alpha * desired_gain
+                                    pcm_boosted = np.tanh(pcm_8k_arr / 32768.0 * zello_agc_gain) * 32767.0
                                     pcm_8k = pcm_boosted.astype(np.int16).tobytes()
                                     zello_rx_pcm_buffer.extend(pcm_8k)
 
