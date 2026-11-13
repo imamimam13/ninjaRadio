@@ -520,7 +520,7 @@ TYPE=Local
 AUDIO_DEV=udp:127.0.0.1:{self.udp_rx_into_svx}
 AUDIO_CHANNEL=0
 SQL_DET=PTY
-SQL_PTY={self.sql_pty_path}
+PTY_PATH={self.sql_pty_path}
 SQL_START_DELAY=0
 SQL_DELAY=0
 SQL_HANGTIME=200
@@ -610,8 +610,8 @@ PREEMPHASIS=0
                 os.write(fd, f"91{tg}#\n".encode("ascii"))
                 os.close(fd)
                 logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 91{tg}#)")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[{self.bot_user}] select_talkgroup({tg}) failed: {e}")
 
     def _set_squelch(self, open_sql: bool):
         """Writes 'O' (open) or 'Z' (close) to SvxLink Rx1 SQL_DET PTY."""
@@ -623,8 +623,8 @@ PREEMPHASIS=0
                 os.write(fd, b"O" if open_sql else b"Z")
                 os.close(fd)
                 self.squelch_is_open = open_sql
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[{self.bot_user}] _set_squelch({open_sql}) failed: {e}")
 
     def _notify_reflector_talker(self, caller_call: str, tg: int = 0):
         """Delegates active DMR/Web/Zello talker callsign to SvxReflector for native QSOLink/SvxLink carry-over."""
@@ -862,8 +862,16 @@ PREEMPHASIS=0
                         or "ERROR" in sline
                         or "Could not" in sline
                         or "failed" in sline
+                        or "***" in sline
                     ):
                         logger.warning(f"[{self.bot_user}] SvxLink: {sline}")
+                    elif (
+                        "The squelch is" in sline
+                        or "Select TG" in sline
+                        or "ReflectorLogic: Talker" in sline
+                        or "Activating link" in sline
+                    ):
+                        logger.info(f"[{self.bot_user}] SvxLink: {sline}")
 
                     # Parse custom Tcl event hooks for Callsign Carry-Over
                     if "NINJA_EVENT:" in sline:
