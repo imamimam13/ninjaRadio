@@ -224,6 +224,49 @@ def patch_cpp():
         raise RuntimeError("Could not find http_target in Reflector.cpp")
     text = text.replace(http_target, http_replacement, 1)
 
+    # 4. Allow CGNAT / mobile roaming UDP source IP & port changes for authenticated clients
+    old_udp_ip_check = """    if (addr != client->remoteHost())
+    {
+      cerr << "*** WARNING[" << client->callsign()
+           << "]: Incoming UDP packet has the wrong source ip, "
+           << addr << " instead of " << client->remoteHost() << endl;
+      return;
+    }"""
+
+    if old_udp_ip_check not in text:
+        raise RuntimeError("Could not find old_udp_ip_check in Reflector.cpp")
+    text = text.replace(old_udp_ip_check, "    // CGNAT-friendly: allow authenticated client UDP from roaming/CGNAT IP", 1)
+
+    old_udp_port_check = """  if (client->remoteUdpPort() == 0)
+  {
+    client->setRemoteUdpSource(std::make_pair(addr, port));
+    client->sendUdpMsg(MsgUdpHeartbeat());
+  }
+  if (port != client->remoteUdpPort())
+  {
+    cerr << "*** WARNING[" << client->callsign()
+         << "]: Incoming UDP packet has the wrong source UDP "
+            "port number, " << port << " instead of "
+         << client->remoteUdpPort() << endl;
+    return;
+  }"""
+
+    new_udp_port_check = """  if (client->remoteUdpPort() == 0)
+  {
+    client->setRemoteUdpSource(std::make_pair(addr, port));
+    client->sendUdpMsg(MsgUdpHeartbeat());
+  }
+  else if (addr != client->remoteUdpHost() || port != client->remoteUdpPort())
+  {
+    cout << client->callsign() << ": Updating UDP source (CGNAT/Roaming) to "
+         << addr << ":" << port << endl;
+    client->setRemoteUdpSource(std::make_pair(addr, port));
+  }"""
+
+    if old_udp_port_check not in text:
+        raise RuntimeError("Could not find old_udp_port_check in Reflector.cpp")
+    text = text.replace(old_udp_port_check, new_udp_port_check, 1)
+
     CPP_PATH.write_text(text, encoding="utf-8")
     print("✓ Patched Reflector.cpp")
 
