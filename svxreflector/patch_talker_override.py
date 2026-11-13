@@ -10,6 +10,7 @@ from pathlib import Path
 REFLECTOR_DIR = Path("/src/svxlink/src/svxlink/reflector")
 H_PATH = REFLECTOR_DIR / "Reflector.h"
 CPP_PATH = REFLECTOR_DIR / "Reflector.cpp"
+CLIENT_CPP_PATH = REFLECTOR_DIR / "ReflectorClient.cpp"
 
 
 def patch_header():
@@ -271,6 +272,22 @@ def patch_cpp():
     print("✓ Patched Reflector.cpp")
 
 
+def patch_client_cpp():
+    text = CLIENT_CPP_PATH.read_text(encoding="utf-8")
+    target = "assert(m_remote_udp_port == 0);"
+    if target not in text:
+        print("ℹ assert(m_remote_udp_port == 0); not found in ReflectorClient.cpp (skipping)")
+        return
+    text = text.replace(
+        target,
+        "// CGNAT roaming: allow updating existing remote UDP source\n  // assert(m_remote_udp_port == 0);",
+        1,
+    )
+    CLIENT_CPP_PATH.write_text(text, encoding="utf-8")
+    print("✓ Patched ReflectorClient.cpp (CGNAT roaming assertion removed)")
+
+
 if __name__ == "__main__":
     patch_header()
     patch_cpp()
+    patch_client_cpp()
