@@ -902,13 +902,22 @@ PREEMPHASIS=0
                         ev_tg = parts[1] if len(parts) > 1 else str(self.tg)
                         ev_call = parts[2].strip() if len(parts) > 2 else ""
 
+                        def _is_delegated_echo(call_val: str) -> bool:
+                            c_up = (call_val or "").strip().upper()
+                            if not c_up:
+                                return False
+                            now_ts = time.time()
+                            for bot in list(GATEWAY_POOL.values()) + [self]:
+                                if (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0)) and c_up in {
+                                    bot._last_delegated_call.upper(),
+                                    (getattr(bot, "current_tx_call", None) or "").upper(),
+                                }:
+                                    return True
+                            return False
+
                         if ev_type in ("TALKER_START", "ECHOLINK_START"):
                             internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
-                            is_delegated_echo = bool(
-                                ev_call
-                                and (self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 2.0))
-                                and ev_call.upper() in {self._last_delegated_call.upper(), (getattr(self, "current_tx_call", None) or "").upper()}
-                            )
+                            is_delegated_echo = _is_delegated_echo(ev_call)
                             if ev_call and not is_delegated_echo and ev_call.upper() != self.bot_user.upper() and ev_call.upper() not in internal_bot_names and not ev_call.upper().startswith("SVX-"):
                                 self.active_talker_call = ev_call
                                 try:
@@ -938,10 +947,12 @@ PREEMPHASIS=0
                                 self.active_talker_tg = self.tg
                             t_call = m.group(2).strip()
                             internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
-                            is_delegated_echo = bool(
-                                t_call
-                                and (self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 2.0))
-                                and t_call.upper() in {self._last_delegated_call.upper(), (getattr(self, "current_tx_call", None) or "").upper()}
+                            c_up = t_call.upper()
+                            now_ts = time.time()
+                            is_delegated_echo = any(
+                                (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0))
+                                and c_up in {bot._last_delegated_call.upper(), (getattr(bot, "current_tx_call", None) or "").upper()}
+                                for bot in list(GATEWAY_POOL.values()) + [self]
                             )
                             if not is_delegated_echo and t_call.upper() != self.bot_user.upper() and t_call.upper() not in internal_bot_names and not t_call.upper().startswith("SVX-"):
                                 self.active_talker_call = t_call
