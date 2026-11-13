@@ -9,6 +9,7 @@ import logging
 import json
 import re
 from typing import Optional, List, Dict, Tuple, Any
+from collections import deque
 import numpy as np
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
@@ -341,6 +342,9 @@ class SvxGatewayBot:
         self.squelch_is_open: bool = False
         self._last_delegated_call: str = ""
         self._last_delegated_ts: float = 0.0
+        self._rx_pcm_queue: deque = deque(maxlen=40)
+        self._rx_queue_lock = threading.Lock()
+        self._prev_rx_sample: float = 0.0
 
         self.tx_pcm_buffer = bytearray()
         from ambe_dsp import AmbeAudioConditioner
@@ -554,6 +558,7 @@ PREEMPHASIS=0
             return
         self.running = True
         threading.Thread(target=self._audio_tx_from_svx_loop, daemon=True).start()
+        threading.Thread(target=self._rx_pacer_loop, daemon=True).start()
         threading.Thread(target=self._squelch_watchdog_loop, daemon=True).start()
         threading.Thread(target=self._process_supervisor_loop, daemon=True).start()
 
@@ -621,6 +626,10 @@ PREEMPHASIS=0
                 os.write(fd, b"O" if open_sql else b"Z")
                 os.close(fd)
                 self.squelch_is_open = open_sql
+                if not open_sql:
+                    with self._rx_queue_lock:
+                        self._rx_pcm_queue.clear()
+                    self._prev_rx_sample = 0.0
             except Exception as e:
                 logger.warning(f"[{self.bot_user}] _set_squelch({open_sql}) failed: {e}")
 
@@ -669,17 +678,61 @@ PREEMPHASIS=0
             self._set_squelch(True)
 
             samples_8k = np.frombuffer(pcm_8k, dtype=np.int16).astype(np.float32)
-            if len(samples_8k) == 0:
+            n = len(samples_8k)
+            if n == 0:
                 return
 
-            # Clean 2x linear interpolation (8kHz -> 16kHz)
-            idx_orig = np.arange(len(samples_8k))
-            idx_target = np.linspace(0, len(samples_8k) - 1, len(samples_8k) * 2)
-            samples_16k = np.clip(np.interp(idx_target, idx_orig, samples_8k), -32768, 32767).astype(np.int16)
+            # Exact 2x linear interpolation (8kHz -> 16kHz) preserving inter-frame phase continuity
+            samples_16k = np.empty(n * 2, dtype=np.float32)
+            samples_16k[0] = 0.5 * (self._prev_rx_sample + samples_8k[0])
+            samples_16k[1::2] = samples_8k
+            if n > 1:
+                samples_16k[2::2] = 0.5 * (samples_8k[:-1] + samples_8k[1:])
+            self._prev_rx_sample = float(samples_8k[-1])
 
-            self.usrp_sock.sendto(samples_16k.tobytes(), ("127.0.0.1", self.udp_rx_into_svx))
+            pcm_16k_bytes = np.clip(samples_16k, -32768, 32767).astype(np.int16).tobytes()
+            with self._rx_queue_lock:
+                for off in range(0, len(pcm_16k_bytes), 640):
+                    chunk = pcm_16k_bytes[off:off + 640]
+                    if chunk:
+                        self._rx_pcm_queue.append(chunk)
         except Exception as e:
             logger.debug(f"[{self.bot_user}] play_pcm_8k error: {e}")
+
+    def _rx_pacer_loop(self):
+        """Feeds 16kHz PCM frames to SvxLink Rx1 UDP socket at a steady 20ms cadence to prevent DMR 60ms burst underruns."""
+        next_tick = time.perf_counter()
+        buffering = True
+        while self.running:
+            with self._rx_queue_lock:
+                q_len = len(self._rx_pcm_queue)
+                if buffering:
+                    if q_len >= 2:
+                        buffering = False
+                        chunk = self._rx_pcm_queue.popleft()
+                        next_tick = time.perf_counter()
+                    else:
+                        chunk = None
+                else:
+                    if q_len > 0:
+                        chunk = self._rx_pcm_queue.popleft()
+                    else:
+                        chunk = None
+                        buffering = True
+
+            if chunk:
+                try:
+                    self.usrp_sock.sendto(chunk, ("127.0.0.1", self.udp_rx_into_svx))
+                except Exception:
+                    pass
+                next_tick += 0.020
+                sleep_for = next_tick - time.perf_counter()
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+                elif sleep_for < -0.1:
+                    next_tick = time.perf_counter()
+            else:
+                time.sleep(0.010)
 
     def _squelch_watchdog_loop(self):
         """Closes SvxLink Rx1 squelch cleanly when DMR RX stream stops, and unkeys DMR when SvxLink talker stops."""
