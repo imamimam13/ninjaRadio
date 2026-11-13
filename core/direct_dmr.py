@@ -991,13 +991,13 @@ class DirectDmrEngine:
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
         filtered = [deemph.process(notch.process(lpf.process(hpf.process(float(s))))) for s in samples]
 
-        # Smooth per-stream RX AGC: attenuate hot/harsh DMR peers & gently lift quiet ones
+        # Smooth per-stream RX AGC: keep peer audio warm & slightly louder without harshness
         if not hasattr(self, "_rx_agc"):
             self._rx_agc = {}
-        cur_gain = self._rx_agc.get(stream_key, 1.2)
+        cur_gain = self._rx_agc.get(stream_key, 1.35)
         rms = math.sqrt(sum(v * v for v in filtered) / len(filtered)) if filtered else 0.0
         if rms >= 60.0:
-            desired_gain = min(2.2, max(0.65, 3200.0 / rms))
+            desired_gain = min(2.6, max(0.75, 3900.0 / rms))
             alpha = 0.30 if desired_gain < cur_gain else 0.08
             cur_gain = (1.0 - alpha) * cur_gain + alpha * desired_gain
             self._rx_agc[stream_key] = cur_gain
@@ -1009,10 +1009,10 @@ class DirectDmrEngine:
             # 2. Gentle soft-knee limiter to keep peer audio warm and non-fatiguing
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)
-            if x <= 12000.0:
+            if x <= 14000.0:
                 y = x
             else:
-                y = 12000.0 + 7000.0 * math.tanh((x - 12000.0) / 8000.0)
+                y = 14000.0 + 7500.0 * math.tanh((x - 14000.0) / 8500.0)
             processed.append(int(max(-32767.0, min(32767.0, sign * y))))
 
         return struct.pack("<480h", *processed)
@@ -1024,4 +1024,4 @@ class DirectDmrEngine:
             for f in self._rx_filters[stream_key]:
                 f.reset()
         if hasattr(self, "_rx_agc"):
-            self._rx_agc[stream_key] = 1.2
+            self._rx_agc[stream_key] = 1.35
