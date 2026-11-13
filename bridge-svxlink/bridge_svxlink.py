@@ -660,7 +660,7 @@ PREEMPHASIS=0
         Receives 8kHz 16-bit mono PCM from NinjaRadio DirectDmrEngine (UDP 12348),
         selects target talkgroup, upsamples 2x to 16kHz S16_LE, opens Rx1 PTY squelch, and feeds SvxLink UDP socket.
         """
-        if not self.running or len(pcm_8k) == 0:
+        if not self.running or not self.connected or len(pcm_8k) == 0:
             return
         # Echo suppression: do not feed DMR audio back if SvxLink is currently talking into DMR
         if self.is_transmitting_to_dmr or (time.time() - self.last_svx_audio_rx < 0.35):
