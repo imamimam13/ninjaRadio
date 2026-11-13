@@ -342,7 +342,7 @@ class SvxGatewayBot:
         self.squelch_is_open: bool = False
         self._last_delegated_call: str = ""
         self._last_delegated_ts: float = 0.0
-        self._rx_pcm_queue: deque = deque(maxlen=40)
+        self._rx_pcm_queue: deque = deque(maxlen=60)
         self._rx_queue_lock = threading.Lock()
         self._prev_rx_sample: float = 0.0
 
@@ -707,7 +707,7 @@ PREEMPHASIS=0
             with self._rx_queue_lock:
                 q_len = len(self._rx_pcm_queue)
                 if buffering:
-                    if q_len >= 2:
+                    if q_len >= 5:
                         buffering = False
                         chunk = self._rx_pcm_queue.popleft()
                         next_tick = time.perf_counter()
