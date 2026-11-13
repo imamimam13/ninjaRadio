@@ -347,6 +347,7 @@ class SvxGatewayBot:
         self._prev_rx_sample: float = 0.0
 
         self.tx_pcm_buffer = bytearray()
+        self._tx_agc_gain: float = 1.0
         from ambe_dsp import AmbeAudioConditioner
         self.tx_conditioner = AmbeAudioConditioner(
             input_rate=16000,
@@ -742,6 +743,7 @@ PREEMPHASIS=0
         except Exception:
             pass
         self.tx_pcm_buffer.clear()
+        self._tx_agc_gain = 1.0
         self.tx_conditioner.reset()
         self.active_talker_tg = None
 
@@ -813,13 +815,19 @@ PREEMPHASIS=0
                     self.tx_conditioner.reset()
                     logger.info(f"[{self.bot_user}] 🔴 SVXLINK->DMR TX from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {tx_tg} Slot {tx_slot}")
 
-                # Downsample 16kHz -> 8kHz (clean 2:1 decimation)
+                # Downsample 16kHz -> 8kHz (clean 2:1 decimation) + smooth AGC for quiet SvxLink TX
                 n_8k = len(pcm_16k) // 2
                 if n_8k > 0:
                     pcm_8k_arr = pcm_16k[:n_8k * 2].astype(np.float32).reshape(-1, 2).mean(axis=1)
+                    rms_8k = float(np.sqrt(np.mean(pcm_8k_arr ** 2)))
+                    if rms_8k >= 45.0:
+                        desired_gain = min(4.5, max(1.0, 4800.0 / rms_8k))
+                        alpha = 0.25 if desired_gain < self._tx_agc_gain else 0.08
+                        self._tx_agc_gain = (1.0 - alpha) * self._tx_agc_gain + alpha * desired_gain
+                    pcm_8k_arr = pcm_8k_arr * self._tx_agc_gain
                     peak = float(np.max(np.abs(pcm_8k_arr))) if len(pcm_8k_arr) > 0 else 0.0
-                    if peak > 24000.0:
-                        pcm_8k_arr = pcm_8k_arr * (24000.0 / peak)
+                    if peak > 22000.0:
+                        pcm_8k_arr = pcm_8k_arr * (22000.0 / peak)
                     pcm_8k_bytes = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
                     self.tx_pcm_buffer.extend(pcm_8k_bytes)
 
