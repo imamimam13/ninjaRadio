@@ -133,7 +133,7 @@ def patch_cpp():
     http_target = """  if (req.target != "/status")
   {"""
 
-    http_replacement = """  if (req.target.rfind("/set_talker", 0) == 0)
+    http_replacement = r"""  if (req.target.rfind("/set_talker", 0) == 0)
   {
     auto get_param = [&](const std::string& key) -> std::string {
       std::string q = req.target;
