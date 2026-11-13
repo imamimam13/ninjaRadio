@@ -519,6 +519,7 @@ def run_dmr_rx_listener(loop: asyncio.AbstractEventLoop):
 # ---------------- Zello WebSocket Client Worker ----------------
 async def zello_websocket_worker():
     """Asynchronous WebSocket client connecting to wss://zello.io/ws"""
+    global opus_decoder
     if not WEBSOCKETS_AVAILABLE:
         record_log("websockets package not available, waiting...")
         return
