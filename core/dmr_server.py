@@ -1097,7 +1097,18 @@ class HomeBrewMasterServer:
     async def _play_parrot_echo(self, target_addr: Tuple[str, int], caller_id: int, orig_tg: int, slot: int, call_type: str, recorded_packets: list):
         """Plays back recorded DMR voice burst to the hotspot on TG 9990 after turnaround delay."""
         try:
-            logger.info(f"[DMR-Master] 🦜 Parrot buffering complete ({len(recorded_packets)} frames from ID {caller_id}). Waiting 1.2s turnaround...")
+            missing_uplink = 0
+            prev_seq = None
+            for pkt in recorded_packets:
+                if len(pkt) >= 20:
+                    s = pkt[4]
+                    if prev_seq is not None:
+                        gap = (s - prev_seq - 1) & 0xFF
+                        if 0 < gap < 32:
+                            missing_uplink += gap
+                    prev_seq = s
+
+            logger.info(f"[DMR-Master] 🦜 Parrot buffering complete ({len(recorded_packets)} frames, uplink_missing={missing_uplink} from ID {caller_id}). Waiting 1.2s turnaround...")
             await asyncio.sleep(1.2)
 
             dest_addr = target_addr
@@ -1129,6 +1140,8 @@ class HomeBrewMasterServer:
 
             loop = asyncio.get_running_loop()
             next_tx_at = loop.time()
+            prev_tx_ts = next_tx_at
+            max_tx_gap_ms = 0.0
 
             for pkt in recorded_packets:
                 if not self.running or not self.sock:
@@ -1144,6 +1157,12 @@ class HomeBrewMasterServer:
                 payload = pkt[20:]
                 echo_pkt = DMRD + bytes([out_seq]) + src_bytes + dst_bytes + repeater_bytes + bytes([new_bits]) + struct.pack(">I", new_stream_id) + payload
 
+                tx_now = loop.time()
+                gap_ms = (tx_now - prev_tx_ts) * 1000.0
+                if gap_ms > max_tx_gap_ms:
+                    max_tx_gap_ms = gap_ms
+                prev_tx_ts = tx_now
+
                 try:
                     self.sock.sendto(echo_pkt, dest_addr)
                     self.total_tx_packets += 1
@@ -1157,7 +1176,7 @@ class HomeBrewMasterServer:
                 elif delay < -0.180:
                     next_tx_at = loop.time()
 
-            logger.info(f"[DMR-Master] 🦜 Parrot echo playback finished to {caller_id} at {dest_addr}")
+            logger.info(f"[DMR-Master] 🦜 Parrot echo playback finished to {caller_id} at {dest_addr} (max_tx_gap={max_tx_gap_ms:.1f}ms)")
         except Exception as e:
             logger.error(f"[DMR-Master] Parrot playback error: {e}")
 
