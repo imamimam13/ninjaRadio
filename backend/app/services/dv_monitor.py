@@ -1,9 +1,12 @@
 import asyncio
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Set
 from fastapi import WebSocket
+
+def get_current_iso_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 SAMPLE_ACTIVE_USERS = [
     {"callsign": "YB0AZ", "name": "Budi Santoso", "dmr_id": 5100001, "tg": 510, "tg_name": "Indonesia National", "slot": 1, "mode": "DMR", "category": "Amatir"},
@@ -63,7 +66,7 @@ class ConnectionManager:
             "device": device_type,
             "app": app_name,
             "callsign": callsign,
-            "connected_at": datetime.utcnow().strftime("%H:%M:%S"),
+            "connected_at": get_current_iso_utc(),
             "status": "ONLINE"
         }
 
@@ -163,7 +166,7 @@ async def run_dv_simulator():
                 "category": user["category"],
                 "rssi": f"-{random.randint(60, 85)} dBm",
                 "ber": "0.0%",
-                "started_at": datetime.utcnow().strftime("%H:%M:%S")
+                "started_at": get_current_iso_utc()
             }
             await manager.update_tx_state(tx_data)
             
@@ -177,7 +180,7 @@ async def run_dv_simulator():
             # Add to Last Heard
             lh_item = {
                 "id": tx_data["id"],
-                "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+                "timestamp": get_current_iso_utc(),
                 "callsign": user["callsign"],
                 "name": user["name"],
                 "dmr_id": user["dmr_id"],
