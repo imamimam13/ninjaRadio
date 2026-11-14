@@ -310,6 +310,90 @@ def deinterleave_burst(payload: bytes) -> Tuple[bytes, bytes, bytes]:
     return (fr_to_canonical(fr1), fr_to_canonical(fr2), fr_to_canonical(fr3))
 
 
+_MD380_AMBE_BYTES = 7
+_DMR_GOLAY_GEN = (0x63A, 0x31D, 0x7B4, 0x3DA, 0x1ED, 0x6CC, 0x366, 0x1B3, 0x6E3, 0x54B, 0x49F, 0x475)
+
+
+def _dmr_encode_golay2312(data12: int) -> int:
+    parity = 0
+    for i in range(12):
+        if (data12 >> (11 - i)) & 1:
+            parity ^= _DMR_GOLAY_GEN[i]
+    return (data12 << 11) | parity
+
+
+def _ambe49_to_canonical(raw7: bytes) -> bytes:
+    """Converts 7-byte (49-bit MSB-first) AMBE+2 payload from md380-emu into 9-byte canonical DMR AMBE."""
+    ambe_d = [(raw7[i >> 3] >> (7 - (i & 7))) & 1 for i in range(49)]
+    ambe_fr = bytearray(96)
+
+    c0 = 0
+    for i in range(12):
+        c0 = (c0 << 1) | ambe_d[i]
+    cw0 = _dmr_encode_golay2312(c0)
+
+    c1 = 0
+    for i in range(12):
+        c1 = (c1 << 1) | ambe_d[12 + i]
+    cw1 = _dmr_encode_golay2312(c1)
+
+    pr = [0] * 24
+    pr[0] = (16 * c0) & 0xFFFF
+    for i in range(1, 24):
+        pr[i] = (173 * pr[i - 1] + 13849) & 0xFFFF
+    pr_bits = [p >> 15 for p in pr]
+
+    parity0 = 0
+    for j in range(23):
+        b = (cw0 >> j) & 1
+        parity0 ^= b
+        ambe_fr[j + 1] = b
+    ambe_fr[0] = parity0
+
+    k = 1
+    for j in range(22, -1, -1):
+        ambe_fr[24 + j] = ((cw1 >> j) & 1) ^ pr_bits[k]
+        k += 1
+
+    for j in range(11):
+        ambe_fr[48 + (10 - j)] = ambe_d[24 + j]
+
+    for j in range(14):
+        ambe_fr[72 + (13 - j)] = ambe_d[35 + j]
+
+    return fr_to_canonical(ambe_fr)
+
+
+def _canonical_to_ambe49(frame9: bytes) -> bytes:
+    """Converts 9-byte canonical DMR AMBE frame into 7-byte (49-bit MSB-first) AMBE+2 payload for md380-emu."""
+    def bit(c: int) -> int:
+        return (frame9[c >> 3] >> (7 - (c & 7))) & 1
+
+    ambe_d = [0] * 49
+    c0 = 0
+    for i in range(12):
+        b = bit(i)
+        ambe_d[i] = b
+        c0 = (c0 << 1) | b
+
+    p = (16 * c0) & 0xFFFF
+    for i in range(12):
+        p = (173 * p + 13849) & 0xFFFF
+        ambe_d[12 + i] = bit(24 + i) ^ (p >> 15)
+
+    for i in range(11):
+        ambe_d[24 + i] = bit(47 + i)
+
+    for i in range(14):
+        ambe_d[35 + i] = bit(58 + i)
+
+    out = bytearray(_MD380_AMBE_BYTES)
+    for i, b in enumerate(ambe_d):
+        if b:
+            out[i >> 3] |= 1 << (7 - (i & 7))
+    return bytes(out)
+
+
 class DirectOpenDmrVocoder:
     """Stateful OpenDMR encoder/decoder pair wrapping libopendmr (C/C++)."""
 
@@ -344,14 +428,14 @@ class DirectOpenDmrVocoder:
                 logger.warning(f"Could not create OpenDMR codec instances: {e}")
 
     def _probe_md380_emu(self, attempts: int = 8) -> bool:
-        """Verifies standalone md380-emu UDP daemon (320B PCM <-> 9B AMBE) on 127.0.0.1:2470."""
+        """Verifies standalone md380-emu UDP daemon (320B PCM <-> 7B 49-bit AMBE+2) on 127.0.0.1:2470."""
         test_pcm = bytes(PCM_BYTES)
         for _ in range(attempts):
             try:
                 with self._md380_lock:
                     self._md380_sock.sendto(test_pcm, ("127.0.0.1", self._md380_port))
                     ambe_resp, _ = self._md380_sock.recvfrom(512)
-                    if len(ambe_resp) == FRAME_BYTES:
+                    if len(ambe_resp) == _MD380_AMBE_BYTES:
                         self._md380_sock.sendto(ambe_resp, ("127.0.0.1", self._md380_port))
                         pcm_resp, _ = self._md380_sock.recvfrom(512)
                         if len(pcm_resp) == PCM_BYTES:
@@ -548,8 +632,8 @@ class DirectOpenDmrVocoder:
                 with self._md380_lock:
                     self._md380_sock.sendto(pcm, ("127.0.0.1", self._md380_port))
                     resp, _ = self._md380_sock.recvfrom(512)
-                if len(resp) == FRAME_BYTES:
-                    return resp
+                if len(resp) == _MD380_AMBE_BYTES:
+                    return _ambe49_to_canonical(resp)
             except Exception:
                 pass
         if not self._enc:
@@ -567,8 +651,9 @@ class DirectOpenDmrVocoder:
             return bytes(PCM_BYTES)
         if self._has_md380_emu:
             try:
+                raw7 = _canonical_to_ambe49(frame)
                 with self._md380_lock:
-                    self._md380_sock.sendto(frame, ("127.0.0.1", self._md380_port))
+                    self._md380_sock.sendto(raw7, ("127.0.0.1", self._md380_port))
                     resp, _ = self._md380_sock.recvfrom(512)
                 if len(resp) == PCM_BYTES:
                     return resp
