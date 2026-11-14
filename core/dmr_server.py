@@ -1021,11 +1021,13 @@ class HomeBrewMasterServer:
                     break
 
                 now = loop.time()
-                if stream_id != last_stream_id or data_type == 0:
+                if stream_id != last_stream_id:
                     last_stream_id = stream_id
-                    # 120ms (2-frame) jitter cushion on stream start so 4G/WiFi jitter doesn't starve MMDVMHost
+                    # 120ms (2-frame) jitter cushion once at stream start so 4G/WiFi jitter doesn't starve MMDVMHost
                     await asyncio.sleep(0.120)
                     next_send_at = loop.time()
+                    max_gap_ms = 0.0
+                    prev_tx_ts = next_send_at
                 else:
                     delay = next_send_at - now
                     if delay > 0.002:
@@ -1033,6 +1035,11 @@ class HomeBrewMasterServer:
                     elif delay < -0.240:
                         # Catch up if event loop fell behind > 240ms
                         next_send_at = loop.time()
+                    tx_now = loop.time()
+                    gap_ms = (tx_now - prev_tx_ts) * 1000.0
+                    if gap_ms > max_gap_ms:
+                        max_gap_ms = gap_ms
+                    prev_tx_ts = tx_now
 
                 if self.sock and addr in self.clients:
                     try:
@@ -1040,6 +1047,9 @@ class HomeBrewMasterServer:
                         client["tx_packets"] = client.get("tx_packets", 0) + 1
                     except Exception:
                         pass
+
+                if data_type == 2:
+                    logger.info(f"📊 [DMR-Pacer] Stream {stream_id} -> {addr} finished (max_tx_gap={max_gap_ms:.1f}ms)")
 
                 next_send_at += 0.060
         finally:
