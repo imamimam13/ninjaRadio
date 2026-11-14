@@ -59,6 +59,7 @@ export async function verifyAdminPin(pin: string): Promise<boolean> {
         setAdminUnlocked(true, trimmed);
         return true;
       }
+      return false;
     }
   } catch (err) {
     console.warn("Backend PIN verification unreachable, trying local fallback:", err);

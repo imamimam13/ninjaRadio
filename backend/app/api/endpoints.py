@@ -888,7 +888,7 @@ async def switch_operator_identity(payload: dict):
 async def verify_admin_pin(payload: PinVerifyRequest):
     """Verifies operator / admin security PIN for PTT authorization."""
     admin_pin = get_admin_pin()
-    return {"valid": payload.pin.strip() == admin_pin or payload.pin.strip() == "admin"}
+    return {"valid": payload.pin.strip() == admin_pin}
 
 @router.post("/auth/change-pin")
 async def change_admin_pin(payload: dict):
@@ -896,7 +896,7 @@ async def change_admin_pin(payload: dict):
     old_pin = str(payload.get("old_pin", "")).strip()
     new_pin = str(payload.get("new_pin", "")).strip()
     current_pin = get_admin_pin()
-    if old_pin != current_pin and old_pin != "1234" and old_pin != "admin":
+    if old_pin != current_pin:
         raise HTTPException(status_code=403, detail="PIN lama salah!")
     if len(new_pin) < 4:
         raise HTTPException(status_code=400, detail="PIN baru minimal 4 karakter.")
