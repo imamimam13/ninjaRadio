@@ -11,7 +11,7 @@ import logging
 
 logger = logging.getLogger("NinjaRadio-Endpoints")
 
-from backend.app.core.database import get_db, UserAccount
+from backend.app.core.database import get_db, UserAccount, CallbookSyncSource
 from backend.app.core.config import settings
 from backend.app.models.schemas import (
     QsoLogResponse, QsoLogCreate,
@@ -3245,6 +3245,132 @@ async def admin_approve_registration(
     raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
 
 
+# ----------------- Callbook Auto-Sync URL Sources -----------------
+
+@router.get("/callbook/sync-sources")
+async def list_callbook_sync_sources(session: AsyncSession = Depends(get_db)):
+    res = await session.execute(select(CallbookSyncSource).order_by(CallbookSyncSource.id.desc()))
+    rows = res.scalars().all()
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "url": r.url,
+            "organization": r.organization,
+            "default_tg": r.default_tg,
+            "interval_hours": r.interval_hours,
+            "enabled": r.enabled,
+            "last_sync_at": r.last_sync_at.isoformat() if r.last_sync_at else None,
+            "last_status": r.last_status,
+            "last_count": r.last_count,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/callbook/sync-sources")
+async def upsert_callbook_sync_source(
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    url = str(payload.get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="URL harus diawali http:// atau https://")
+    name = str(payload.get("name") or "External Callbook").strip()[:64]
+    org = str(payload.get("organization") or "AUTO").strip().upper()[:32]
+    default_tg = int(payload.get("default_tg") or 510)
+    interval_hours = max(1, min(168, int(payload.get("interval_hours") or 12)))
+    enabled = bool(payload.get("enabled", True))
+
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.url == url))
+    src = res.scalar_one_or_none()
+    if src:
+        src.name = name
+        src.organization = org
+        src.default_tg = default_tg
+        src.interval_hours = interval_hours
+        src.enabled = enabled
+    else:
+        src = CallbookSyncSource(
+            name=name,
+            url=url,
+            organization=org,
+            default_tg=default_tg,
+            interval_hours=interval_hours,
+            enabled=enabled,
+        )
+        session.add(src)
+    await session.commit()
+    await session.refresh(src)
+    return {"status": "SUCCESS", "id": src.id}
+
+
+@router.delete("/callbook/sync-sources/{source_id}")
+async def delete_callbook_sync_source(
+    source_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.id == source_id))
+    src = res.scalar_one_or_none()
+    if not src:
+        raise HTTPException(status_code=404, detail="Sumber sync tidak ditemukan.")
+    await session.delete(src)
+    await session.commit()
+    return {"status": "SUCCESS"}
+
+
+@router.post("/callbook/sync-sources/{source_id}/run")
+async def run_callbook_sync_source_now(
+    source_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.id == source_id))
+    src = res.scalar_one_or_none()
+    if not src:
+        raise HTTPException(status_code=404, detail="Sumber sync tidak ditemukan.")
+    result = await CallbookService.sync_url_source(session, src)
+    if result.get("success"):
+        asyncio.create_task(_notify_core_reload_subscribers())
+    return {
+        "status": "SUCCESS" if result.get("success") else "ERROR",
+        "last_status": src.last_status,
+        "imported_count": result.get("imported_count", 0),
+    }
+
+
+async def run_callbook_autosync_loop():
+    """Periodically syncs enabled CallbookSyncSource URLs in the background."""
+    from backend.app.core.database import async_session_maker
+    from datetime import timedelta
+    await asyncio.sleep(20)
+    while True:
+        try:
+            async with async_session_maker() as session:
+                res = await session.execute(
+                    select(CallbookSyncSource).where(CallbookSyncSource.enabled == True)
+                )
+                sources = res.scalars().all()
+                now = datetime.utcnow()
+                any_synced = False
+                for src in sources:
+                    due = (
+                        src.last_sync_at is None
+                        or (now - src.last_sync_at) >= timedelta(hours=max(1, src.interval_hours))
+                    )
+                    if due:
+                        r = await CallbookService.sync_url_source(session, src)
+                        if r.get("success"):
+                            any_synced = True
+                if any_synced:
+                    asyncio.create_task(_notify_core_reload_subscribers())
+        except Exception as e:
+            logger.debug(f"Callbook auto-sync loop note: {e}")
+        await asyncio.sleep(900)  # Check every 15 minutes
+
+
 @router.post("/admin/registrations/{user_id}/reject", response_model=UserAccountAdminResponse)
 async def admin_reject_registration(
     user_id: int,
@@ -3263,6 +3389,132 @@ async def admin_reject_registration(
     raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
 
 
+# ----------------- Callbook Auto-Sync URL Sources -----------------
+
+@router.get("/callbook/sync-sources")
+async def list_callbook_sync_sources(session: AsyncSession = Depends(get_db)):
+    res = await session.execute(select(CallbookSyncSource).order_by(CallbookSyncSource.id.desc()))
+    rows = res.scalars().all()
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "url": r.url,
+            "organization": r.organization,
+            "default_tg": r.default_tg,
+            "interval_hours": r.interval_hours,
+            "enabled": r.enabled,
+            "last_sync_at": r.last_sync_at.isoformat() if r.last_sync_at else None,
+            "last_status": r.last_status,
+            "last_count": r.last_count,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/callbook/sync-sources")
+async def upsert_callbook_sync_source(
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    url = str(payload.get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="URL harus diawali http:// atau https://")
+    name = str(payload.get("name") or "External Callbook").strip()[:64]
+    org = str(payload.get("organization") or "AUTO").strip().upper()[:32]
+    default_tg = int(payload.get("default_tg") or 510)
+    interval_hours = max(1, min(168, int(payload.get("interval_hours") or 12)))
+    enabled = bool(payload.get("enabled", True))
+
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.url == url))
+    src = res.scalar_one_or_none()
+    if src:
+        src.name = name
+        src.organization = org
+        src.default_tg = default_tg
+        src.interval_hours = interval_hours
+        src.enabled = enabled
+    else:
+        src = CallbookSyncSource(
+            name=name,
+            url=url,
+            organization=org,
+            default_tg=default_tg,
+            interval_hours=interval_hours,
+            enabled=enabled,
+        )
+        session.add(src)
+    await session.commit()
+    await session.refresh(src)
+    return {"status": "SUCCESS", "id": src.id}
+
+
+@router.delete("/callbook/sync-sources/{source_id}")
+async def delete_callbook_sync_source(
+    source_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.id == source_id))
+    src = res.scalar_one_or_none()
+    if not src:
+        raise HTTPException(status_code=404, detail="Sumber sync tidak ditemukan.")
+    await session.delete(src)
+    await session.commit()
+    return {"status": "SUCCESS"}
+
+
+@router.post("/callbook/sync-sources/{source_id}/run")
+async def run_callbook_sync_source_now(
+    source_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.id == source_id))
+    src = res.scalar_one_or_none()
+    if not src:
+        raise HTTPException(status_code=404, detail="Sumber sync tidak ditemukan.")
+    result = await CallbookService.sync_url_source(session, src)
+    if result.get("success"):
+        asyncio.create_task(_notify_core_reload_subscribers())
+    return {
+        "status": "SUCCESS" if result.get("success") else "ERROR",
+        "last_status": src.last_status,
+        "imported_count": result.get("imported_count", 0),
+    }
+
+
+async def run_callbook_autosync_loop():
+    """Periodically syncs enabled CallbookSyncSource URLs in the background."""
+    from backend.app.core.database import async_session_maker
+    from datetime import timedelta
+    await asyncio.sleep(20)
+    while True:
+        try:
+            async with async_session_maker() as session:
+                res = await session.execute(
+                    select(CallbookSyncSource).where(CallbookSyncSource.enabled == True)
+                )
+                sources = res.scalars().all()
+                now = datetime.utcnow()
+                any_synced = False
+                for src in sources:
+                    due = (
+                        src.last_sync_at is None
+                        or (now - src.last_sync_at) >= timedelta(hours=max(1, src.interval_hours))
+                    )
+                    if due:
+                        r = await CallbookService.sync_url_source(session, src)
+                        if r.get("success"):
+                            any_synced = True
+                if any_synced:
+                    asyncio.create_task(_notify_core_reload_subscribers())
+        except Exception as e:
+            logger.debug(f"Callbook auto-sync loop note: {e}")
+        await asyncio.sleep(900)  # Check every 15 minutes
+
+
 @router.post("/admin/registrations/{user_id}/suspend", response_model=UserAccountAdminResponse)
 async def admin_suspend_registration(
     user_id: int,
@@ -3279,3 +3531,129 @@ async def admin_suspend_registration(
         if item.id == user.id:
             return item
     raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
+
+
+# ----------------- Callbook Auto-Sync URL Sources -----------------
+
+@router.get("/callbook/sync-sources")
+async def list_callbook_sync_sources(session: AsyncSession = Depends(get_db)):
+    res = await session.execute(select(CallbookSyncSource).order_by(CallbookSyncSource.id.desc()))
+    rows = res.scalars().all()
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "url": r.url,
+            "organization": r.organization,
+            "default_tg": r.default_tg,
+            "interval_hours": r.interval_hours,
+            "enabled": r.enabled,
+            "last_sync_at": r.last_sync_at.isoformat() if r.last_sync_at else None,
+            "last_status": r.last_status,
+            "last_count": r.last_count,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/callbook/sync-sources")
+async def upsert_callbook_sync_source(
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    url = str(payload.get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="URL harus diawali http:// atau https://")
+    name = str(payload.get("name") or "External Callbook").strip()[:64]
+    org = str(payload.get("organization") or "AUTO").strip().upper()[:32]
+    default_tg = int(payload.get("default_tg") or 510)
+    interval_hours = max(1, min(168, int(payload.get("interval_hours") or 12)))
+    enabled = bool(payload.get("enabled", True))
+
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.url == url))
+    src = res.scalar_one_or_none()
+    if src:
+        src.name = name
+        src.organization = org
+        src.default_tg = default_tg
+        src.interval_hours = interval_hours
+        src.enabled = enabled
+    else:
+        src = CallbookSyncSource(
+            name=name,
+            url=url,
+            organization=org,
+            default_tg=default_tg,
+            interval_hours=interval_hours,
+            enabled=enabled,
+        )
+        session.add(src)
+    await session.commit()
+    await session.refresh(src)
+    return {"status": "SUCCESS", "id": src.id}
+
+
+@router.delete("/callbook/sync-sources/{source_id}")
+async def delete_callbook_sync_source(
+    source_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.id == source_id))
+    src = res.scalar_one_or_none()
+    if not src:
+        raise HTTPException(status_code=404, detail="Sumber sync tidak ditemukan.")
+    await session.delete(src)
+    await session.commit()
+    return {"status": "SUCCESS"}
+
+
+@router.post("/callbook/sync-sources/{source_id}/run")
+async def run_callbook_sync_source_now(
+    source_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    res = await session.execute(select(CallbookSyncSource).where(CallbookSyncSource.id == source_id))
+    src = res.scalar_one_or_none()
+    if not src:
+        raise HTTPException(status_code=404, detail="Sumber sync tidak ditemukan.")
+    result = await CallbookService.sync_url_source(session, src)
+    if result.get("success"):
+        asyncio.create_task(_notify_core_reload_subscribers())
+    return {
+        "status": "SUCCESS" if result.get("success") else "ERROR",
+        "last_status": src.last_status,
+        "imported_count": result.get("imported_count", 0),
+    }
+
+
+async def run_callbook_autosync_loop():
+    """Periodically syncs enabled CallbookSyncSource URLs in the background."""
+    from backend.app.core.database import async_session_maker
+    from datetime import timedelta
+    await asyncio.sleep(20)
+    while True:
+        try:
+            async with async_session_maker() as session:
+                res = await session.execute(
+                    select(CallbookSyncSource).where(CallbookSyncSource.enabled == True)
+                )
+                sources = res.scalars().all()
+                now = datetime.utcnow()
+                any_synced = False
+                for src in sources:
+                    due = (
+                        src.last_sync_at is None
+                        or (now - src.last_sync_at) >= timedelta(hours=max(1, src.interval_hours))
+                    )
+                    if due:
+                        r = await CallbookService.sync_url_source(session, src)
+                        if r.get("success"):
+                            any_synced = True
+                if any_synced:
+                    asyncio.create_task(_notify_core_reload_subscribers())
+        except Exception as e:
+            logger.debug(f"Callbook auto-sync loop note: {e}")
+        await asyncio.sleep(900)  # Check every 15 minutes
