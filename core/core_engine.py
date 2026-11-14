@@ -269,6 +269,35 @@ def sync_callbook_to_subscriber_csv(default_id: int = 5109999, default_call: str
             pass
 
 
+def check_selfcare_dvswitch_permission(dmr_id: int, callsign: str, client_ip: str) -> tuple:
+    """Checks Self-Care user_accounts for DVSwitch Mobile TX permission and whitelisted IP."""
+    db_path = get_db_path()
+    if not db_path:
+        return True, "No DB"
+    call_upper = (callsign or "").strip().upper()
+    base_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT status, allow_dvswitch, dvswitch_allowed_ip FROM user_accounts WHERE dmr_id = ? OR dmr_id = ? OR UPPER(callsign) = ?",
+                (dmr_id, base_id, call_upper)
+            )
+            row = cursor.fetchone()
+            if row:
+                status, allow_dvs, allowed_ip = str(row[0] or ""), bool(row[1]), str(row[2] or "").strip()
+                if status != "APPROVED":
+                    return False, f"Akun {call_upper} berstatus {status} (RX Only hingga disetujui Admin)"
+                if not allow_dvs:
+                    return False, f"Layanan DVSwitch belum diizinkan untuk akun {call_upper}"
+                if allowed_ip and client_ip and client_ip != allowed_ip:
+                    return False, f"IP DVSwitch ({client_ip}) tidak cocok dengan IP ter-whitelist ({allowed_ip}). Update di /account."
+    except Exception:
+        pass
+    return True, "OK"
+
+
 def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int, is_svx: bool = False, is_gateway: bool = False) -> tuple:
     """
     Validates whether the incoming DMR/USRP operator is allowed to transmit on target_tg.
@@ -296,6 +325,19 @@ def check_core_tx_permission(dmr_id: int, callsign: str, target_tg: int, is_svx:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
+
+            # 0. Self-Care Account Status & Permission Guard
+            try:
+                base_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+                cursor.execute(
+                    "SELECT status FROM user_accounts WHERE dmr_id = ? OR dmr_id = ? OR UPPER(callsign) = ?",
+                    (dmr_id, base_id, call_upper)
+                )
+                sc_row = cursor.fetchone()
+                if sc_row and str(sc_row[0]).upper() != "APPROVED":
+                    return False, f"Akun {call_upper} berstatus {sc_row[0]} (RX Only hingga disetujui Admin)"
+            except Exception:
+                pass
 
             cursor.execute("SELECT organization, allowed_tgs_override, callsign, dmr_id FROM callbook WHERE dmr_id = ? OR UPPER(callsign) = ?", (dmr_id, call_upper))
             row = cursor.fetchone()
@@ -2192,8 +2234,10 @@ usrpAGC = -20,10,100
                             target_tg = hdr_tg or client_meta.get("tg", 0) or default_fallback_tg
                             target_slot = hdr_slot
 
-                        # Server-Side TX Firewall check (DVSwitch Mobile users connecting to authenticated USRP port are authorized)
-                        is_allowed, reason = check_core_tx_permission(target_dmr_id, target_call, target_tg, is_gateway=True)
+                        # Self-Care DVSwitch permission & IP whitelist check
+                        is_allowed, reason = check_selfcare_dvswitch_permission(target_dmr_id, target_call, addr[0])
+                        if is_allowed:
+                            is_allowed, reason = check_core_tx_permission(target_dmr_id, target_call, target_tg, is_gateway=True)
                         if not is_allowed:
                             if now - getattr(self, "_last_fw_alert_time", 0) > 3.0:
                                 self._last_fw_alert_time = now
@@ -2626,6 +2670,7 @@ usrpAGC = -20,10,100
         if self.dmr_master_server:
             self.dmr_master_server.server_callsign = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
             self.dmr_master_server.server_dmr_id = int(self.config.get("server_dmr_id", 5109999))
+            self.dmr_master_server.password = str(self.config.get("hotspot_password", "ninjaradio_pass")).strip()
             if "parrot_tgs" in self.config and isinstance(self.config["parrot_tgs"], list):
                 self.dmr_master_server.parrot_tgs = [int(x) for x in self.config["parrot_tgs"]]
         if bool(self.config.get("enable_legacy_ab_daemons", False)):

@@ -152,3 +152,96 @@ class OrganizationResponse(BaseModel):
     is_default: Optional[bool] = False
 
 
+class SelfCareRegisterRequest(BaseModel):
+    callsign: str
+    dmr_id: int
+    name: str
+    city: Optional[str] = ""
+    organization: str = "ORARI"
+    organization_id: Optional[str] = ""
+    verification_note: Optional[str] = ""
+    password: str = Field(..., min_length=4)
+    req_web: bool = True
+    req_dmr: bool = False
+    req_svxlink: bool = False
+    req_mumble: bool = False
+    req_dvswitch: bool = False
+    req_zello: bool = False
+    zello_username: Optional[str] = ""
+
+
+class SelfCareLoginRequest(BaseModel):
+    identifier: str  # callsign or dmr_id
+    password: str
+
+
+class SelfCareServiceRequest(BaseModel):
+    req_web: Optional[bool] = None
+    req_dmr: Optional[bool] = None
+    req_svxlink: Optional[bool] = None
+    req_mumble: Optional[bool] = None
+    req_dvswitch: Optional[bool] = None
+    req_zello: Optional[bool] = None
+    zello_username: Optional[str] = None
+
+
+class SelfCareRotatePasswordRequest(BaseModel):
+    protocol: str  # dmr | svxlink | mumble
+
+
+class AdminApprovalRequest(BaseModel):
+    allow_web: bool = True
+    allow_dmr: bool = False
+    allow_svxlink: bool = False
+    allow_mumble: bool = False
+    allow_dvswitch: bool = False
+    allow_zello: bool = False
+    zello_username: Optional[str] = None
+    default_tg: Optional[int] = 510
+
+
+class AdminRejectRequest(BaseModel):
+    reason: Optional[str] = "Data tidak valid atau belum memenuhi syarat organisasi."
+
+
+class UserAccountPublicResponse(BaseModel):
+    id: int
+    callsign: str
+    dmr_id: int
+    name: str
+    city: str
+    organization: str
+    organization_id: str
+    verification_note: str
+    status: str
+    rejected_reason: str
+    approved_at: Optional[datetime] = None
+    created_at: datetime
+    req_web: bool
+    req_dmr: bool
+    req_svxlink: bool
+    req_mumble: bool
+    req_dvswitch: bool
+    req_zello: bool
+    allow_web: bool
+    allow_dmr: bool
+    allow_svxlink: bool
+    allow_mumble: bool
+    allow_dvswitch: bool
+    allow_zello: bool
+    dmr_password: str = ""
+    svxlink_password: str = ""
+    mumble_password: str = ""
+    zello_username: str = ""
+    dvswitch_allowed_ip: str = ""
+
+    class Config:
+        from_attributes = True
+
+
+class UserAccountAdminResponse(UserAccountPublicResponse):
+    prefix_valid: bool = True
+    prefix_hint: str = ""
+
+
+

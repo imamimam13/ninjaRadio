@@ -9,6 +9,7 @@ LISTEN_PORT="${SVX_PORT:-5300}"
 HTTP_PORT="${SVX_HTTP_PORT:-8080}"
 
 # Dynamically generate svxreflector.conf with all callsigns from Callbook DB & config.json
+generate_svx_conf() {
 python3 - <<PYEOF
 import os
 import json
@@ -159,6 +160,27 @@ for db_p in db_paths:
         except Exception as e:
             print(f"Note reading {db_p}: {e}")
 
+# 2.5 Read Self-Care UserAccounts (APPROVED & allow_svxlink=1) for per-user passwords
+selfcare_users = {}
+for db_p in db_paths:
+    if os.path.exists(db_p):
+        try:
+            conn = sqlite3.connect(db_p)
+            cur = conn.cursor()
+            sc_rows = cur.execute(
+                "SELECT callsign, svxlink_password FROM user_accounts WHERE status = 'APPROVED' AND allow_svxlink = 1 AND svxlink_password != ''"
+            ).fetchall()
+            for sc_call, sc_pwd in sc_rows:
+                c_clean = re.sub(r"[^A-Za-z0-9\-]", "", str(sc_call or "").strip().upper())
+                if c_clean and sc_pwd:
+                    selfcare_users[c_clean] = str(sc_pwd).strip()
+            conn.close()
+            if sc_rows:
+                print(f"Loaded {len(sc_rows)} Self-Care SvxLink accounts from {db_p}")
+            break
+        except Exception:
+            pass
+
 # 3. Expand mobile/repeater node suffixes (-M, -L, -R, -P, -ND, -1..-3)
 expanded_users = set()
 for u in users:
@@ -177,6 +199,7 @@ for u in users:
         expanded_users.add(f"{base}-3")
 
 sorted_users = sorted(list(expanded_users))
+strict_mode = os.getenv("STRICT_SELFCARE_MODE", "false").lower() == "true"
 
 conf_content = f"""[GLOBAL]
 TIMESTAMP_FORMAT="%Y-%m-%d %H:%M:%S"
@@ -193,22 +216,40 @@ COMMON_NAME={common_name}
 SUBJECT_ALT_NAME={alt_names}
 
 [USERS]
-* = NinjaReflectorNodes
 """
 
+if not strict_mode:
+    conf_content += "* = NinjaReflectorNodes\n"
+
 for u in sorted_users:
-    conf_content += f"{u} = NinjaReflectorNodes\n"
+    # Self-Care users get their own individual password key
+    base_u = re.sub(r"-[A-Z0-9]{1,2}$", "", u).strip().upper()
+    if u in selfcare_users:
+        conf_content += f"{u} = KEY_{u}\n"
+    elif base_u in selfcare_users:
+        conf_content += f"{u} = KEY_{base_u}\n"
+    else:
+        conf_content += f"{u} = NinjaReflectorNodes\n"
+
+for sc_call, sc_pwd in sorted(selfcare_users.items()):
+    if sc_call not in sorted_users:
+        conf_content += f"{sc_call} = KEY_{sc_call}\n"
 
 conf_content += f"""
 [PASSWORDS]
 NinjaReflectorNodes = "{auth_key}"
 """
+for sc_call, sc_pwd in sorted(selfcare_users.items()):
+    conf_content += f'KEY_{sc_call} = "{sc_pwd}"\n'
 
 with open(conf_path, "w", encoding="utf-8") as f:
     f.write(conf_content)
 
 print(f"✓ Generated svxreflector.conf with {len(sorted_users)} authorized users.")
 PYEOF
+}
+
+generate_svx_conf
 
 echo "=================================================="
 echo "  Starting NinjaRadio SvxReflector Server"
@@ -216,4 +257,29 @@ echo "  TCP/UDP Port : ${LISTEN_PORT}"
 echo "  Status HTTP  : ${HTTP_PORT}"
 echo "=================================================="
 
-exec /usr/bin/svxreflector --config="$CONF_PATH"
+RELOAD_MARKER="/app/data/.svxlink_reload"
+LAST_MTIME=""
+if [ -f "$RELOAD_MARKER" ]; then
+    LAST_MTIME=$(stat -c %Y "$RELOAD_MARKER" 2>/dev/null || echo "")
+fi
+
+while true; do
+    /usr/bin/svxreflector --config="$CONF_PATH" &
+    SVX_PID=$!
+
+    while kill -0 "$SVX_PID" 2>/dev/null; do
+        sleep 5
+        if [ -f "$RELOAD_MARKER" ]; then
+            CUR_MTIME=$(stat -c %Y "$RELOAD_MARKER" 2>/dev/null || echo "")
+            if [ -n "$CUR_MTIME" ] && [ "$CUR_MTIME" != "$LAST_MTIME" ]; then
+                LAST_MTIME="$CUR_MTIME"
+                echo "🔄 Reloading svxreflector.conf (Self-Care / Callbook updated)..."
+                generate_svx_conf
+                kill "$SVX_PID" 2>/dev/null || true
+                wait "$SVX_PID" 2>/dev/null || true
+                break
+            fi
+        fi
+    done
+    sleep 1
+done

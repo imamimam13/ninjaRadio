@@ -44,6 +44,31 @@ def get_db_path() -> Optional[str]:
 
 _CALLSIGN_MEM_CACHE: Dict[int, str] = {}
 
+
+def lookup_selfcare_dmr_auth(dmr_id: int) -> Tuple[Optional[str], Optional[bool], Optional[str]]:
+    """
+    Looks up Self-Care user_accounts for per-user DMR Hotspot password & permission.
+    Returns (status, allow_dmr, dmr_password) or (None, None, None) if not registered in user_accounts.
+    """
+    db_path = get_db_path()
+    if not db_path:
+        return None, None, None
+    base_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path, timeout=1.0) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT status, allow_dmr, dmr_password FROM user_accounts WHERE dmr_id = ? OR dmr_id = ?",
+                (dmr_id, base_id),
+            )
+            row = cur.fetchone()
+            if row:
+                return str(row[0] or ""), bool(row[1]), str(row[2] or "")
+    except Exception:
+        pass
+    return None, None, None
+
 def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
     """Resolves amateur callsign for DMR ID dynamically from SQLite Callbook DB or subscriber_ids.csv."""
     if not dmr_id or dmr_id <= 0:
@@ -309,10 +334,25 @@ class HomeBrewMasterServer:
                 return
 
             _, salt, _ = challenge
-            expected_hash = hashlib.sha256(salt + self.password.encode("utf-8")).digest()
+            sc_status, sc_allow_dmr, sc_dmr_pwd = lookup_selfcare_dmr_auth(dmr_id)
+            strict_mode = os.getenv("STRICT_SELFCARE_MODE", "false").lower() == "true"
 
-            # Accept if hash matches OR if password is blank
-            if client_hash == expected_hash or not self.password:
+            if sc_status is not None:
+                if sc_status != "APPROVED" or not sc_allow_dmr or not sc_dmr_pwd:
+                    logger.warning(f"[DMR-Master] ❌ Auth denied for {addr} (DMR ID: {dmr_id}) - Self-Care status={sc_status}, allow_dmr={sc_allow_dmr}")
+                    self.sock.sendto(MSTNAK, addr)
+                    return
+                expected_hash = hashlib.sha256(salt + sc_dmr_pwd.encode("utf-8")).digest()
+                auth_ok = (client_hash == expected_hash)
+            elif strict_mode:
+                logger.warning(f"[DMR-Master] ❌ Auth denied for {addr} (DMR ID: {dmr_id}) - STRICT_SELFCARE_MODE active & user not registered")
+                self.sock.sendto(MSTNAK, addr)
+                return
+            else:
+                expected_hash = hashlib.sha256(salt + self.password.encode("utf-8")).digest()
+                auth_ok = (client_hash == expected_hash or not self.password)
+
+            if auth_ok:
                 now = time.time()
                 base_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
                 essid = dmr_id % 100 if dmr_id > 9999999 else None
