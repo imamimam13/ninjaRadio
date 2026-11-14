@@ -1060,8 +1060,8 @@ class HomeBrewMasterServer:
                     delay = next_send_at - now
                     if delay > 0.002:
                         await asyncio.sleep(delay)
-                    elif delay < -0.020:
-                        # Re-anchor immediately after any stall so subsequent frames never bunch at 0ms
+                    elif delay < -0.080:
+                        # Re-anchor only after a real >80ms stall so minor loop jitter doesn't cause cumulative drift
                         next_send_at = loop.time()
                     tx_now = loop.time()
                     gap_ms = (tx_now - prev_tx_ts) * 1000.0
@@ -1083,7 +1083,11 @@ class HomeBrewMasterServer:
                 if data_type == 2:
                     logger.info(f"📊 [DMR-Pacer] Stream {stream_id} -> {addr} finished (max_tx_gap={max_gap_ms:.1f}ms, max_voice_gap={max_voice_gap_ms:.1f}ms)")
 
-                next_send_at += 0.060 if data_type == 1 else (0.020 if data_type == 0 else 0.030)
+                if data_type == 1:
+                    # Gently catch up (58ms vs 60ms) if backlog > 8 frames so 200+ frame TX never drifts or drops
+                    next_send_at += 0.058 if q.qsize() > 8 else 0.060
+                else:
+                    next_send_at += 0.020 if data_type == 0 else 0.030
         finally:
             self._pacer_tasks.pop(key, None)
             if q.empty():
