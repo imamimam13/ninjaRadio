@@ -645,11 +645,11 @@ class HomeBrewMasterServer:
                         if dyn.get(slot) != dst_tg:
                             dyn[slot] = dst_tg
                             logger.info(f"[DMR-Master] 📌 Hotspot {cl.get('callsign')} ({cl.get('dmr_id')}) dynamically linked to TG {dst_tg} on TS{slot}")
-                        # Lock this hotspot's slot to its own ongoing TX/RX TG
+                        # Lock this hotspot's slot to its own ongoing TX/RX TG (release quickly on terminator)
                         cl.setdefault("slot_locks", {})[slot] = {
                             "stream_id": stream_id,
                             "tg": dst_tg,
-                            "until": now + 3.0
+                            "until": now + (0.25 if data_type == 2 else 2.0)
                         }
 
             # Native Parrot (Configured Parrot Talkgroups or Private Calls)
@@ -915,11 +915,11 @@ class HomeBrewMasterServer:
                     # Deliver on the exact slot the HT operator used to key up this TG
                     target_slot = client["last_slot"]
 
-                # Per-hotspot timeslot stream lock to prevent TDMA frame collision on HT
+                # Per-hotspot timeslot stream lock to prevent TDMA frame collision on HT (even on same TG)
                 slot_locks = client.setdefault("slot_locks", {})
                 lock = slot_locks.get(target_slot)
                 if lock and now < lock.get("until", 0):
-                    if lock.get("stream_id") != stream_id and lock.get("tg") != dst_tg:
+                    if lock.get("stream_id") != stream_id:
                         # Another QSO is actively playing on this hotspot's slot; do not corrupt it
                         continue
 
@@ -927,13 +927,13 @@ class HomeBrewMasterServer:
                     slot_locks[target_slot] = {
                         "stream_id": stream_id,
                         "tg": dst_tg,
-                        "until": now + 0.4
+                        "until": now + 0.25
                     }
                 else:
                     slot_locks[target_slot] = {
                         "stream_id": stream_id,
                         "tg": dst_tg,
-                        "until": now + 2.0
+                        "until": now + 1.5
                     }
 
             # Stamp target client's own 4-byte Repeater ID into bytes 11..15 and set target_slot bit
