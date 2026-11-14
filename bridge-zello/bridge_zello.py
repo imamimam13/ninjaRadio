@@ -587,8 +587,8 @@ async def zello_websocket_worker():
                             try:
                                 key_flag, pcm_8k, tg, src_id, slot = await asyncio.wait_for(dmr_to_zello_queue.get(), timeout=0.1)
                             except asyncio.TimeoutError:
-                                # Watchdog: if no DMR audio for > 0.45s while streaming, stop Zello stream
-                                if bridge_state.dmr_to_zello_streaming and (time.time() - last_pcm_time > 0.45):
+                                # Watchdog: if no DMR audio for > 0.25s while streaming, stop Zello stream
+                                if bridge_state.dmr_to_zello_streaming and (time.time() - last_pcm_time > 0.25):
                                     if bridge_state.dmr_stream_id:
                                         stop_cmd = {
                                             "command": "stop_stream",
@@ -766,6 +766,22 @@ async def zello_websocket_worker():
                                             bridge_state.active_speaker_id = user_dmr_id
                                             bridge_state.active_speaker_call = user_callsign
                                             record_log(f"✓ [ZELLO-FIREWALL] Authorized Zello TX: '{speaker_label}' as {user_callsign} ({user_dmr_id}) -> TG {bridge_state.target_tg} (Slot {bridge_state.slot}, Opus {stream_sr}Hz)")
+                                            # Pre-key Core & DMR preamble immediately on stream start (saves ~100-250ms before first audio frame)
+                                            try:
+                                                call_b = (user_callsign or "ZELLO").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                                prekey_pkt = struct.pack(
+                                                    ">4sIIII?16s",
+                                                    b"NZEL",
+                                                    int(user_dmr_id),
+                                                    int(bridge_state.target_tg),
+                                                    int(bridge_state.slot),
+                                                    320,
+                                                    True,
+                                                    call_b,
+                                                ) + bytes(320)
+                                                udp_tx_sock.sendto(prekey_pkt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
+                                            except Exception:
+                                                pass
 
                                 # Remote speaker stopped talking on Zello
                                 elif cmd == "on_stream_stop":
