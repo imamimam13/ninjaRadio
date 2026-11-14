@@ -63,6 +63,15 @@ const ALL_TALKGROUPS: RadioTalkgroup[] = [
   { id: 91, name: "BrandMeister WorldWide", slot: 1, mode: "DMR", category: "Amatir" },
 ];
 
+const DEFAULT_QUICK_TGS: RadioTalkgroup[] = [
+  { id: 1025, name: "Nusantara Link 1 (Bridi)", slot: 2, mode: "DMR", category: "Amatir" },
+  { id: 1023, name: "TombolPTT Link", slot: 2, mode: "DMR", category: "Amatir" },
+  { id: 555, name: "K2pi Nusantara", slot: 1, mode: "DMR", category: "Amatir" },
+  { id: 510, name: "Indo National DMR", slot: 1, mode: "DMR", category: "Amatir" },
+  { id: 5101, name: "Jawa Barat Regional", slot: 2, mode: "YSF", category: "Amatir" },
+  { id: 5102, name: "Jawa Tengah Regional", slot: 1, mode: "DMR", category: "Amatir" },
+];
+
 function resolveTalkgroup(tgId: number, category: string = "Amatir"): RadioTalkgroup {
   const found = ALL_TALKGROUPS.find((t) => t.id === tgId);
   if (found) return found;
@@ -532,14 +541,41 @@ export default function RadioPocketMode() {
     { id: "2", sender: "JZ10XYZ", target: "TG 5109", type: "group", text: "Posko 1 Jakarta Timur 10-28 aman terkendali.", time: "09:15" },
   ]);
 
+  // Quick Talkgroups Presets State
+  const [quickTgs, setQuickTgs] = useState<RadioTalkgroup[]>(DEFAULT_QUICK_TGS);
+  const [showQuickTgModal, setShowQuickTgModal] = useState(false);
+  const [editingQuickTgs, setEditingQuickTgs] = useState<RadioTalkgroup[]>(DEFAULT_QUICK_TGS);
+
+  // Load custom Quick TGs from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("ninjaradio_quick_tgs");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setQuickTgs(parsed.slice(0, 6));
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to load saved quick TGs:", err);
+      }
+    }
+  }, []);
+
   // Provide full talkgroup list without artificial blocking
   const availableTgs = React.useMemo(() => {
-    const list = [...ALL_TALKGROUPS];
+    const list = [...quickTgs];
+    for (const t of ALL_TALKGROUPS) {
+      if (!list.some((item) => item.id === t.id)) {
+        list.push(t);
+      }
+    }
     if (!list.some((t) => t.id === currentTg.id)) {
       list.unshift(currentTg);
     }
     return list;
-  }, [currentTg]);
+  }, [quickTgs, currentTg]);
 
   const selectedTgIndex = Math.max(0, availableTgs.findIndex((t) => t.id === currentTg.id));
 
@@ -1475,7 +1511,7 @@ export default function RadioPocketMode() {
   // Physical T9 Keyboard Shortcut Listener for 1.8" Radio Mode (keys 1-9 switch channels directly)
   useEffect(() => {
     const handleT9 = (e: KeyboardEvent) => {
-      if (showSmsModal || showDialer || showVoxModal || showCableModal || showAuthModal) return;
+      if (showSmsModal || showDialer || showVoxModal || showCableModal || showAuthModal || showQuickTgModal) return;
       const keyNum = parseInt(e.key);
       if (!isNaN(keyNum) && keyNum >= 1 && keyNum <= availableTgs.length) {
         tuneToTalkgroup(availableTgs[keyNum - 1]);
@@ -1484,7 +1520,7 @@ export default function RadioPocketMode() {
     };
     window.addEventListener("keydown", handleT9);
     return () => window.removeEventListener("keydown", handleT9);
-  }, [availableTgs, showSmsModal, showDialer, showVoxModal, showCableModal, showAuthModal]);
+  }, [availableTgs, showSmsModal, showDialer, showVoxModal, showCableModal, showAuthModal, showQuickTgModal]);
 
   const nextChannel = () => {
     if (availableTgs.length === 0) return;
@@ -2260,15 +2296,29 @@ export default function RadioPocketMode() {
             {!screenMetrics.isUltraCompactHeight && (
               <div className="bg-[#0b121e]/90 border border-cyan-900/40 rounded-xl p-2 flex-shrink-0 space-y-1.5">
                 <div className="flex items-center justify-between text-[9px] sm:text-[10px] font-mono">
-                  <span className="font-black text-cyan-400 tracking-wider">⚡ QUICK TALKGROUPS</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-black text-cyan-400 tracking-wider">⚡ QUICK TALKGROUPS</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingQuickTgs(quickTgs.map((t) => ({ ...t })));
+                        setShowQuickTgModal(true);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-800/70 hover:bg-cyan-900/80 text-cyan-300 hover:text-white transition-all flex items-center gap-1 text-[8px] sm:text-[9px] font-bold cursor-pointer active:scale-95 shadow-sm"
+                      title="Ubah & atur 6 tombol Quick Talkgroups"
+                    >
+                      <Settings2 className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-cyan-400" />
+                      <span>Ubah</span>
+                    </button>
+                  </div>
                   <span className="text-emerald-400 font-bold">TS{currentTimeSlot} • {currentTg.mode}</span>
                 </div>
                 <div className="grid grid-cols-3 gap-1.5">
-                  {availableTgs.slice(0, 6).map((tgItem) => {
+                  {quickTgs.map((tgItem, idx) => {
                     const isSelected = currentTg.id === tgItem.id;
                     return (
                       <button
-                        key={tgItem.id}
+                        key={`${tgItem.id}-${idx}`}
                         type="button"
                         onClick={() => {
                           tuneToTalkgroup(tgItem);
@@ -3420,6 +3470,181 @@ export default function RadioPocketMode() {
               >
                 {isTuningSaving ? "Menyimpan..." : "Terapkan Frekuensi"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Talkgroups Configuration Modal */}
+      {showQuickTgModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 animate-in fade-in duration-150">
+          <div className="bg-[#0b121e] border-2 border-cyan-500/80 rounded-3xl max-w-lg w-full p-4 sm:p-5 space-y-3.5 shadow-2xl max-h-[88dvh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-cyan-900/50 pb-2.5 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-cyan-950/80 border border-cyan-800/80 text-cyan-400">
+                  <Settings2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-heading font-black text-sm text-white tracking-wide">Pengaturan Quick Talkgroups</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">Kustomisasi 6 tombol pintas frekuensi Anda</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuickTgModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Scrollable Slots Grid */}
+            <div className="flex-1 overflow-y-auto pr-1 space-y-2.5">
+              {editingQuickTgs.map((item, idx) => (
+                <div key={idx} className="bg-[#060a12] border border-cyan-900/40 hover:border-cyan-700/60 transition-colors rounded-xl p-2.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono font-black text-cyan-400">
+                      PRESET #{idx + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = [...editingQuickTgs];
+                        updated[idx] = {
+                          id: currentTg.id,
+                          name: currentTg.name || `Talkgroup ${currentTg.id}`,
+                          slot: currentTimeSlot,
+                          mode: currentTg.mode || "DMR",
+                          category: currentTg.category || "Amatir"
+                        };
+                        setEditingQuickTgs(updated);
+                      }}
+                      className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
+                    >
+                      Gunakan TG Aktif ({currentTg.id})
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-2">
+                    {/* TG Number */}
+                    <div className="col-span-4">
+                      <label className="text-[9px] text-slate-400 font-mono block mb-0.5">Nomor TG</label>
+                      <input
+                        type="number"
+                        value={item.id || ""}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 0;
+                          const updated = [...editingQuickTgs];
+                          updated[idx] = { ...updated[idx], id: val };
+                          setEditingQuickTgs(updated);
+                        }}
+                        className="w-full bg-[#0b121e] border border-slate-700 focus:border-cyan-400 rounded-lg px-2 py-1 text-xs font-mono font-bold text-white focus:outline-none"
+                        placeholder="e.g. 1025"
+                      />
+                    </div>
+                    {/* TG Name */}
+                    <div className="col-span-8">
+                      <label className="text-[9px] text-slate-400 font-mono block mb-0.5">Nama Talkgroup</label>
+                      <input
+                        type="text"
+                        value={item.name || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const updated = [...editingQuickTgs];
+                          updated[idx] = { ...updated[idx], name: val };
+                          setEditingQuickTgs(updated);
+                        }}
+                        className="w-full bg-[#0b121e] border border-slate-700 focus:border-cyan-400 rounded-lg px-2 py-1 text-xs font-mono text-white focus:outline-none"
+                        placeholder="Nama Talkgroup"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Timeslot */}
+                    <div>
+                      <label className="text-[9px] text-slate-400 font-mono block mb-0.5">Timeslot</label>
+                      <select
+                        value={item.slot || 1}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 1;
+                          const updated = [...editingQuickTgs];
+                          updated[idx] = { ...updated[idx], slot: val };
+                          setEditingQuickTgs(updated);
+                        }}
+                        className="w-full bg-[#0b121e] border border-slate-700 focus:border-cyan-400 rounded-lg px-2 py-1 text-[11px] font-mono text-slate-200 focus:outline-none"
+                      >
+                        <option value={1}>Timeslot 1 (TS1)</option>
+                        <option value={2}>Timeslot 2 (TS2)</option>
+                      </select>
+                    </div>
+                    {/* Mode */}
+                    <div>
+                      <label className="text-[9px] text-slate-400 font-mono block mb-0.5">Moda</label>
+                      <select
+                        value={item.mode || "DMR"}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const updated = [...editingQuickTgs];
+                          updated[idx] = { ...updated[idx], mode: val };
+                          setEditingQuickTgs(updated);
+                        }}
+                        className="w-full bg-[#0b121e] border border-slate-700 focus:border-cyan-400 rounded-lg px-2 py-1 text-[11px] font-mono text-slate-200 focus:outline-none"
+                      >
+                        <option value="DMR">DMR</option>
+                        <option value="YSF">YSF</option>
+                        <option value="ANALOG">ANALOG</option>
+                        <option value="P25">P25</option>
+                        <option value="CB">CB</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-between pt-2.5 border-t border-slate-800 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingQuickTgs(DEFAULT_QUICK_TGS.map((t) => ({ ...t })));
+                }}
+                className="text-[10px] font-mono text-slate-400 hover:text-amber-400 underline cursor-pointer"
+              >
+                Reset ke Default
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickTgModal(false)}
+                  className="px-3 py-1.5 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs font-mono font-bold transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cleaned = editingQuickTgs.map((t) => ({
+                      id: Number(t.id) || 1025,
+                      name: (t.name || `Talkgroup ${t.id}`).trim(),
+                      slot: Number(t.slot) === 2 ? 2 : 1,
+                      mode: t.mode || "DMR",
+                      category: t.category || "Amatir"
+                    }));
+                    setQuickTgs(cleaned);
+                    if (typeof window !== "undefined") {
+                      localStorage.setItem("ninjaradio_quick_tgs", JSON.stringify(cleaned));
+                    }
+                    setShowQuickTgModal(false);
+                    beepPlayer?.playRogerBeep();
+                  }}
+                  className="px-4 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-heading font-black shadow-[0_0_15px_rgba(0,240,255,0.4)] transition-all cursor-pointer"
+                >
+                  Simpan Presets
+                </button>
+              </div>
             </div>
           </div>
         </div>
