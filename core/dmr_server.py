@@ -1045,8 +1045,8 @@ class HomeBrewMasterServer:
                 now = loop.time()
                 if stream_id != last_stream_id:
                     last_stream_id = stream_id
-                    # 120ms (2-frame) jitter cushion once at stream start so 4G/WiFi jitter doesn't starve MMDVMHost
-                    await asyncio.sleep(0.120)
+                    # 240ms (4-frame) jitter cushion once at stream start so 4G/WebRTC jitter doesn't starve MMDVMHost
+                    await asyncio.sleep(0.240)
                     next_send_at = loop.time()
                     max_gap_ms = 0.0
                     max_voice_gap_ms = 0.0
@@ -1056,8 +1056,8 @@ class HomeBrewMasterServer:
                     delay = next_send_at - now
                     if delay > 0.002:
                         await asyncio.sleep(delay)
-                    elif delay < -0.240:
-                        # Catch up if event loop fell behind > 240ms
+                    elif delay < -0.020:
+                        # Re-anchor immediately after any stall so subsequent frames never bunch at 0ms
                         next_send_at = loop.time()
                     tx_now = loop.time()
                     gap_ms = (tx_now - prev_tx_ts) * 1000.0
