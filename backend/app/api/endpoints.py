@@ -1104,9 +1104,9 @@ async def run_stream_watchdog():
                     "mode": info.get("mode", "DMR"),
                     "category": info.get("category", "Amatir"),
                     "duration": f"{dur}s",
-                    "loss": "0.0%",
-                    "ber": "0.1%",
-                    "rssi": info.get("rssi", "-62 dBm"),
+                    "loss": info.get("loss", "0.0%"),
+                    "ber": info.get("ber", "0.0%"),
+                    "rssi": info.get("rssi", "Digital IP"),
                     "is_tx": False
                 }
                 await manager.push_last_heard(lh_item)
@@ -1195,6 +1195,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         last_broadcast = cached.get("last_broadcast", 0.0) if cached else 0.0
 
         mode_val = cached.get("mode") if (cached and cached.get("mode") == "DMR (WebRTC)") else f"DMR ({network})"
+        live_rssi = str(event.get("rssi") or (cached.get("rssi") if cached else None) or "Digital IP")
+        live_loss = str(event.get("loss") or (cached.get("loss") if cached else None) or "0.0%")
+        live_ber = str(event.get("ber") or (cached.get("ber") if cached else None) or "0.0%")
         tx_data = {
             "id": cached.get("id", f"tx_rf_{stream_key}") if cached else f"tx_rf_{stream_key}",
             "callsign": callsign,
@@ -1205,8 +1208,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
             "slot": slot,
             "mode": mode_val,
             "category": category,
-            "rssi": "-62 dBm",
-            "ber": "0.1%",
+            "rssi": live_rssi,
+            "loss": live_loss,
+            "ber": live_ber,
             "started_at": started_at,
             "start_time": start_time,
             "last_active": now,
@@ -1250,6 +1254,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         start_ts = cached.get("start_time", now - 3.5) if cached else (now - 3.5)
         dur = round(max(0.5, now - start_ts), 1)
 
+        lh_rssi = str(event.get("rssi") or (cached.get("rssi") if cached else None) or "Digital IP")
+        lh_loss = str(event.get("loss") or (cached.get("loss") if cached else None) or "0.0%")
+        lh_ber = str(event.get("ber") or (cached.get("ber") if cached else None) or "0.0%")
         lh_item = {
             "id": f"lh_{stream_key}_{int(datetime.utcnow().timestamp())}",
             "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
@@ -1262,9 +1269,9 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
             "mode": f"DMR ({network})",
             "category": category,
             "duration": f"{dur}s",
-            "loss": "0.0%",
-            "ber": "0.1%",
-            "rssi": "-62 dBm",
+            "loss": lh_loss,
+            "ber": lh_ber,
+            "rssi": lh_rssi,
             "is_tx": False
         }
         await manager.push_last_heard(lh_item)

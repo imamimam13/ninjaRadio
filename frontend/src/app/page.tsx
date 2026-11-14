@@ -33,6 +33,7 @@ export default function DashboardPage() {
   const rxAudioCtxRef = useRef<AudioContext | null>(null);
   const rxInputNodeRef = useRef<AudioNode | null>(null);
   const rxNextTimeRef = useRef<number>(0);
+  const [rxAnalyser, setRxAnalyser] = useState<AnalyserNode | null>(null);
 
   // Autoplay Policy: Unlock and prepare Web AudioContext on first user gesture
   const ensureAudioUnlocked = () => {
@@ -80,16 +81,22 @@ export default function DashboardPage() {
         comp.attack.value = 0.01;
         comp.release.value = 0.20;
 
-        // Pipeline: hpf -> lpf -> deemph -> notch -> gainNode -> comp -> destination
+        // Pipeline: hpf -> lpf -> deemph -> notch -> gainNode -> comp -> destination + analyser
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.75;
+
         hpf.connect(lpf);
         lpf.connect(deemph);
         deemph.connect(notch);
         notch.connect(gainNode);
         gainNode.connect(comp);
         comp.connect(ctx.destination);
+        comp.connect(analyser);
 
         rxAudioCtxRef.current = ctx;
         rxInputNodeRef.current = hpf;
+        setRxAnalyser(analyser);
       }
 
       if (rxAudioCtxRef.current.state === "suspended") {
@@ -577,6 +584,8 @@ export default function DashboardPage() {
                         mode={vizMode} 
                         color={isCardAudible ? "bg-emerald-400" : "bg-slate-500"} 
                         barsCount={16} 
+                        rssiValue={tx.rssi}
+                        analyserNode={rxAnalyser}
                       />
                     </div>
                   </div>

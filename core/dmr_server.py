@@ -185,6 +185,7 @@ class HomeBrewMasterServer:
         # Server-wide per-Talkgroup contention locks to prevent two MMDVMs from colliding on the same TG
         self.tg_locks: Dict[int, dict] = {}
         self._rejected_stream_ids: Dict[int, float] = {}
+        self._stream_loss_stats: Dict[int, dict] = {}
 
     def is_tg_busy(self, dst_tg: int, requester_src_id: int = 0) -> bool:
         """Returns True if dst_tg is currently locked by another active transmitter."""
@@ -801,6 +802,31 @@ class HomeBrewMasterServer:
                     sender_call = cand
             callsign_str = sender_call or f"ID-{src_id}"
 
+            # Track real-time Packet Loss (from DMRD seq gaps) and RF RSSI/BER (bytes 53..54)
+            pkt_seq = data[4]
+            raw_rssi = data[53] if len(data) >= 54 else 0
+            raw_ber = data[54] if len(data) >= 55 else 0
+            rssi_str = f"-{raw_rssi} dBm" if 20 <= raw_rssi <= 140 else "Digital IP"
+            ber_str = f"{min(raw_ber, 100) * 0.1:.1f}%" if (20 <= raw_rssi <= 140) else "0.0%"
+
+            st = self._stream_loss_stats.get(stream_id)
+            if st is None or data_type == 0:
+                if len(self._stream_loss_stats) > 64:
+                    cutoff = now - 120.0
+                    self._stream_loss_stats = {k: v for k, v in self._stream_loss_stats.items() if v.get("ts", 0) > cutoff}
+                st = {"last_seq": pkt_seq, "rx": 1, "lost": 0, "ts": now}
+                self._stream_loss_stats[stream_id] = st
+            else:
+                gap = (pkt_seq - st["last_seq"] - 1) & 0xFF
+                if 0 < gap < 32:
+                    st["lost"] += gap
+                st["last_seq"] = pkt_seq
+                st["rx"] += 1
+                st["ts"] = now
+            total_expected = st["rx"] + st["lost"]
+            loss_pct = (st["lost"] / total_expected * 100.0) if total_expected > 0 else 0.0
+            loss_str = f"{loss_pct:.1f}%"
+
             # Track Active QSO stream & Last Heard list
             if data_type == 0:  # Voice Header
                 self.active_stream = {
@@ -812,12 +838,16 @@ class HomeBrewMasterServer:
                     "call_type": call_type,
                     "start_time": now,
                     "last_packet_time": now,
-                    "packets": 1
+                    "packets": 1,
+                    "loss": loss_str,
+                    "rssi": rssi_str,
                 }
             elif data_type == 1:  # Voice Burst
                 if self.active_stream and self.active_stream.get("stream_id") == stream_id:
                     self.active_stream["packets"] = self.active_stream.get("packets", 0) + 1
                     self.active_stream["last_packet_time"] = now
+                    self.active_stream["loss"] = loss_str
+                    self.active_stream["rssi"] = rssi_str
                 else:
                     self.active_stream = {
                         "stream_id": stream_id,
@@ -828,7 +858,9 @@ class HomeBrewMasterServer:
                         "call_type": call_type,
                         "start_time": now,
                         "last_packet_time": now,
-                        "packets": 1
+                        "packets": 1,
+                        "loss": loss_str,
+                        "rssi": rssi_str,
                     }
             elif data_type == 2:  # Voice Terminator
                 if self.active_stream and self.active_stream.get("stream_id") == stream_id:
@@ -844,12 +876,13 @@ class HomeBrewMasterServer:
                         "call_type": call_type,
                         "duration": max(duration, 0.4),
                         "packets": packets,
-                        "loss": "0.0%"
+                        "loss": loss_str
                     }
                     self.recent_qsos.insert(0, qso_entry)
                     if len(self.recent_qsos) > self.max_recent_qsos:
                         self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
                     self.active_stream = None
+                self._stream_loss_stats.pop(stream_id, None)
 
             # Fire callback to core engine
             if self.on_traffic:
@@ -864,6 +897,9 @@ class HomeBrewMasterServer:
                     "data_type": data_type,
                     "sequence": sequence,
                     "stream_id": stream_id,
+                    "rssi": rssi_str,
+                    "loss": loss_str,
+                    "ber": ber_str,
                     "payload": payload,
                     "raw_packet": data,
                     "timestamp": now

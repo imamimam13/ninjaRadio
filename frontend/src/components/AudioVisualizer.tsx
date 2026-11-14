@@ -8,6 +8,7 @@ interface AudioVisualizerProps {
   barsCount?: number;
   mode?: "bars" | "oscilloscope" | "smeter";
   rssiValue?: string;
+  analyserNode?: AnalyserNode | null;
 }
 
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = React.memo(({
@@ -15,13 +16,15 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = React.memo(({
   color = "bg-cyan-400",
   barsCount = 14,
   mode = "bars",
-  rssiValue = "-68 dBm"
+  rssiValue = "Digital IP",
+  analyserNode = null
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [heights, setHeights] = useState<number[]>(new Array(barsCount).fill(4));
-  const [peakHold, setPeakHold] = useState<number[]>(new Array(barsCount).fill(4));
+  const [heights, setHeights] = useState<number[]>(new Array(barsCount).fill(3));
+  const [peakHold, setPeakHold] = useState<number[]>(new Array(barsCount).fill(3));
+  const [sMeterLevel, setSMeterLevel] = useState<number>(0);
 
-  // Oscilloscope Canvas animation
+  // Real-time Oscilloscope Canvas driven by Web Audio AnalyserNode
   useEffect(() => {
     if (mode !== "oscilloscope" || !canvasRef.current) return;
     const canvas = canvasRef.current;
@@ -29,7 +32,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = React.memo(({
     if (!ctx) return;
 
     let animationFrameId: number;
-    let phase = 0;
+    const timeBuf = analyserNode ? new Uint8Array(analyserNode.fftSize) : null;
 
     const render = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -55,22 +58,26 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = React.memo(({
       ctx.shadowColor = isActive ? "#00f0ff" : "transparent";
       ctx.shadowBlur = isActive ? 8 : 0;
 
-      const sliceWidth = canvas.width / 60;
-      let x = 0;
-
-      for (let i = 0; i < 60; i++) {
-        const amplitude = isActive ? Math.sin(i * 0.2 + phase) * 12 + (Math.random() - 0.5) * 6 : Math.sin(i * 0.1) * 2;
-        const y = canvas.height / 2 + amplitude;
-
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-
-        x += sliceWidth;
+      if (isActive && analyserNode && timeBuf) {
+        analyserNode.getByteTimeDomainData(timeBuf);
+        const step = Math.max(1, Math.floor(timeBuf.length / 64));
+        const points = Math.floor(timeBuf.length / step);
+        const sliceWidth = canvas.width / Math.max(1, points - 1);
+        let x = 0;
+        for (let i = 0; i < points; i++) {
+          const sample = (timeBuf[i * step] - 128) / 128.0; // -1.0 .. +1.0
+          const y = canvas.height / 2 + Math.max(-0.95, Math.min(0.95, sample * 1.4)) * (canvas.height * 0.44);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+          x += sliceWidth;
+        }
+      } else {
+        ctx.moveTo(0, canvas.height / 2);
+        ctx.lineTo(canvas.width, canvas.height / 2);
       }
 
       ctx.stroke();
       if (isActive) {
-        phase += 0.15;
         animationFrameId = requestAnimationFrame(render);
       }
     };
@@ -79,9 +86,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = React.memo(({
     return () => {
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
     };
-  }, [isActive, mode]);
+  }, [isActive, mode, analyserNode]);
 
-  // Bars Animation
+  // Real-time VU Spectrum Bars driven by Web Audio AnalyserNode FFT
   useEffect(() => {
     if (mode !== "bars") return;
     if (!isActive) {
@@ -90,28 +97,96 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = React.memo(({
       return;
     }
 
-    const interval = setInterval(() => {
-      setHeights((prev) => {
-        const next = new Array(barsCount).fill(0).map(() => Math.floor(Math.random() * 24) + 4);
-        setPeakHold((peaks) => peaks.map((p, idx) => Math.max(p - 1, next[idx])));
-        return next;
-      });
-    }, 80);
+    const freqBuf = analyserNode ? new Uint8Array(analyserNode.frequencyBinCount) : null;
+    const timeBuf = analyserNode ? new Uint8Array(analyserNode.fftSize) : null;
+    let rafId: number;
+    let lastUpdate = 0;
 
-    return () => clearInterval(interval);
-  }, [isActive, barsCount, mode]);
+    const tick = (ts: number) => {
+      if (ts - lastUpdate >= 45) {
+        lastUpdate = ts;
+        const next = new Array(barsCount).fill(3);
+        if (analyserNode && freqBuf && timeBuf) {
+          analyserNode.getByteFrequencyData(freqBuf);
+          // Focus on voice spectrum bins (0..40% of Nyquist)
+          const usableBins = Math.max(barsCount, Math.floor(freqBuf.length * 0.45));
+          const binsPerBar = Math.max(1, Math.floor(usableBins / barsCount));
+          for (let b = 0; b < barsCount; b++) {
+            let sum = 0;
+            const start = b * binsPerBar;
+            for (let k = 0; k < binsPerBar; k++) {
+              sum += freqBuf[Math.min(freqBuf.length - 1, start + k)];
+            }
+            const avg = sum / binsPerBar; // 0..255
+            next[b] = Math.max(3, Math.min(26, Math.round((avg / 220) * 26)));
+          }
+        }
+        setHeights(next);
+        setPeakHold((peaks) => peaks.map((p, idx) => Math.max(3, Math.max(p - 1, next[idx]))));
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [isActive, barsCount, mode, analyserNode]);
+
+  // Real-time S-Meter level from numeric RSSI dBm + live audio RMS modulation
+  useEffect(() => {
+    if (mode !== "smeter") return;
+    if (!isActive) {
+      setSMeterLevel(0);
+      return;
+    }
+    const timeBuf = analyserNode ? new Uint8Array(analyserNode.fftSize) : null;
+    let rafId: number;
+    let lastUpdate = 0;
+
+    const dbmMatch = /-?\d+/.exec(rssiValue || "");
+    const baseDbm = dbmMatch ? parseInt(dbmMatch[0], 10) : null;
+
+    const tick = (ts: number) => {
+      if (ts - lastUpdate >= 60) {
+        lastUpdate = ts;
+        let rms = 0;
+        if (analyserNode && timeBuf) {
+          analyserNode.getByteTimeDomainData(timeBuf);
+          let sumSq = 0;
+          for (let i = 0; i < timeBuf.length; i++) {
+            const v = (timeBuf[i] - 128) / 128.0;
+            sumSq += v * v;
+          }
+          rms = Math.sqrt(sumSq / timeBuf.length);
+        }
+        if (baseDbm !== null && baseDbm < 0) {
+          // Map -127 dBm .. -45 dBm to 1..8 segments, with slight live modulation
+          const norm = Math.max(0, Math.min(1, (baseDbm + 125) / 80));
+          const segs = Math.max(1, Math.min(8, Math.round(norm * 7 + Math.min(1, rms * 3))));
+          setSMeterLevel(segs);
+        } else {
+          // Digital IP: reflect live speech modulation envelope
+          const segs = Math.max(1, Math.min(8, Math.round(1 + Math.min(1, rms * 14) * 7)));
+          setSMeterLevel(segs);
+        }
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [isActive, mode, rssiValue, analyserNode]);
 
   // S-METER MODE
   if (mode === "smeter") {
     const segments = [
-      { label: "S1", color: "bg-emerald-500", on: isActive },
-      { label: "S3", color: "bg-emerald-500", on: isActive },
-      { label: "S5", color: "bg-emerald-400", on: isActive },
-      { label: "S7", color: "bg-emerald-400", on: isActive },
-      { label: "S9", color: "bg-cyan-400", on: isActive },
-      { label: "+20", color: "bg-amber-400", on: isActive },
-      { label: "+40", color: "bg-amber-500", on: isActive },
-      { label: "+60", color: "bg-rose-500", on: isActive },
+      { label: "S1", color: "bg-emerald-500", on: isActive && sMeterLevel >= 1 },
+      { label: "S3", color: "bg-emerald-500", on: isActive && sMeterLevel >= 2 },
+      { label: "S5", color: "bg-emerald-400", on: isActive && sMeterLevel >= 3 },
+      { label: "S7", color: "bg-emerald-400", on: isActive && sMeterLevel >= 4 },
+      { label: "S9", color: "bg-cyan-400", on: isActive && sMeterLevel >= 5 },
+      { label: "+20", color: "bg-amber-400", on: isActive && sMeterLevel >= 6 },
+      { label: "+40", color: "bg-amber-500", on: isActive && sMeterLevel >= 7 },
+      { label: "+60", color: "bg-rose-500", on: isActive && sMeterLevel >= 8 },
     ];
 
     return (

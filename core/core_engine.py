@@ -3029,7 +3029,10 @@ usrpAGC = -20,10,100
                     "slot": r_slot,
                     "callsign": callsign,
                     "is_tx": False,
-                    "data_type": data_type
+                    "data_type": data_type,
+                    "rssi": traffic.get("rssi", "Digital IP"),
+                    "loss": traffic.get("loss", "0.0%"),
+                    "ber": traffic.get("ber", "0.0%"),
                 }
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
@@ -3249,6 +3252,12 @@ usrpAGC = -20,10,100
                 self._broadcast_direct_rx_to_dvswitch_mobile(src_id, callsign, r_tg, r_slot, data_type, decoded_pcm)
 
                 # 2. Stream to Web (/dashboard & /radio) and Mumble
+                peer_rssi = "Peer IP"
+                peer_ber = "0.0%"
+                if raw_packet and len(raw_packet) >= 54 and 20 <= raw_packet[53] <= 140:
+                    peer_rssi = f"-{raw_packet[53]} dBm"
+                    if len(raw_packet) >= 55:
+                        peer_ber = f"{min(raw_packet[54], 100) * 0.1:.1f}%"
                 traffic_event = {
                     "network": f"Peer: {network_name}",
                     "src_id": src_id,
@@ -3256,7 +3265,10 @@ usrpAGC = -20,10,100
                     "slot": r_slot,
                     "callsign": callsign,
                     "is_tx": False,
-                    "data_type": data_type
+                    "data_type": data_type,
+                    "rssi": peer_rssi,
+                    "loss": "0.0%",
+                    "ber": peer_ber,
                 }
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
