@@ -35,6 +35,7 @@ services:
       # DVSwitch Mobile Android & USRP Audio Port
       - "${USRP_AUDIO_PORT:-32345}:${USRP_AUDIO_PORT:-32345}/udp"
     environment:
+      - TZ=${TZ:-Asia/Jakarta}
       - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
     volumes:
       - ./core:/app
@@ -176,6 +177,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - TZ=${TZ:-Asia/Jakarta}
       - SERVER_CALLSIGN=N1NJA
       - SERVER_DMR_ID=5109999
       - DEFAULT_TALKGROUP=510
@@ -200,6 +202,7 @@ services:
     ports:
       - "3000:3000"
     environment:
+      - TZ=${TZ:-Asia/Jakarta}
       - NEXT_PUBLIC_API_URL=/api
     depends_on:
       - backend

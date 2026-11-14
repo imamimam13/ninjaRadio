@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFi
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 import psutil
 import time
@@ -34,6 +34,9 @@ from backend.app.services.selfcare_service import (
 
 router = APIRouter()
 START_TIME = time.time()
+
+def get_current_iso_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ----------------- Dashboard & Status -----------------
 
@@ -727,7 +730,7 @@ async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
             "category": "Amatir",
             "rssi": "-48 dBm",
             "ber": "0.0%",
-            "started_at": datetime.utcnow().strftime("%H:%M:%S")
+            "started_at": get_current_iso_utc()
         }
         await manager.update_tx_state(parrot_tx)
         
@@ -740,7 +743,7 @@ async def trigger_parrot_reply(caller_callsign: str, dmr_id: int, slot: int):
         # 3. Push Parrot to Last Heard
         lh_item = {
             "id": f"tx_parrot_{int(datetime.utcnow().timestamp())}",
-            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+            "timestamp": get_current_iso_utc(),
             "callsign": "PARROT",
             "name": f"Echo Audio Playback ({caller_callsign})",
             "dmr_id": 9990,
@@ -1031,7 +1034,7 @@ async def web_ptt_transmit(
             "category": category,
             "rssi": "-55 dBm",
             "ber": "0.0%",
-            "started_at": datetime.utcnow().strftime("%H:%M:%S"),
+            "started_at": get_current_iso_utc(),
             "start_time": now_ts,
             "last_active": now_ts
         }
@@ -1043,7 +1046,7 @@ async def web_ptt_transmit(
         await manager.update_stream(stream_key, None)
         lh_item = {
             "id": f"tx_web_{stream_key}_{int(datetime.utcnow().timestamp())}",
-            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+            "timestamp": get_current_iso_utc(),
             "callsign": callsign,
             "name": name,
             "dmr_id": dmr_id,
@@ -1094,7 +1097,7 @@ async def run_stream_watchdog():
                 dur = round(max(0.5, now - start_ts), 1)
                 lh_item = {
                     "id": f"lh_{stream_key}_{int(now)}",
-                    "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+                    "timestamp": get_current_iso_utc(),
                     "callsign": info.get("callsign", "N1NJA"),
                     "name": info.get("name", "DMR Operator"),
                     "dmr_id": info.get("dmr_id", 0),
@@ -1191,7 +1194,7 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         is_new_stream = stream_key not in ACTIVE_STREAMS
         cached = ACTIVE_STREAMS.get(stream_key)
         start_time = cached.get("start_time", now) if cached else now
-        started_at = cached.get("started_at", datetime.utcnow().strftime("%H:%M:%S")) if cached else datetime.utcnow().strftime("%H:%M:%S")
+        started_at = cached.get("started_at", get_current_iso_utc()) if cached else get_current_iso_utc()
         last_broadcast = cached.get("last_broadcast", 0.0) if cached else 0.0
 
         mode_val = cached.get("mode") if (cached and cached.get("mode") == "DMR (WebRTC)") else f"DMR ({network})"
@@ -1259,7 +1262,7 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         lh_ber = str(event.get("ber") or (cached.get("ber") if cached else None) or "0.0%")
         lh_item = {
             "id": f"lh_{stream_key}_{int(datetime.utcnow().timestamp())}",
-            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+            "timestamp": get_current_iso_utc(),
             "callsign": callsign,
             "name": name,
             "dmr_id": src_id,

@@ -27,6 +27,29 @@ import {
   X
 } from "lucide-react";
 
+const formatLastHeardTime = (ts: string | number | undefined): string => {
+  if (!ts) return "-";
+  if (typeof ts === "number") {
+    const ms = ts < 1e11 ? ts * 1000 : ts;
+    return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  }
+  const str = String(ts).trim();
+  if (str.includes("T") || str.includes("-") || str.includes("Z")) {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    }
+  }
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) {
+    const today = new Date().toISOString().slice(0, 10);
+    const d = new Date(`${today}T${str}Z`);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    }
+  }
+  return str;
+};
+
 export default function DashboardPage() {
   const { lastHeard, activeTx, activeTxList, incomingAudio, isConnected } = useLiveMonitor();
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -820,7 +843,7 @@ export default function DashboardPage() {
                       className="hover:bg-cyan-950/20 transition-colors group"
                     >
                       <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                        {item.timestamp}
+                        {formatLastHeardTime(item.timestamp)}
                       </td>
                       <td className="py-2.5 px-3 font-bold text-white tracking-wide">
                         <span className="text-cyan-400 group-hover:underline cursor-pointer font-black text-sm">
@@ -952,7 +975,7 @@ export default function DashboardPage() {
                           <code>{client.ip}</code>
                         </td>
                         <td className="py-2.5 px-2 text-slate-400">
-                          {client.connected_at} UTC
+                          {formatLastHeardTime(client.connected_at)}
                         </td>
                         <td className="py-2.5 px-2">
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
