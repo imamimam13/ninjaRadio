@@ -165,6 +165,10 @@ class HomeBrewMasterServer:
         self.active_local_txs: Dict[int, dict] = {}
         # Worker TG -> local MMDVM_Bridge DMRD port mapping (updated by core_engine)
         self.worker_dmr_ports: Dict[int, Tuple[str, int, int]] = {}
+        # Per-(client_addr, slot) 60ms DMRD jitter pacer queues & tasks
+        self._pacer_queues: Dict[Tuple[Tuple[str, int], int], asyncio.Queue] = {}
+        self._pacer_tasks: Dict[Tuple[Tuple[str, int], int], asyncio.Task] = {}
+        self._pacer_streams: Dict[Tuple[Tuple[str, int], int], int] = {}
 
     def parse_mmdvm_options(self, client: dict, options_str: str):
         """Parses all TS1 and TS2 talkgroup subscriptions from RPTC/RPTO options payload."""
@@ -935,8 +939,11 @@ class HomeBrewMasterServer:
             out_pkt = data[:11] + rpt_bytes + bytes([new_bits]) + data[16:]
 
             try:
-                self.sock.sendto(out_pkt, addr)
-                client["tx_packets"] = client.get("tx_packets", 0) + 1
+                if not is_local_bridge:
+                    self._enqueue_paced_dmrd(addr, target_slot, stream_id, data_type, out_pkt, client)
+                else:
+                    self.sock.sendto(out_pkt, addr)
+                    client["tx_packets"] = client.get("tx_packets", 0) + 1
                 delivered_count += 1
             except Exception as e:
                 logger.debug(f"[DMR-Master] Failed to send DMRD to {addr}: {e}")
@@ -946,6 +953,100 @@ class HomeBrewMasterServer:
                 logger.info(f"📻 [DMR-Master] Forwarded Header to {delivered_count} hotspot client(s)")
             else:
                 logger.info(f"📻 [DMR-Master] No matching hotspot client subscribed to TG {dst_tg} (connected: {len(self.clients)})")
+
+    def _enqueue_paced_dmrd(
+        self,
+        addr: Tuple[str, int],
+        target_slot: int,
+        stream_id: int,
+        data_type: int,
+        out_pkt: bytes,
+        client: dict
+    ):
+        """Queues DMRD packets per (hotspot, slot) with a 60ms jitter pacer to prevent burst bunching."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if self.sock:
+                self.sock.sendto(out_pkt, addr)
+                client["tx_packets"] = client.get("tx_packets", 0) + 1
+            return
+
+        key = (addr, target_slot)
+        q = self._pacer_queues.get(key)
+        if q is None:
+            q = asyncio.Queue(maxsize=64)
+            self._pacer_queues[key] = q
+
+        # On new stream / Voice Header, flush stale frames from any previous stream
+        prev_stream = self._pacer_streams.get(key)
+        if data_type == 0 or (prev_stream is not None and prev_stream != stream_id):
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            self._pacer_streams[key] = stream_id
+
+        # Cap backlog at ~720ms (12 frames) for voice bursts to avoid multi-second latency
+        if data_type == 1 and q.qsize() >= 12:
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+
+        try:
+            q.put_nowait((stream_id, data_type, out_pkt))
+        except asyncio.QueueFull:
+            pass
+
+        task = self._pacer_tasks.get(key)
+        if task is None or task.done():
+            self._pacer_tasks[key] = loop.create_task(self._paced_hotspot_sender(key, addr, client))
+
+    async def _paced_hotspot_sender(self, key: Tuple[Tuple[str, int], int], addr: Tuple[str, int], client: dict):
+        """Drains a hotspot slot queue at steady 60ms TDMA cadence with a 1-frame (60ms) jitter cushion."""
+        q = self._pacer_queues.get(key)
+        if q is None:
+            return
+        loop = asyncio.get_running_loop()
+        last_stream_id = None
+        next_send_at = 0.0
+
+        try:
+            while self.running and addr in self.clients:
+                try:
+                    stream_id, data_type, out_pkt = await asyncio.wait_for(q.get(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    break
+
+                now = loop.time()
+                if stream_id != last_stream_id or data_type == 0:
+                    last_stream_id = stream_id
+                    # 60ms (1-frame) jitter cushion on stream start so network jitter doesn't starve frame 2
+                    await asyncio.sleep(0.060)
+                    next_send_at = loop.time()
+                else:
+                    delay = next_send_at - now
+                    if delay > 0.002:
+                        await asyncio.sleep(delay)
+                    elif delay < -0.180:
+                        # Catch up if event loop fell behind > 180ms
+                        next_send_at = loop.time()
+
+                if self.sock and addr in self.clients:
+                    try:
+                        self.sock.sendto(out_pkt, addr)
+                        client["tx_packets"] = client.get("tx_packets", 0) + 1
+                    except Exception:
+                        pass
+
+                next_send_at += 0.060
+        finally:
+            self._pacer_tasks.pop(key, None)
+            if q.empty():
+                self._pacer_queues.pop(key, None)
+                self._pacer_streams.pop(key, None)
 
     async def _play_parrot_echo(self, target_addr: Tuple[str, int], caller_id: int, orig_tg: int, slot: int, call_type: str, recorded_packets: list):
         """Plays back recorded DMR voice burst to the hotspot on TG 9990 after turnaround delay."""
