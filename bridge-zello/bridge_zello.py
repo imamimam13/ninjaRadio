@@ -131,6 +131,22 @@ def resolve_zello_identity(username: str, display_name: str = "") -> Tuple[Optio
     try:
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
+            # 0. Self-Care approved Zello username mapping (highest priority)
+            try:
+                for cand in [u_lower, d_lower]:
+                    if cand:
+                        cursor.execute(
+                            "SELECT callsign, dmr_id, status, allow_zello FROM user_accounts WHERE LOWER(zello_username) = ?",
+                            (cand,)
+                        )
+                        sc_row = cursor.fetchone()
+                        if sc_row:
+                            if str(sc_row[2] or "").upper() == "APPROVED" and bool(sc_row[3]):
+                                return int(sc_row[1]), str(sc_row[0]).strip().upper()
+                            return None, None
+            except Exception:
+                pass
+
             for clean_name in names_to_check:
                 # 1. Look for 7-digit DMR ID in string
                 id_match = re.search(r"\b(\d{7})\b", clean_name)
@@ -179,6 +195,19 @@ def check_zello_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> Tup
     try:
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT status, allow_zello FROM user_accounts WHERE UPPER(callsign) = ? OR dmr_id = ?",
+                    (callsign.upper(), dmr_id)
+                )
+                sc_row = cursor.fetchone()
+                if sc_row:
+                    if str(sc_row[0] or "").upper() != "APPROVED":
+                        return False, f"Akun {callsign} berstatus {sc_row[0]} (RX Only hingga disetujui Admin)"
+                    if not bool(sc_row[1]):
+                        return False, f"Akun {callsign} belum memiliki izin layanan Zello"
+            except Exception:
+                pass
             cursor.execute(
                 "SELECT organization, allowed_tgs_override FROM callbook WHERE UPPER(callsign) = ? OR dmr_id = ?",
                 (callsign.upper(), dmr_id)

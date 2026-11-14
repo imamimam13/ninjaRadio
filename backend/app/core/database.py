@@ -74,6 +74,47 @@ class Organization(Base):
     allow_tx: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    callsign: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    dmr_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    city: Mapped[str] = mapped_column(String(64), default="")
+    organization: Mapped[str] = mapped_column(String(32), default="ORARI")
+    organization_id: Mapped[str] = mapped_column(String(64), default="") # No. IAR / IKRAP / 10-28 RAPI
+    verification_note: Mapped[str] = mapped_column(String(255), default="")
+    password_hash: Mapped[str] = mapped_column(String(255))
+
+    status: Mapped[str] = mapped_column(String(16), default="PENDING", index=True) # PENDING, APPROVED, REJECTED, SUSPENDED
+    rejected_reason: Mapped[str] = mapped_column(String(255), default="")
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Requested services by user
+    req_web: Mapped[bool] = mapped_column(Boolean, default=True)
+    req_dmr: Mapped[bool] = mapped_column(Boolean, default=False)
+    req_svxlink: Mapped[bool] = mapped_column(Boolean, default=False)
+    req_mumble: Mapped[bool] = mapped_column(Boolean, default=False)
+    req_dvswitch: Mapped[bool] = mapped_column(Boolean, default=False)
+    req_zello: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Approved permissions by Admin
+    allow_web: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_dmr: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_svxlink: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_mumble: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_dvswitch: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_zello: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Per-protocol unique credentials (6-char auto-generated on approve)
+    dmr_password: Mapped[str] = mapped_column(String(32), default="")
+    svxlink_password: Mapped[str] = mapped_column(String(32), default="")
+    mumble_password: Mapped[str] = mapped_column(String(32), default="")
+    zello_username: Mapped[str] = mapped_column(String(64), default="")
+    dvswitch_allowed_ip: Mapped[str] = mapped_column(String(64), default="")
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

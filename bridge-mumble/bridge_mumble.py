@@ -108,6 +108,51 @@ def get_mumble_sqlite_path():
             return p
     return None
 
+def sync_mumble_users_direct_sqlite():
+    """Syncs Self-Care APPROVED Mumble users & unique passwords into Murmur's SQLite users table."""
+    murmur_db = get_mumble_sqlite_path()
+    app_db = get_db_path()
+    if not murmur_db or not app_db:
+        return
+    import sqlite3
+    import hashlib
+    try:
+        with sqlite3.connect(app_db, timeout=2.0) as aconn:
+            acur = aconn.cursor()
+            acur.execute("SELECT callsign, status, allow_mumble, mumble_password FROM user_accounts")
+            accounts = acur.fetchall()
+        if not accounts:
+            return
+
+        with sqlite3.connect(murmur_db, timeout=3.0) as mconn:
+            mcur = mconn.cursor()
+            mcur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+            if not mcur.fetchone():
+                return
+            for callsign, status, allow_mumble, mumble_pwd in accounts:
+                uname = str(callsign or "").strip().upper()
+                if not uname or uname == "SUPERUSER":
+                    continue
+                if str(status or "").upper() == "APPROVED" and bool(allow_mumble) and mumble_pwd:
+                    pw_hash = hashlib.sha1(str(mumble_pwd).encode("utf-8")).hexdigest()
+                    mcur.execute("SELECT user_id FROM users WHERE server_id = 1 AND UPPER(name) = ?", (uname,))
+                    existing = mcur.fetchone()
+                    if existing:
+                        mcur.execute("UPDATE users SET pw = ? WHERE server_id = 1 AND user_id = ?", (pw_hash, existing[0]))
+                    else:
+                        mcur.execute("SELECT COALESCE(MAX(user_id), 0) FROM users WHERE server_id = 1")
+                        next_uid = int(mcur.fetchone()[0] or 0) + 1
+                        mcur.execute(
+                            "INSERT INTO users (server_id, user_id, name, pw) VALUES (1, ?, ?, ?)",
+                            (next_uid, uname, pw_hash)
+                        )
+                else:
+                    mcur.execute("DELETE FROM users WHERE server_id = 1 AND UPPER(name) = ?", (uname,))
+            mconn.commit()
+    except Exception as e:
+        logger.debug(f"Murmur user sync note: {e}")
+
+
 def sync_channels_direct_sqlite():
     """Directly ensures channels in ROOM_MAPPINGS exist in Murmur's SQLite database."""
     db_path = get_mumble_sqlite_path()
@@ -257,6 +302,7 @@ def _murmur_tls_exec(action: str, **kwargs):
 def ensure_channels_created():
     """Connects via native TLS as SuperUser to create permanent channels in Murmur and clean up old ones."""
     sync_channels_direct_sqlite()
+    sync_mumble_users_direct_sqlite()
 
     logger.info("Synchronizing Murmur channels via native Mumble TLS protocol...")
     try:
@@ -696,6 +742,20 @@ def check_mumble_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tu
             call_upper = (callsign or "").strip().upper()
             if not call_upper:
                 return False, "Callsign kosong tidak diizinkan transmit"
+            # Self-Care permission check
+            try:
+                cursor.execute(
+                    "SELECT status, allow_mumble FROM user_accounts WHERE UPPER(callsign) = ? OR (dmr_id = ? AND dmr_id > 0)",
+                    (call_upper, dmr_id)
+                )
+                sc_row = cursor.fetchone()
+                if sc_row:
+                    if str(sc_row[0] or "").upper() != "APPROVED":
+                        return False, f"Akun {call_upper} masih berstatus {sc_row[0]} (RX Only hingga disetujui Admin)"
+                    if not bool(sc_row[1]):
+                        return False, f"Akun {call_upper} belum diizinkan menggunakan layanan Mumble. Ajukan di /account."
+            except Exception:
+                pass
             cursor.execute(
                 "SELECT organization, allowed_tgs_override FROM callbook WHERE UPPER(callsign) = ? OR (dmr_id = ? AND dmr_id > 0)",
                 (call_upper, dmr_id)

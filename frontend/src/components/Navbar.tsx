@@ -87,10 +87,12 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
     { href: "/matrix", label: "TG MATRIX", icon: Network },
     { href: "/logbook", label: "QSO LOG", icon: BookOpen },
     { href: "/callbook", label: "CALLBOOK", icon: Users },
+    { href: "/account", label: "AKUN", icon: KeyRound },
   ];
 
   // Protected server daemon tabs - Accessible via Admin dropdown when unlocked
   const protectedNavItems = [
+    { href: "/admin/registrations", label: "REGISTRATIONS", icon: Users, tag: "APPROVAL", desc: "Verifikasi Callsign", isProtected: true },
     { href: "/serverdmr", label: "DMR MASTER", icon: Cpu, tag: "PORT 62031", desc: "Hotspot & Peering", isProtected: true },
     { href: "/dvswitch", label: "DVSWITCH", icon: Terminal, tag: "PORT 32345", desc: "Mobile USRP Audio", isProtected: true },
     { href: "/mumla", label: "MUMLA", icon: Volume2, tag: "VOIP POOL", desc: "Multi-Bot Gateway", isProtected: true },

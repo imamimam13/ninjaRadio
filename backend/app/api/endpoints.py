@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_
 from typing import List, Optional
 from datetime import datetime
 import asyncio
@@ -10,19 +11,26 @@ import logging
 
 logger = logging.getLogger("NinjaRadio-Endpoints")
 
-from backend.app.core.database import get_db
+from backend.app.core.database import get_db, UserAccount
 from backend.app.core.config import settings
 from backend.app.models.schemas import (
     QsoLogResponse, QsoLogCreate,
     CallbookResponse, CallbookCreate,
     BridgeRouteResponse, BridgeRouteCreate, BridgeRouteUpdate,
     ServerStatus, LastHeardItem, PttTransmitRequest, PinVerifyRequest,
-    OrganizationCreateRequest, OrganizationResponse, OrganizationRuleUpdate
+    OrganizationCreateRequest, OrganizationResponse, OrganizationRuleUpdate,
+    SelfCareRegisterRequest, SelfCareLoginRequest, SelfCareServiceRequest,
+    SelfCareRotatePasswordRequest, AdminApprovalRequest, AdminRejectRequest,
+    UserAccountPublicResponse, UserAccountAdminResponse
 )
 from backend.app.services.logbook_service import LogbookService
 from backend.app.services.callbook_service import CallbookService
 from backend.app.services.bridge_service import BridgeService
 from backend.app.services.dv_monitor import manager
+from backend.app.services.selfcare_service import (
+    SelfCareService, create_session_token, verify_session_token,
+    sanitize_user_response, generate_protocol_password, trigger_protocol_reload
+)
 
 router = APIRouter()
 START_TIME = time.time()
@@ -918,7 +926,11 @@ async def change_admin_pin(payload: dict):
     return {"status": "SUCCESS", "message": "PIN Admin berhasil diperbarui!"}
 
 @router.post("/ptt/transmit")
-async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = Depends(get_db)):
+async def web_ptt_transmit(
+    payload: PttTransmitRequest,
+    session: AsyncSession = Depends(get_db),
+    authorization: Optional[str] = Header(None)
+):
     callsign = (payload.callsign or "SWL-MONITOR").strip()
     dmr_id = payload.dmr_id or 0
     tg = payload.tg if payload.tg is not None else 510
@@ -931,8 +943,40 @@ async def web_ptt_transmit(payload: PttTransmitRequest, session: AsyncSession = 
         if callsign.upper() in ["SWL-MONITOR", "MONITOR", "LISTENER", "GUEST", "TAMU"] or dmr_id == 0:
             raise HTTPException(
                 status_code=403,
-                detail="Mode Monitor (SWL) tidak diizinkan memancar. Silakan gunakan profil Callsign pribadi atau masukkan PIN Operator."
+                detail="Mode Monitor (SWL) tidak diizinkan memancar. Silakan gunakan profil Callsign pribadi atau login akun Self-Care."
             )
+
+        # Enforce Self-Care account rules if account exists or token supplied
+        token_user = None
+        if authorization and authorization.lower().startswith("bearer "):
+            token_payload = verify_session_token(authorization[7:].strip())
+            if not token_payload:
+                raise HTTPException(status_code=401, detail="Sesi login Self-Care tidak valid atau kedaluwarsa.")
+            res_u = await session.execute(select(UserAccount).where(UserAccount.id == token_payload.get("uid")))
+            token_user = res_u.scalar_one_or_none()
+            if not token_user or token_user.callsign != callsign.upper():
+                raise HTTPException(status_code=403, detail="Callsign tidak sesuai dengan akun Self-Care yang login.")
+
+        if not token_user:
+            res_u = await session.execute(
+                select(UserAccount).where(
+                    or_(UserAccount.callsign == callsign.upper(), UserAccount.dmr_id == dmr_id)
+                )
+            )
+            token_user = res_u.scalar_one_or_none()
+
+        if token_user:
+            if token_user.status != "APPROVED":
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Akun {token_user.callsign} berstatus {token_user.status} (hanya bisa RX/Monitor sampai disetujui Admin)."
+                )
+            if not token_user.allow_web:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Akun {token_user.callsign} belum memiliki izin layanan Web PTT. Ajukan di menu /account."
+                )
+
         is_allowed, reason = await CallbookService.check_tx_permission(session, dmr_id, callsign, tg)
         if not is_allowed:
             raise HTTPException(
@@ -3056,3 +3100,182 @@ async def get_zello_logs():
             except Exception as e:
                 return {"status": "ERROR", "recent_logs": [f"Error reading log: {e}"]}
     return {"status": "STANDBY", "recent_logs": ["[Zello-Bridge] Daemon ready. Listening for Channel WebSocket traffic."]}
+
+
+# ----------------- Self-Care Registration & Admin Approval -----------------
+
+async def _get_current_selfcare_user(
+    authorization: Optional[str] = Header(None),
+    session: AsyncSession = Depends(get_db)
+) -> UserAccount:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Token autentikasi diperlukan.")
+    payload = verify_session_token(authorization[7:].strip())
+    if not payload:
+        raise HTTPException(status_code=401, detail="Sesi login tidak valid atau kedaluwarsa.")
+    res = await session.execute(select(UserAccount).where(UserAccount.id == payload.get("uid")))
+    user = res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=401, detail="Akun pengguna tidak ditemukan.")
+    return user
+
+
+def _require_admin_pin(x_admin_pin: Optional[str] = Header(None, alias="X-Admin-Pin")):
+    admin_pin = get_admin_pin()
+    supplied = (x_admin_pin or "").strip()
+    if not supplied or supplied != admin_pin:
+        raise HTTPException(status_code=403, detail="PIN Admin tidak valid.")
+
+
+@router.post("/selfcare/register")
+async def selfcare_register(payload: SelfCareRegisterRequest, session: AsyncSession = Depends(get_db)):
+    user, err = await SelfCareService.register_user(session, payload)
+    if err or not user:
+        raise HTTPException(status_code=400, detail=err or "Gagal mendaftar.")
+    token = create_session_token(user)
+    return {
+        "status": "SUCCESS",
+        "message": "Pendaftaran berhasil dikirim! Status akun Anda PENDING (RX Only) menunggu verifikasi Admin.",
+        "token": token,
+        "user": sanitize_user_response(user),
+    }
+
+
+@router.post("/selfcare/login")
+async def selfcare_login(payload: SelfCareLoginRequest, session: AsyncSession = Depends(get_db)):
+    user = await SelfCareService.authenticate_user(session, payload.identifier, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Callsign/DMR ID atau password salah.")
+    token = create_session_token(user)
+    return {
+        "status": "SUCCESS",
+        "token": token,
+        "user": sanitize_user_response(user),
+    }
+
+
+@router.get("/selfcare/me", response_model=UserAccountPublicResponse)
+async def selfcare_me(user: UserAccount = Depends(_get_current_selfcare_user)):
+    return sanitize_user_response(user)
+
+
+@router.post("/selfcare/request-services", response_model=UserAccountPublicResponse)
+async def selfcare_request_services(
+    payload: SelfCareServiceRequest,
+    user: UserAccount = Depends(_get_current_selfcare_user),
+    session: AsyncSession = Depends(get_db)
+):
+    for field in ["req_web", "req_dmr", "req_svxlink", "req_mumble", "req_dvswitch", "req_zello"]:
+        val = getattr(payload, field)
+        if val is not None:
+            setattr(user, field, bool(val))
+    if payload.zello_username is not None:
+        user.zello_username = payload.zello_username.strip()
+    await session.commit()
+    await session.refresh(user)
+    return sanitize_user_response(user)
+
+
+@router.post("/selfcare/dvswitch/whitelist-ip", response_model=UserAccountPublicResponse)
+async def selfcare_whitelist_dvswitch_ip(
+    request: Request,
+    user: UserAccount = Depends(_get_current_selfcare_user),
+    session: AsyncSession = Depends(get_db)
+):
+    if user.status != "APPROVED" or not user.allow_dvswitch:
+        raise HTTPException(status_code=403, detail="Layanan DVSwitch belum disetujui Admin untuk akun ini.")
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    client_ip = forwarded or (request.client.host if request.client else "")
+    if not client_ip:
+        raise HTTPException(status_code=400, detail="Gagal mendeteksi IP klien.")
+    user.dvswitch_allowed_ip = client_ip
+    await session.commit()
+    await session.refresh(user)
+    return sanitize_user_response(user)
+
+
+@router.post("/selfcare/rotate-password", response_model=UserAccountPublicResponse)
+async def selfcare_rotate_password(
+    payload: SelfCareRotatePasswordRequest,
+    user: UserAccount = Depends(_get_current_selfcare_user),
+    session: AsyncSession = Depends(get_db)
+):
+    if user.status != "APPROVED":
+        raise HTTPException(status_code=403, detail="Akun harus berstatus APPROVED untuk mengatur ulang password protokol.")
+    proto = payload.protocol.strip().lower()
+    if proto == "dmr" and user.allow_dmr:
+        user.dmr_password = generate_protocol_password(6)
+    elif proto == "svxlink" and user.allow_svxlink:
+        user.svxlink_password = generate_protocol_password(6)
+    elif proto == "mumble" and user.allow_mumble:
+        user.mumble_password = generate_protocol_password(6)
+    else:
+        raise HTTPException(status_code=400, detail="Protokol tidak valid atau belum disetujui untuk akun Anda.")
+
+    await session.commit()
+    await session.refresh(user)
+    trigger_protocol_reload()
+    return sanitize_user_response(user)
+
+
+@router.get("/admin/registrations", response_model=List[UserAccountAdminResponse])
+async def admin_list_registrations(
+    status: Optional[str] = Query("ALL"),
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    return await SelfCareService.list_registrations(session, status_filter=status)
+
+
+@router.post("/admin/registrations/{user_id}/approve", response_model=UserAccountAdminResponse)
+async def admin_approve_registration(
+    user_id: int,
+    payload: AdminApprovalRequest,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    user = await SelfCareService.approve_user(session, user_id, payload)
+    if not user:
+        raise HTTPException(status_code=404, detail="Pendaftaran tidak ditemukan.")
+    asyncio.create_task(_notify_core_reload_subscribers())
+    items = await SelfCareService.list_registrations(session, status_filter="ALL")
+    for item in items:
+        if item.id == user.id:
+            return item
+    raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
+
+
+@router.post("/admin/registrations/{user_id}/reject", response_model=UserAccountAdminResponse)
+async def admin_reject_registration(
+    user_id: int,
+    payload: AdminRejectRequest,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    user = await SelfCareService.reject_or_suspend_user(session, user_id, "REJECTED", payload.reason or "")
+    if not user:
+        raise HTTPException(status_code=404, detail="Pendaftaran tidak ditemukan.")
+    asyncio.create_task(_notify_core_reload_subscribers())
+    items = await SelfCareService.list_registrations(session, status_filter="ALL")
+    for item in items:
+        if item.id == user.id:
+            return item
+    raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
+
+
+@router.post("/admin/registrations/{user_id}/suspend", response_model=UserAccountAdminResponse)
+async def admin_suspend_registration(
+    user_id: int,
+    payload: AdminRejectRequest,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    user = await SelfCareService.reject_or_suspend_user(session, user_id, "SUSPENDED", payload.reason or "Akun dibekukan oleh Admin.")
+    if not user:
+        raise HTTPException(status_code=404, detail="Pendaftaran tidak ditemukan.")
+    asyncio.create_task(_notify_core_reload_subscribers())
+    items = await SelfCareService.list_registrations(session, status_filter="ALL")
+    for item in items:
+        if item.id == user.id:
+            return item
+    raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")

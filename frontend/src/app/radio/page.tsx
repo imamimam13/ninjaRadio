@@ -1097,9 +1097,13 @@ export default function RadioPocketMode() {
       // Start real microphone audio streaming through USRP & DMR network
       startLiveMicrophoneStream(targetTgNum);
 
+      const scToken = typeof window !== "undefined" ? localStorage.getItem("ninjaradio_selfcare_token") : null;
       fetch("/api/ptt/transmit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(scToken ? { Authorization: `Bearer ${scToken}` } : {}),
+        },
         body: JSON.stringify({
           callsign: activeProfile.callsign,
           dmr_id: activeProfile.dmrId,
@@ -1147,9 +1151,13 @@ export default function RadioPocketMode() {
         dmr_id: activeProfile.dmrId,
       });
 
+      const scToken = typeof window !== "undefined" ? localStorage.getItem("ninjaradio_selfcare_token") : null;
       fetch("/api/ptt/transmit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(scToken ? { Authorization: `Bearer ${scToken}` } : {}),
+        },
         body: JSON.stringify({
           callsign: activeProfile.callsign,
           dmr_id: activeProfile.dmrId,
