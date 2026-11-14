@@ -94,36 +94,64 @@ export default function CallbookPage() {
   const [syncActionMsg, setSyncActionMsg] = useState<string | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
 
+  const formatSyncDate = (dStr: any) => {
+    if (!dStr) return "";
+    try {
+      const d = new Date(dStr);
+      if (isNaN(d.getTime())) return String(dStr);
+      return d.toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+    } catch {
+      return String(dStr);
+    }
+  };
+
   const loadSyncSources = async () => {
     try {
       const res = await fetch("/api/callbook/sync-sources");
-      if (res.ok) setSyncSources(await res.json());
-    } catch {}
+      if (res.ok) {
+        const data = await res.json();
+        setSyncSources(Array.isArray(data) ? data : []);
+      } else {
+        setSyncSources([]);
+      }
+    } catch (err) {
+      console.warn("Failed to load sync sources:", err);
+      setSyncSources([]);
+    }
   };
 
   const handleAddSyncSource = async (e: React.FormEvent) => {
     e.preventDefault();
     setSyncActionMsg(null);
-    const pin = getSavedAdminPin();
-    const res = await fetch("/api/callbook/sync-sources", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Admin-Pin": pin },
-      body: JSON.stringify({
-        name: newSyncName.trim() || "External Callbook",
-        url: newSyncUrl.trim(),
-        organization: newSyncOrg,
-        interval_hours: newSyncInterval,
-        enabled: true,
-      }),
-    });
-    const d = await res.json();
-    if (res.ok) {
-      setNewSyncName("");
-      setNewSyncUrl("");
-      setSyncActionMsg("✓ Sumber Auto-Sync berhasil disimpan.");
-      await loadSyncSources();
-    } else {
-      setSyncActionMsg(d.detail || "Gagal menyimpan sumber Auto-Sync.");
+    try {
+      const pin = getSavedAdminPin();
+      const res = await fetch("/api/callbook/sync-sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Pin": pin },
+        body: JSON.stringify({
+          name: newSyncName.trim() || "External Callbook",
+          url: newSyncUrl.trim(),
+          organization: newSyncOrg,
+          interval_hours: newSyncInterval,
+          enabled: true,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setNewSyncName("");
+        setNewSyncUrl("");
+        setSyncActionMsg("✓ Sumber Auto-Sync berhasil disimpan.");
+        await loadSyncSources();
+      } else {
+        const errDetail = typeof d.detail === "string" 
+          ? d.detail 
+          : Array.isArray(d.detail) 
+          ? d.detail.map((err: any) => err.msg || JSON.stringify(err)).join(", ")
+          : (d.message || "Gagal menyimpan sumber Auto-Sync.");
+        setSyncActionMsg(errDetail);
+      }
+    } catch (err: any) {
+      setSyncActionMsg(`Koneksi error: ${err.message || err}`);
     }
   };
 
@@ -136,21 +164,36 @@ export default function CallbookPage() {
         method: "POST",
         headers: { "X-Admin-Pin": pin },
       });
-      const d = await res.json();
-      setSyncActionMsg(d.last_status || "Selesai");
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setSyncActionMsg(typeof d.last_status === "string" ? d.last_status : "Sync selesai.");
+      } else {
+        const errDetail = typeof d.detail === "string" 
+          ? d.detail 
+          : Array.isArray(d.detail) 
+          ? d.detail.map((err: any) => err.msg || JSON.stringify(err)).join(", ")
+          : "Gagal menjalankan sync.";
+        setSyncActionMsg(errDetail);
+      }
       await loadSyncSources();
+    } catch (err: any) {
+      setSyncActionMsg(`Koneksi error: ${err.message || err}`);
     } finally {
       setSyncLoading(false);
     }
   };
 
   const handleDeleteSyncSource = async (id: number) => {
-    const pin = getSavedAdminPin();
-    await fetch(`/api/callbook/sync-sources/${id}`, {
-      method: "DELETE",
-      headers: { "X-Admin-Pin": pin },
-    });
-    await loadSyncSources();
+    try {
+      const pin = getSavedAdminPin();
+      await fetch(`/api/callbook/sync-sources/${id}`, {
+        method: "DELETE",
+        headers: { "X-Admin-Pin": pin },
+      });
+      await loadSyncSources();
+    } catch (err) {
+      console.warn("Failed to delete sync source:", err);
+    }
   };
 
   const handleCopyUrl = (url: string) => {
@@ -1938,7 +1981,7 @@ export default function CallbookPage() {
 
             {syncActionMsg && (
               <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-cyan-300">
-                {syncActionMsg}
+                {typeof syncActionMsg === "string" ? syncActionMsg : JSON.stringify(syncActionMsg)}
               </div>
             )}
 
@@ -1982,7 +2025,7 @@ export default function CallbookPage() {
                 </select>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
+                  className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold cursor-pointer"
                 >
                   Tambah
                 </button>
@@ -1990,18 +2033,20 @@ export default function CallbookPage() {
             </form>
 
             <div className="space-y-2">
-              {syncSources.length === 0 ? (
+              {!Array.isArray(syncSources) || syncSources.length === 0 ? (
                 <p className="text-xs text-slate-500 text-center py-4">Belum ada sumber Auto-Sync URL.</p>
               ) : (
                 syncSources.map((s) => (
-                  <div key={s.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                  <div key={s.id || s.url} className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="text-xs font-bold text-white truncate">
-                        {s.name} <span className="text-purple-400">({s.organization} • {s.interval_hours}j)</span>
+                        {s.name || "Sumber Eksternal"}{" "}
+                        <span className="text-purple-400">({s.organization || "AUTO"} • {s.interval_hours || 12}j)</span>
                       </div>
                       <div className="text-[11px] text-slate-400 truncate font-mono">{s.url}</div>
                       <div className="text-[11px] text-cyan-300 mt-0.5">
-                        Status: {s.last_status} {s.last_sync_at ? `(${new Date(s.last_sync_at).toLocaleString()})` : ""}
+                        Status: {s.last_status || "Siap"}{" "}
+                        {s.last_sync_at ? `(${formatSyncDate(s.last_sync_at)})` : ""}
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -2009,14 +2054,14 @@ export default function CallbookPage() {
                         type="button"
                         disabled={syncLoading}
                         onClick={() => handleRunSyncNow(s.id)}
-                        className="px-2.5 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 text-[11px] font-bold"
+                        className="px-2.5 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 text-[11px] font-bold cursor-pointer disabled:opacity-50"
                       >
-                        Sync Sekarang
+                        {syncLoading ? "Menyinkronkan..." : "Sync Sekarang"}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteSyncSource(s.id)}
-                        className="p-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300"
+                        className="p-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 cursor-pointer"
                         title="Hapus"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
