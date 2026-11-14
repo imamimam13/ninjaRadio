@@ -33,12 +33,14 @@ async def lifespan(app: FastAPI):
         simulator_task = asyncio.create_task(run_dv_simulator())
     
     # Inactivity watchdog for live DMR streams
-    from backend.app.api.endpoints import run_stream_watchdog
+    from backend.app.api.endpoints import run_stream_watchdog, run_callbook_autosync_loop
     watchdog_task = asyncio.create_task(run_stream_watchdog())
+    autosync_task = asyncio.create_task(run_callbook_autosync_loop())
 
     yield
 
     # Shutdown
+    autosync_task.cancel()
     watchdog_task.cancel()
     if simulator_task:
         simulator_task.cancel()

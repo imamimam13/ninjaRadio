@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
-import { Users, Search, Plus, MapPin, Building, ShieldCheck, ShieldAlert, Shield, ShieldX, Radio, Upload, Download, Check, AlertCircle, Lock, Unlock, Edit2, Trash2, Sliders, Settings2, Copy } from "lucide-react";
+import { Users, Search, Plus, MapPin, Building, ShieldCheck, ShieldAlert, Shield, ShieldX, Radio, Upload, Download, Check, AlertCircle, Lock, Unlock, Edit2, Trash2, Sliders, Settings2, Copy, RefreshCw } from "lucide-react";
 import { beepPlayer } from "@/components/BeepPlayer";
 import { getIsAdminUnlocked, getSavedAdminPin, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
 
@@ -83,6 +83,75 @@ export default function CallbookPage() {
   // Export user.json Modal State
   const [showExportModal, setShowExportModal] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+
+  // Auto-Sync URL Modal State
+  const [showAutoSyncModal, setShowAutoSyncModal] = useState(false);
+  const [syncSources, setSyncSources] = useState<any[]>([]);
+  const [newSyncName, setNewSyncName] = useState("");
+  const [newSyncUrl, setNewSyncUrl] = useState("");
+  const [newSyncOrg, setNewSyncOrg] = useState("AUTO");
+  const [newSyncInterval, setNewSyncInterval] = useState(12);
+  const [syncActionMsg, setSyncActionMsg] = useState<string | null>(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+
+  const loadSyncSources = async () => {
+    try {
+      const res = await fetch("/api/callbook/sync-sources");
+      if (res.ok) setSyncSources(await res.json());
+    } catch {}
+  };
+
+  const handleAddSyncSource = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSyncActionMsg(null);
+    const pin = getSavedAdminPin();
+    const res = await fetch("/api/callbook/sync-sources", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Pin": pin },
+      body: JSON.stringify({
+        name: newSyncName.trim() || "External Callbook",
+        url: newSyncUrl.trim(),
+        organization: newSyncOrg,
+        interval_hours: newSyncInterval,
+        enabled: true,
+      }),
+    });
+    const d = await res.json();
+    if (res.ok) {
+      setNewSyncName("");
+      setNewSyncUrl("");
+      setSyncActionMsg("✓ Sumber Auto-Sync berhasil disimpan.");
+      await loadSyncSources();
+    } else {
+      setSyncActionMsg(d.detail || "Gagal menyimpan sumber Auto-Sync.");
+    }
+  };
+
+  const handleRunSyncNow = async (id: number) => {
+    setSyncLoading(true);
+    setSyncActionMsg(null);
+    try {
+      const pin = getSavedAdminPin();
+      const res = await fetch(`/api/callbook/sync-sources/${id}/run`, {
+        method: "POST",
+        headers: { "X-Admin-Pin": pin },
+      });
+      const d = await res.json();
+      setSyncActionMsg(d.last_status || "Selesai");
+      await loadSyncSources();
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  const handleDeleteSyncSource = async (id: number) => {
+    const pin = getSavedAdminPin();
+    await fetch(`/api/callbook/sync-sources/${id}`, {
+      method: "DELETE",
+      headers: { "X-Admin-Pin": pin },
+    });
+    await loadSyncSources();
+  };
 
   const handleCopyUrl = (url: string) => {
     if (typeof window !== "undefined") {
@@ -564,6 +633,23 @@ export default function CallbookPage() {
             >
               <Download className="w-4 h-4 text-emerald-400" />
               <span>Unduh user.json</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (!isAdminUnlocked) {
+                  setShowGlobalPinModal(true);
+                  return;
+                }
+                setSyncActionMsg(null);
+                setShowAutoSyncModal(true);
+                loadSyncSources();
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#05080f] border border-purple-700/60 hover:border-purple-400 text-purple-300 text-xs font-mono font-bold rounded-xl transition-all shadow-md"
+              title="Jadwalkan Auto-Sync Callbook dari URL luar"
+            >
+              <RefreshCw className="w-4 h-4 text-purple-400" />
+              <span>Auto-Sync URL</span>
             </button>
 
             <button
@@ -1822,6 +1908,123 @@ export default function CallbookPage() {
               >
                 Tutup
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AUTO-SYNC CALLBOOK URL */}
+      {showAutoSyncModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0b121e] border-2 border-purple-500/60 rounded-3xl max-w-2xl w-full p-5 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-purple-400" />
+                <div>
+                  <h3 className="font-bold text-sm text-white">Auto-Sync Callbook URL Eksternal</h3>
+                  <p className="text-[11px] text-slate-400">
+                    Jika server tujuan down, data Callbook lokal tetap aman &amp; tidak terhapus.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAutoSyncModal(false)}
+                className="text-slate-400 hover:text-white font-mono text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {syncActionMsg && (
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-cyan-300">
+                {syncActionMsg}
+              </div>
+            )}
+
+            <form onSubmit={handleAddSyncSource} className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 bg-slate-950/70 p-3 rounded-xl border border-slate-800">
+              <input
+                type="text"
+                value={newSyncName}
+                onChange={(e) => setNewSyncName(e.target.value)}
+                placeholder="Nama Sumber (misal: RadioID ID)"
+                className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"
+              />
+              <input
+                type="url"
+                required
+                value={newSyncUrl}
+                onChange={(e) => setNewSyncUrl(e.target.value)}
+                placeholder="https://.../user.json atau .csv"
+                className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"
+              />
+              <select
+                value={newSyncOrg}
+                onChange={(e) => setNewSyncOrg(e.target.value)}
+                className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"
+              >
+                <option value="AUTO">Organisasi: AUTO (Deteksi Prefix)</option>
+                <option value="ORARI">ORARI</option>
+                <option value="RAPI">RAPI</option>
+                <option value="BRIDI">BRIDI</option>
+                <option value="CB-11M">CB-11M</option>
+                <option value="KOMUNITAS">KOMUNITAS</option>
+              </select>
+              <div className="flex gap-2">
+                <select
+                  value={newSyncInterval}
+                  onChange={(e) => setNewSyncInterval(Number(e.target.value))}
+                  className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"
+                >
+                  <option value={6}>Tiap 6 Jam</option>
+                  <option value={12}>Tiap 12 Jam</option>
+                  <option value={24}>Tiap 24 Jam</option>
+                </select>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
+                >
+                  Tambah
+                </button>
+              </div>
+            </form>
+
+            <div className="space-y-2">
+              {syncSources.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-4">Belum ada sumber Auto-Sync URL.</p>
+              ) : (
+                syncSources.map((s) => (
+                  <div key={s.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-white truncate">
+                        {s.name} <span className="text-purple-400">({s.organization} • {s.interval_hours}j)</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 truncate font-mono">{s.url}</div>
+                      <div className="text-[11px] text-cyan-300 mt-0.5">
+                        Status: {s.last_status} {s.last_sync_at ? `(${new Date(s.last_sync_at).toLocaleString()})` : ""}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={syncLoading}
+                        onClick={() => handleRunSyncNow(s.id)}
+                        className="px-2.5 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 text-[11px] font-bold"
+                      >
+                        Sync Sekarang
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSyncSource(s.id)}
+                        className="p-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300"
+                        title="Hapus"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

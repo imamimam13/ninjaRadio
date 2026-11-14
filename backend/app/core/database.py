@@ -115,6 +115,22 @@ class UserAccount(Base):
     zello_username: Mapped[str] = mapped_column(String(64), default="")
     dvswitch_allowed_ip: Mapped[str] = mapped_column(String(64), default="")
 
+
+class CallbookSyncSource(Base):
+    __tablename__ = "callbook_sync_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), default="External Callbook")
+    url: Mapped[str] = mapped_column(String(512), unique=True)
+    organization: Mapped[str] = mapped_column(String(32), default="AUTO")
+    default_tg: Mapped[int] = mapped_column(Integer, default=510)
+    interval_hours: Mapped[int] = mapped_column(Integer, default=12)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, default=None)
+    last_status: Mapped[str] = mapped_column(String(255), default="Belum pernah sync")
+    last_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

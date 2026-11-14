@@ -701,3 +701,57 @@ class CallbookService:
             "imported_count": imported_count,
             "skipped_count": skipped_count
         }
+
+    @staticmethod
+    async def sync_url_source(session: AsyncSession, source: Any) -> Dict[str, Any]:
+        """Downloads and upserts callbook entries from a CallbookSyncSource record."""
+        from datetime import datetime
+        from urllib.parse import urlparse
+        import httpx
+
+        url = str(source.url or "").strip()
+        if not (url.startswith("http://") or url.startswith("https://")):
+            source.last_sync_at = datetime.utcnow()
+            source.last_status = "ERROR: URL harus http:// atau https://"
+            await session.commit()
+            return {"success": False, "error": source.last_status}
+
+        try:
+            headers = {
+                "User-Agent": "NinjaRadio-Callbook-AutoSync/1.0",
+                "Accept": "application/json, text/csv, text/plain, */*"
+            }
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=False) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code >= 400:
+                    source.last_sync_at = datetime.utcnow()
+                    source.last_status = f"ERROR: HTTP {resp.status_code}"
+                    await session.commit()
+                    return {"success": False, "error": source.last_status}
+                content = resp.text
+                filename = urlparse(url).path.split("/")[-1] or "remote.json"
+                ctype = resp.headers.get("content-type", "").lower()
+                if "json" in ctype and not filename.lower().endswith(".json"):
+                    filename = f"{filename}.json"
+
+            res = await CallbookService.import_batch_data(
+                session,
+                content,
+                filename,
+                target_organization=source.organization,
+                default_tg=source.default_tg
+            )
+            source.last_sync_at = datetime.utcnow()
+            if res.get("success"):
+                cnt = int(res.get("imported_count", 0))
+                source.last_count = cnt
+                source.last_status = f"OK ({cnt} data di-sync)"
+            else:
+                source.last_status = f"ERROR: {res.get('error', 'Parse failed')}"
+            await session.commit()
+            return res
+        except Exception as e:
+            source.last_sync_at = datetime.utcnow()
+            source.last_status = f"ERROR: {str(e)[:180]}"
+            await session.commit()
+            return {"success": False, "error": source.last_status}
