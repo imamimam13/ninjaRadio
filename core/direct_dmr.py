@@ -2,11 +2,9 @@ import os
 import sys
 import time
 import math
-import socket
 import struct
 import ctypes
 import logging
-import threading
 from typing import List, Tuple, Optional, Callable
 
 logger = logging.getLogger("NinjaRadio-DirectDMR")
@@ -310,90 +308,6 @@ def deinterleave_burst(payload: bytes) -> Tuple[bytes, bytes, bytes]:
     return (fr_to_canonical(fr1), fr_to_canonical(fr2), fr_to_canonical(fr3))
 
 
-_MD380_AMBE_BYTES = 7
-_DMR_GOLAY_GEN = (0x63A, 0x31D, 0x7B4, 0x3DA, 0x1ED, 0x6CC, 0x366, 0x1B3, 0x6E3, 0x54B, 0x49F, 0x475)
-
-
-def _dmr_encode_golay2312(data12: int) -> int:
-    parity = 0
-    for i in range(12):
-        if (data12 >> (11 - i)) & 1:
-            parity ^= _DMR_GOLAY_GEN[i]
-    return (data12 << 11) | parity
-
-
-def _ambe49_to_canonical(raw7: bytes) -> bytes:
-    """Converts 7-byte (49-bit MSB-first) AMBE+2 payload from md380-emu into 9-byte canonical DMR AMBE."""
-    ambe_d = [(raw7[i >> 3] >> (7 - (i & 7))) & 1 for i in range(49)]
-    ambe_fr = bytearray(96)
-
-    c0 = 0
-    for i in range(12):
-        c0 = (c0 << 1) | ambe_d[i]
-    cw0 = _dmr_encode_golay2312(c0)
-
-    c1 = 0
-    for i in range(12):
-        c1 = (c1 << 1) | ambe_d[12 + i]
-    cw1 = _dmr_encode_golay2312(c1)
-
-    pr = [0] * 24
-    pr[0] = (16 * c0) & 0xFFFF
-    for i in range(1, 24):
-        pr[i] = (173 * pr[i - 1] + 13849) & 0xFFFF
-    pr_bits = [p >> 15 for p in pr]
-
-    parity0 = 0
-    for j in range(23):
-        b = (cw0 >> j) & 1
-        parity0 ^= b
-        ambe_fr[j + 1] = b
-    ambe_fr[0] = parity0
-
-    k = 1
-    for j in range(22, -1, -1):
-        ambe_fr[24 + j] = ((cw1 >> j) & 1) ^ pr_bits[k]
-        k += 1
-
-    for j in range(11):
-        ambe_fr[48 + (10 - j)] = ambe_d[24 + j]
-
-    for j in range(14):
-        ambe_fr[72 + (13 - j)] = ambe_d[35 + j]
-
-    return fr_to_canonical(ambe_fr)
-
-
-def _canonical_to_ambe49(frame9: bytes) -> bytes:
-    """Converts 9-byte canonical DMR AMBE frame into 7-byte (49-bit MSB-first) AMBE+2 payload for md380-emu."""
-    def bit(c: int) -> int:
-        return (frame9[c >> 3] >> (7 - (c & 7))) & 1
-
-    ambe_d = [0] * 49
-    c0 = 0
-    for i in range(12):
-        b = bit(i)
-        ambe_d[i] = b
-        c0 = (c0 << 1) | b
-
-    p = (16 * c0) & 0xFFFF
-    for i in range(12):
-        p = (173 * p + 13849) & 0xFFFF
-        ambe_d[12 + i] = bit(24 + i) ^ (p >> 15)
-
-    for i in range(11):
-        ambe_d[24 + i] = bit(47 + i)
-
-    for i in range(14):
-        ambe_d[35 + i] = bit(58 + i)
-
-    out = bytearray(_MD380_AMBE_BYTES)
-    for i, b in enumerate(ambe_d):
-        if b:
-            out[i >> 3] |= 1 << (7 - (i & 7))
-    return bytes(out)
-
-
 class DirectOpenDmrVocoder:
     """Stateful OpenDMR encoder/decoder pair wrapping libopendmr (C/C++)."""
 
@@ -406,11 +320,6 @@ class DirectOpenDmrVocoder:
         self._pcm_in = (ctypes.c_int16 * PCM_SAMPLES)()
         self._frame_out = (ctypes.c_uint8 * FRAME_BYTES)()
         self._errs = ctypes.c_int(0)
-        self._md380_port = int(os.environ.get("MD380_EMU_PORT", "2470"))
-        self._md380_lock = threading.Lock()
-        self._md380_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._md380_sock.settimeout(0.06)
-        self._has_md380_emu = self._probe_md380_emu()
 
         self._load_library()
         if self.lib:
@@ -423,36 +332,9 @@ class DirectOpenDmrVocoder:
                         self.lib.opendmr_encoder_set_gain(self._enc, 0)
                     except Exception:
                         pass
-                logger.info(f"✓ OpenDMR vocoder initialized (0dB unity gain, version: {self._opendmr_version()})")
+                logger.info(f"✓ OpenDMR vocoder initialized (0dB unity gain, version: {self.version()})")
             except Exception as e:
                 logger.warning(f"Could not create OpenDMR codec instances: {e}")
-
-    def _probe_md380_emu(self, attempts: int = 8) -> bool:
-        """Verifies standalone md380-emu UDP daemon (320B PCM <-> 7B 49-bit AMBE+2) on 127.0.0.1:2470."""
-        test_pcm = bytes(PCM_BYTES)
-        for _ in range(attempts):
-            try:
-                with self._md380_lock:
-                    self._md380_sock.sendto(test_pcm, ("127.0.0.1", self._md380_port))
-                    ambe_resp, _ = self._md380_sock.recvfrom(512)
-                    if len(ambe_resp) == _MD380_AMBE_BYTES:
-                        self._md380_sock.sendto(ambe_resp, ("127.0.0.1", self._md380_port))
-                        pcm_resp, _ = self._md380_sock.recvfrom(512)
-                        if len(pcm_resp) == PCM_BYTES:
-                            logger.info(f"✓ md380-emu AMBE+2 vocoder active on UDP 127.0.0.1:{self._md380_port}")
-                            return True
-            except Exception:
-                time.sleep(0.15)
-        return False
-
-    def _opendmr_version(self) -> str:
-        if self.lib and hasattr(self.lib, "opendmr_version"):
-            try:
-                v = self.lib.opendmr_version()
-                return v.decode("utf-8") if v else "unknown"
-            except Exception:
-                pass
-        return "unavailable"
 
     def _load_library(self):
         candidates = [
@@ -560,12 +442,15 @@ class DirectOpenDmrVocoder:
         self._center_buf = (ctypes.c_uint8 * 24)()
 
     def version(self) -> str:
-        if self._has_md380_emu:
-            return f"md380-emu (AMBE+2) + OpenDMR {self._opendmr_version()}"
-        return self._opendmr_version()
+        if not self.lib:
+            return "unavailable"
+        try:
+            return self.lib.opendmr_version().decode("utf-8")
+        except Exception:
+            return "unknown"
 
     def is_available(self) -> bool:
-        return self._has_md380_emu or (self._enc is not None and self._dec is not None)
+        return self._enc is not None and self._dec is not None
 
     def get_or_create_decoder(self, stream_key: str = "slot_2"):
         now = time.time()
@@ -625,18 +510,7 @@ class DirectOpenDmrVocoder:
         self.reset_decoder()
 
     def encode_frame(self, pcm: bytes) -> bytes:
-        if len(pcm) != PCM_BYTES:
-            return bytes(FRAME_BYTES)
-        if self._has_md380_emu:
-            try:
-                with self._md380_lock:
-                    self._md380_sock.sendto(pcm, ("127.0.0.1", self._md380_port))
-                    resp, _ = self._md380_sock.recvfrom(512)
-                if len(resp) == _MD380_AMBE_BYTES:
-                    return _ambe49_to_canonical(resp)
-            except Exception:
-                pass
-        if not self._enc:
+        if not self._enc or len(pcm) != PCM_BYTES:
             return bytes(FRAME_BYTES)
         samples = struct.unpack("<160h", pcm)
         for i, s in enumerate(samples):
@@ -647,20 +521,8 @@ class DirectOpenDmrVocoder:
         return bytes(self._frame_out)
 
     def decode_frame(self, frame: bytes, dec=None) -> bytes:
-        if len(frame) != FRAME_BYTES:
-            return bytes(PCM_BYTES)
-        if self._has_md380_emu:
-            try:
-                raw7 = _canonical_to_ambe49(frame)
-                with self._md380_lock:
-                    self._md380_sock.sendto(raw7, ("127.0.0.1", self._md380_port))
-                    resp, _ = self._md380_sock.recvfrom(512)
-                if len(resp) == PCM_BYTES:
-                    return resp
-            except Exception:
-                pass
         d = dec or self._dec
-        if not d:
+        if not d or len(frame) != FRAME_BYTES:
             return bytes(PCM_BYTES)
         buf = (ctypes.c_uint8 * FRAME_BYTES).from_buffer_copy(frame)
         ok = self.lib.opendmr_decode(d, buf, self._pcm_out, ctypes.byref(self._errs))
@@ -673,7 +535,7 @@ class DirectOpenDmrVocoder:
             return bytes(BURST_BYTES)
         sync = get_burst_center_dibits(sequence, emblc_dict)
 
-        if not self._has_md380_emu and self._has_native_burst_enc and self._enc:
+        if self._has_native_burst_enc and self._enc:
             samples = struct.unpack("<480h", pcm_960)
             for i, s in enumerate(samples):
                 self._pcm_480_in[i] = s
@@ -683,7 +545,7 @@ class DirectOpenDmrVocoder:
             if ok:
                 return bytes(self._burst_out)
 
-        # Uses md380-emu (when active) or OpenDMR frame encoder + Python burst interleaver
+        # Fallback to Python burst interleaver if native not available
         f1 = self.encode_frame(pcm_960[:320])
         f2 = self.encode_frame(pcm_960[320:640])
         f3 = self.encode_frame(pcm_960[640:960])
@@ -694,7 +556,7 @@ class DirectOpenDmrVocoder:
             return b""
 
         dec = self.get_or_create_decoder(stream_key) or self._dec
-        if not self._has_md380_emu and self._has_native_burst_dec and dec:
+        if self._has_native_burst_dec and dec:
             buf = (ctypes.c_uint8 * BURST_BYTES).from_buffer_copy(burst_33[:BURST_BYTES])
             ok = self.lib.opendmr_decode_burst(dec, buf, self._pcm_480_out, ctypes.byref(self._errs))
             if ok:
