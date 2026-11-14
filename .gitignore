@@ -45,6 +45,8 @@ yarn-error.log*
 
 # Environment local secrets
 .env
+admin_token.txt
+*token.txt
 .env.local
 .env.development.local
 .env.test.local
