@@ -998,13 +998,7 @@ class HomeBrewMasterServer:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # Called from a worker thread (e.g. DirectDmrEngine pacer thread): marshal onto main asyncio loop
-            if self._loop is not None and self._loop.is_running():
-                self._loop.call_soon_threadsafe(
-                    self._enqueue_paced_dmrd_on_loop,
-                    self._loop, addr, target_slot, stream_id, data_type, out_pkt, client
-                )
-                return
+            # Called from DirectDmrEngine's dedicated 60ms pacer thread: send directly without double-pacing
             if self.sock:
                 self.sock.sendto(out_pkt, addr)
                 client["tx_packets"] = client.get("tx_packets", 0) + 1
@@ -1029,15 +1023,15 @@ class HomeBrewMasterServer:
             q = asyncio.Queue(maxsize=64)
             self._pacer_queues[key] = q
 
-        # On new stream / Voice Header, flush stale frames from any previous stream
+        # On a new stream_id, flush stale frames from any previous stream (do not flush on 2nd/3rd header of same stream)
         prev_stream = self._pacer_streams.get(key)
-        if data_type == 0 or (prev_stream is not None and prev_stream != stream_id):
+        if prev_stream is not None and prev_stream != stream_id:
             while not q.empty():
                 try:
                     q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            self._pacer_streams[key] = stream_id
+        self._pacer_streams[key] = stream_id
 
         # Cap backlog at ~2.4s (40 frames) for voice bursts to prevent mid-QSO drops from 4G/browser drift
         if data_type == 1 and q.qsize() >= 40:
@@ -1075,8 +1069,8 @@ class HomeBrewMasterServer:
                 now = loop.time()
                 if stream_id != last_stream_id:
                     last_stream_id = stream_id
-                    # 240ms (4-frame) jitter cushion once at stream start so 4G/WebRTC jitter doesn't starve MMDVMHost
-                    await asyncio.sleep(0.240)
+                    # 120ms (2-frame) jitter cushion once at stream start so 4G jitter doesn't starve MMDVMHost
+                    await asyncio.sleep(0.120)
                     next_send_at = loop.time()
                     max_gap_ms = 0.0
                     max_voice_gap_ms = 0.0

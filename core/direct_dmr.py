@@ -784,7 +784,6 @@ class DirectDmrEngine:
         self.current_term_burst = b""
         self.tx_pcm_buffer = bytearray()
         self.last_tx_ts = 0.0
-        self._pending_header = False
 
         # Real-time 60ms TDMA Burst Pacer Queue
         self._pacer_queue: "queue.Queue[Tuple[bytes, float]]" = queue.Queue()
@@ -799,8 +798,8 @@ class DirectDmrEngine:
             try:
                 pkt, interval_s = self._pacer_queue.get()
                 now_mono = time.monotonic()
-                if next_send_mono <= 0.0 or (now_mono - next_send_mono) > interval_s:
-                    # Stream start or after input stall > 1 frame: re-anchor cadence clock so next packet never bunches at 0ms
+                if next_send_mono <= 0.0 or (now_mono - next_send_mono) > 0.24:
+                    # Stream start or after idle gap: send immediately and anchor cadence clock
                     next_send_mono = now_mono
                 elif now_mono < next_send_mono:
                     time.sleep(next_send_mono - now_mono)
@@ -906,7 +905,6 @@ class DirectDmrEngine:
                 logger.info(f"🎙️ [DirectDMR] Unkeyed TX session for {self.current_callsign} (TG {self.current_tg})")
 
             self.in_tx = False
-            self._pending_header = False
             self.tx_pcm_buffer.clear()
             self.current_burst_seq = 0
             self.current_emblc = None
@@ -946,9 +944,21 @@ class DirectDmrEngine:
                 self.vocoder.encode_frame(warmup_pcm)
                 self.vocoder.encode_frame(warmup_pcm)
 
-            # Defer 3x Voice Header preamble (0x21) until first 60ms voice burst is ready so Header->Voice gap is <=60ms
-            self._pending_header = True
-            logger.info(f"🎙️ [DirectDMR] 🔴 Armed Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id})")
+            # Send 3 Voice Header preamble packets (0x21) per ETSI DMR / HomeBrew standard
+            for p_seq in range(3):
+                hdr_pkt = build_dmrd_packet(
+                    src_id=self.current_src_id,
+                    dst_tg=self.current_tg,
+                    slot=self.current_slot,
+                    data_type=0,
+                    seq=0,
+                    payload=self.current_hdr_burst,
+                    rpt_id=self.rpt_id,
+                    stream_id=self.current_stream_id
+                )
+                out_packets.append(hdr_pkt)
+                self._enqueue_paced_pkt(hdr_pkt, 0.020)
+            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id}, 3x Preamble 0x21 sent)")
 
         # Accumulate PCM and encode 960-byte (60ms) bursts
         if pcm_chunk:
@@ -956,23 +966,6 @@ class DirectDmrEngine:
             self.last_tx_ts = now
 
             while len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
-                if self._pending_header:
-                    self._pending_header = False
-                    for _ in range(3):
-                        hdr_pkt = build_dmrd_packet(
-                            src_id=self.current_src_id,
-                            dst_tg=self.current_tg,
-                            slot=self.current_slot,
-                            data_type=0,
-                            seq=0,
-                            payload=self.current_hdr_burst,
-                            rpt_id=self.rpt_id,
-                            stream_id=self.current_stream_id
-                        )
-                        out_packets.append(hdr_pkt)
-                        self._enqueue_paced_pkt(hdr_pkt, 0.020)
-                    logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {self.current_callsign} ({self.current_src_id}) -> TG {self.current_tg} (TS{self.current_slot}, Stream {self.current_stream_id}, 3x Preamble 0x21 sent)")
-
                 burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
                 del self.tx_pcm_buffer[:BURST_PCM_BYTES]
 
