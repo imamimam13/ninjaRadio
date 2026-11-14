@@ -5,7 +5,7 @@ import math
 import struct
 import ctypes
 import logging
-from typing import List, Tuple, Optional, Callable
+from typing import Dict, List, Tuple, Optional, Callable
 
 logger = logging.getLogger("NinjaRadio-DirectDMR")
 
