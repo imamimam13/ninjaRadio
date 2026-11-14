@@ -1049,6 +1049,8 @@ class HomeBrewMasterServer:
                     await asyncio.sleep(0.120)
                     next_send_at = loop.time()
                     max_gap_ms = 0.0
+                    max_voice_gap_ms = 0.0
+                    last_data_type = None
                     prev_tx_ts = next_send_at
                 else:
                     delay = next_send_at - now
@@ -1061,7 +1063,11 @@ class HomeBrewMasterServer:
                     gap_ms = (tx_now - prev_tx_ts) * 1000.0
                     if gap_ms > max_gap_ms:
                         max_gap_ms = gap_ms
+                    if data_type == 1 and last_data_type == 1 and gap_ms > max_voice_gap_ms:
+                        max_voice_gap_ms = gap_ms
                     prev_tx_ts = tx_now
+
+                last_data_type = data_type
 
                 if self.sock and addr in self.clients:
                     try:
@@ -1071,7 +1077,7 @@ class HomeBrewMasterServer:
                         pass
 
                 if data_type == 2:
-                    logger.info(f"📊 [DMR-Pacer] Stream {stream_id} -> {addr} finished (max_tx_gap={max_gap_ms:.1f}ms)")
+                    logger.info(f"📊 [DMR-Pacer] Stream {stream_id} -> {addr} finished (max_tx_gap={max_gap_ms:.1f}ms, max_voice_gap={max_voice_gap_ms:.1f}ms)")
 
                 next_send_at += 0.060
         finally:
