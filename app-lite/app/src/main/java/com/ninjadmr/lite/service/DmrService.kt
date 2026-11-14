@@ -55,6 +55,7 @@ class DmrService : Service(), HbpClient.Callback {
 
     private val binder = LocalBinder()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val rxDecodeExec = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private var client: HbpClient? = null
     private val audio = AudioEngine()
@@ -78,13 +79,13 @@ class DmrService : Service(), HbpClient.Callback {
         get() = client?.state ?: HbpClient.State.STOPPED
     var userManualDisconnect = false
         private set
-    var isTx = false
+    @Volatile var isTx = false
         private set
-    var isRx = false
+    @Volatile var isRx = false
         private set
-    var currentRxSrc = 0
+    @Volatile var currentRxSrc = 0
         private set
-    var currentRxDst = 0
+    @Volatile var currentRxDst = 0
         private set
 
     // VOX state (for HT Headset Jack / Gateway Auto-TX)
@@ -101,8 +102,8 @@ class DmrService : Service(), HbpClient.Callback {
     private var txCall: DmrCall? = null
 
     // RX state
-    private var rxStream = 0
-    private var rxLastMs = 0L
+    @Volatile private var rxStream = 0
+    @Volatile private var rxLastMs = 0L
 
     private val rxTimeoutRunnable = object : Runnable {
         override fun run() {
@@ -363,6 +364,14 @@ class DmrService : Service(), HbpClient.Callback {
     }
 
     override fun onDmrd(p: Dmrd) {
+        // Offload AMBE decoding and RX state machine from the UDP receive thread
+        // so socket.receive() is never delayed or blocked during voice bursts or pings
+        rxDecodeExec.execute {
+            handleDmrdInternal(p)
+        }
+    }
+
+    private fun handleDmrdInternal(p: Dmrd) {
         val profile = activeProfile ?: return
         if (isTx) return
 
@@ -381,13 +390,20 @@ class DmrService : Service(), HbpClient.Callback {
         if (p.src == profile.dmrId) return
 
         // Check frame type: 2 = Data Sync (Voice LC Header = 1, Terminator = 2, others = CSBK/Data)
+        val nowMs = System.currentTimeMillis()
+        if (isRx && p.streamId != rxStream && (nowMs - rxLastMs) < 1000L) {
+            // Stream lock: ignore colliding stream while current stream is actively playing
+            return
+        }
         if (p.frameType == 2) {
             if (p.dtype == 2) {
-                endRx()
+                if (isRx && (p.streamId == rxStream || p.src == currentRxSrc)) {
+                    endRx()
+                }
                 return
             } else if (p.dtype == 1) {
                 rxLastMs = System.currentTimeMillis()
-                if (!isRx || p.src != currentRxSrc) {
+                if (!isRx || (p.src != currentRxSrc && p.streamId != rxStream)) {
                     beginRx(p)
                 } else {
                     rxStream = p.streamId
@@ -400,7 +416,7 @@ class DmrService : Service(), HbpClient.Callback {
         if (p.frameType > 2) return
 
         // Voice frame (frameType 0 or 1)
-        if (!isRx || p.src != currentRxSrc) {
+        if (!isRx || (p.src != currentRxSrc && p.streamId != rxStream)) {
             beginRx(p)
         } else {
             rxStream = p.streamId
@@ -446,6 +462,7 @@ class DmrService : Service(), HbpClient.Callback {
 
     private fun endRx() {
         if (!isRx) return
+        audio.flushRxBuffer()
         isRx = false
         currentRxSrc = 0
         val lastDst = currentRxDst
@@ -469,7 +486,11 @@ class DmrService : Service(), HbpClient.Callback {
             return false
         }
 
-        // PTT priority: interrupt active RX immediately
+        // Busy Channel Lockout (BCLO): do not allow PTT while another station is actively talking on this TG
+        if (isRx && (System.currentTimeMillis() - rxLastMs) < 1200L) {
+            Log.w(TAG, "startTx blocked: channel busy (active RX from $currentRxSrc)")
+            return false
+        }
         if (isRx) {
             endRx()
         }

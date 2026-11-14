@@ -2407,6 +2407,11 @@ usrpAGC = -20,10,100
                     else:
                         net_label = "Direct DMR (WebRTC)"
                     if is_tx:
+                        if session_key not in active_tx_sessions and self.dmr_master_server and self.dmr_master_server.is_tg_busy(tg, dmr_id):
+                            if now - getattr(self, "_last_web_busy_alert", 0) > 2.0:
+                                self._last_web_busy_alert = now
+                                logger.warning(f"🚫 [TG-LOCK] Blocked Web/Gateway PTT from {addr} ({callsign} - {dmr_id}) on busy TG {tg}")
+                            continue
                         is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx, is_gateway=(is_svx or is_mumble or is_zello or is_webrtc))
                         if not is_allowed:
                             if now - getattr(self, "_last_web_fw_alert", 0) > 3.0:
@@ -3175,6 +3180,13 @@ usrpAGC = -20,10,100
                     if t_tg > 0 and (t_tg != dst_tg or t_slot != slot):
                         if (t_tg, t_slot) not in routed_tgs:
                             routed_tgs.append((t_tg, t_slot))
+
+            # Enforce Server-Wide Per-Talkgroup Contention Lock before accepting incoming peer DMRD
+            if self.dmr_master_server and effective_tg > 0:
+                p_stream_id = traffic.get("stream_id", 0)
+                p_dtype = traffic.get("data_type", 1)
+                if not self.dmr_master_server.acquire_or_check_tg_lock(effective_tg, p_stream_id, src_id, p_dtype, origin_addr=None):
+                    return
 
             # Update live RX metadata for Server DMR Core with effective_tg and original caller callsign/DMR ID (100% Callsign Carry-Over):
             self.current_rx_src = src_id

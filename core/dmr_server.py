@@ -182,6 +182,72 @@ class HomeBrewMasterServer:
         self._pacer_tasks: Dict[Tuple[Tuple[str, int], int], asyncio.Task] = {}
         self._pacer_streams: Dict[Tuple[Tuple[str, int], int], int] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Server-wide per-Talkgroup contention locks to prevent two MMDVMs from colliding on the same TG
+        self.tg_locks: Dict[int, dict] = {}
+        self._rejected_stream_ids: Dict[int, float] = {}
+
+    def is_tg_busy(self, dst_tg: int, requester_src_id: int = 0) -> bool:
+        """Returns True if dst_tg is currently locked by another active transmitter."""
+        if dst_tg <= 0 or dst_tg == 4000 or dst_tg in getattr(self, "parrot_tgs", [9990, 99990]):
+            return False
+        now = time.time()
+        lock = self.tg_locks.get(dst_tg)
+        if lock and now < lock.get("until", 0.0):
+            if requester_src_id and lock.get("src_id") == requester_src_id:
+                return False
+            return True
+        return False
+
+    def acquire_or_check_tg_lock(
+        self,
+        dst_tg: int,
+        stream_id: int,
+        src_id: int,
+        data_type: int,
+        origin_addr: Optional[Tuple[str, int]] = None,
+    ) -> bool:
+        """
+        First-Come-First-Served Talkgroup contention lock across all connected MMDVMs, peers, and WebRTC.
+        Returns True if this packet's stream_id owns dst_tg, or False if dst_tg is busy with another stream.
+        """
+        if dst_tg <= 0 or dst_tg == 4000 or dst_tg in getattr(self, "parrot_tgs", [9990, 99990]):
+            return True
+        now = time.time()
+
+        # If this stream_id was already rejected because it keyed up while dst_tg was busy,
+        # keep rejecting the entire stream so it never barges in mid-sentence without a Voice Header.
+        rej_ts = self._rejected_stream_ids.get(stream_id)
+        if rej_ts is not None and (now - rej_ts) < 15.0:
+            if data_type == 2:
+                self._rejected_stream_ids.pop(stream_id, None)
+            else:
+                self._rejected_stream_ids[stream_id] = now
+            return False
+
+        lock = self.tg_locks.get(dst_tg)
+        if lock and now < lock.get("until", 0.0):
+            if lock.get("stream_id") != stream_id:
+                # Allow same station at same address to immediately re-key after its own terminator
+                if not (lock.get("ended", False) and lock.get("src_id") == src_id and lock.get("addr") == origin_addr):
+                    self._rejected_stream_ids[stream_id] = now
+                    if len(self._rejected_stream_ids) > 256:
+                        cutoff = now - 30.0
+                        self._rejected_stream_ids = {k: v for k, v in self._rejected_stream_ids.items() if v > cutoff}
+                    logger.warning(
+                        f"🚫 [TG-LOCK] Rejected simultaneous PTT on TG {dst_tg} from {origin_addr or 'Local/Peer'} "
+                        f"(ID: {src_id}, Stream: {stream_id}) — TG {dst_tg} is busy with ID {lock.get('src_id')} "
+                        f"at {lock.get('addr')} (Stream: {lock.get('stream_id')})"
+                    )
+                    return False
+
+        self.tg_locks[dst_tg] = {
+            "stream_id": stream_id,
+            "src_id": src_id,
+            "addr": origin_addr,
+            "ended": (data_type == 2),
+            "until": now + (0.25 if data_type == 2 else 1.8),
+        }
+        return True
 
     def parse_mmdvm_options(self, client: dict, options_str: str):
         """Parses all TS1 and TS2 talkgroup subscriptions from RPTC/RPTO options payload."""
@@ -672,7 +738,15 @@ class HomeBrewMasterServer:
                     if data_type == 0:
                         logger.info(f"[DMR-Master] 🔌 Hotspot {cl.get('callsign')} ({cl.get('dmr_id')}) dialed TG 4000 -> Unlinked dynamic TG on TS{slot}")
                     return
-                elif dst_tg not in getattr(self, "parrot_tgs", [9990, 99990]):
+
+            # Enforce Server-Wide Per-Talkgroup Contention Lock BEFORE updating slot_locks, broadcasting, or decoding
+            if call_type == "group" and dst_tg not in getattr(self, "parrot_tgs", [9990, 99990]):
+                if not self.acquire_or_check_tg_lock(dst_tg, stream_id, src_id, data_type, origin_addr=addr):
+                    return
+
+            if addr in self.clients:
+                cl = self.clients[addr]
+                if dst_tg not in getattr(self, "parrot_tgs", [9990, 99990]):
                     cl["last_tg"] = dst_tg
                     cl["last_slot"] = slot
                     if addr[0] != "127.0.0.1":
@@ -825,6 +899,11 @@ class HomeBrewMasterServer:
             data_type = 3
         stream_id = int.from_bytes(data[16:20], "big")
         now = time.time()
+
+        # Enforce Server-Wide Per-Talkgroup Contention Lock for locally generated / peer / translated DMRD
+        if call_type == "group" and dst_tg not in getattr(self, "parrot_tgs", [9990, 99990]):
+            if not self.acquire_or_check_tg_lock(dst_tg, stream_id, src_id, data_type, origin_addr=exclude_addr):
+                return
 
         # Deduplicate identical DMR voice bursts within 25ms so MMDVM_Bridge never gets double-fed
         if data_type == 1 and len(data) >= 53:
