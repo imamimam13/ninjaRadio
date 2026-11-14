@@ -1013,10 +1013,11 @@ class HomeBrewMasterServer:
                     break
             self._pacer_streams[key] = stream_id
 
-        # Cap backlog at ~720ms (12 frames) for voice bursts to avoid multi-second latency
-        if data_type == 1 and q.qsize() >= 12:
+        # Cap backlog at ~2.4s (40 frames) for voice bursts to prevent mid-QSO drops from 4G/browser drift
+        if data_type == 1 and q.qsize() >= 40:
             try:
                 q.get_nowait()
+                logger.warning(f"⚠️ [DMR-Pacer] Backlog >= 40 frames for {addr}, dropped oldest voice frame")
             except asyncio.QueueEmpty:
                 pass
 
@@ -1082,7 +1083,7 @@ class HomeBrewMasterServer:
                 if data_type == 2:
                     logger.info(f"📊 [DMR-Pacer] Stream {stream_id} -> {addr} finished (max_tx_gap={max_gap_ms:.1f}ms, max_voice_gap={max_voice_gap_ms:.1f}ms)")
 
-                next_send_at += 0.060
+                next_send_at += 0.060 if data_type == 1 else (0.020 if data_type == 0 else 0.030)
         finally:
             self._pacer_tasks.pop(key, None)
             if q.empty():
