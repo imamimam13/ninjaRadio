@@ -355,13 +355,41 @@ Server NinjaRadio menyediakan endpoint publik (mendukung CORS) agar **Pi-Star, W
    * **Password**: `ninjaradio_pass`
 4. Simpan konfigurasi. Hotspot Anda langsung aktif dan mendukung Timeslot 1 & 2 serta Echo Test `TG 9990`.
 
-### 2. Aplikasi Mumble / Mumla (Android / iOS / PC)
+### 2. Aplikasi Mumble / Mumla (Android / iOS / PC) & Manajemen User / SuperUser
 1. Instal **Mumla** (Android: Play Store / F-Droid) atau **Mumble** (iOS / PC).
 2. Tambah server baru:
    * **Address**: `[IP_ATAU_DOMAIN_VPS]`
    * **Port**: `64738`
    * **Username**: Callsign Anda (contoh: `YD0XYZ`)
+   * **Password Server**: Kosongkan *(server terbuka untuk koneksi klien)*.
 3. Masuk ke salah satu room yang dijembatani (default: `NinjaRadio-Nasional` untuk TG 510, `NinjaRadio-Nusantara` untuk TG 5109, `NinjaRadio-Darurat` untuk TG 5108, `NinjaRadio-Worldwide` untuk TG 91).
+
+#### Cara Membuat / Mendaftarkan User Mumble
+* **Klien Biasa**: Cukup masukkan **Username = Callsign** Anda di Mumla/Mumble lalu hubungkan. Mumble tidak memakai password per-user, melainkan **sertifikat TLS klien**.
+* **Kunci / Register User Permanen**: Setelah terhubung di Mumble Desktop/Mumla, klik kanan nama Anda sendiri (atau buka menu pengguna) $\rightarrow$ pilih **Register** agar username tersebut terkunci khusus untuk sertifikat perangkat Anda. `SuperUser` juga dapat mengklik kanan user yang sedang online $\rightarrow$ **Register**.
+* **Izin Transmit (TX) ke DMR via Chat Mumble**:
+  * User yang belum punya izin TX di Talkgroup tertentu dapat mengetik di chat room:
+    * `!req <TG>` (contoh: `!req 510`) untuk meminta izin ke `SuperUser`.
+    * `!check` atau `!cek` untuk mengecek status izin TX stasiun Anda.
+  * `SuperUser` yang sedang online di Mumble dapat langsung menyetujui atau mencabut izin via chat:
+    * `!grant <CALLSIGN/ID> <TG>` (contoh: `!grant YD0XYZ 510` atau `!grant YD0XYZ *`).
+    * `!revoke <CALLSIGN/ID>` untuk mencabut izin khusus dan kembali ke aturan organisasi.
+
+#### Login & Cara Mengubah Password `SuperUser` Mumble
+* **Login sebagai SuperUser**:
+  * **Address**: `[IP_ATAU_DOMAIN_VPS]` | **Port**: `64738`
+  * **Username**: `SuperUser`
+  * **Password**: `ninjaradio_admin` *(atau sesuai variabel `MUMBLE_SUPERUSER_PASSWORD` di `.env`)*
+* **Cara Mengubah Password SuperUser**:
+  1. **Via `.env` (Disarankan)**: Edit `MUMBLE_SUPERUSER_PASSWORD=password_baru_anda` di file `.env`, lalu terapkan dengan:
+     ```bash
+     docker compose up -d mumble-server mumble-bridge
+     ```
+  2. **Langsung ke Container Murmur**:
+     ```bash
+     docker exec -it ninjaradio_mumble mumble-server -supw password_baru_anda
+     ```
+     *(Jika memakai cara ini, pastikan `MUMBLE_SUPERUSER_PASSWORD` di `.env` juga disamakan agar `mumble-bridge` tetap bisa login sebagai `SuperUser` untuk sinkronisasi room).*
 
 ### 3. Aplikasi DVSwitch Mobile (Android)
 1. Buka aplikasi **DVSwitch Mobile** $\rightarrow$ tab **Accounts**.
