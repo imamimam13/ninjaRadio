@@ -898,9 +898,7 @@ export default function SettingsPage() {
       });
       const data = await res.json();
       if (res.ok && data.status === "SUCCESS") {
-        if (typeof window !== "undefined") {
-          localStorage.setItem("ninjaradio_admin_pin", newPinInput);
-        }
+        setAdminUnlocked(true, newPinInput.trim());
         setChangePinSuccess("✓ PIN Admin berhasil diperbarui!");
         beepPlayer?.playTalkGrant();
         setTimeout(() => setShowChangePinModal(false), 2000);
