@@ -59,6 +59,33 @@ services:
     networks:
       - ninjaradio_net
 
+  # 2b. TeamSpeak 3 Server (Isolated / Anti Phone-Home)
+  teamspeak-server:
+    build:
+      context: ./server-teamspeak
+      dockerfile: Dockerfile
+    container_name: ninjaradio_ts3
+    restart: unless-stopped
+    ports:
+      - "9987:9987/udp"    # TS3 Voice Audio
+      - "10011:10011/tcp"  # ServerQuery
+      - "30033:30033/tcp"  # File Transfer
+    extra_hosts:
+      - "accounting.teamspeak.com:127.0.0.1"
+      - "backupaccounting.teamspeak.com:127.0.0.1"
+      - "blacklist.teamspeak.com:127.0.0.1"
+      - "blacklist2.teamspeak.com:127.0.0.1"
+      - "weblist.teamspeak.com:127.0.0.1"
+      - "weblist2.teamspeak.com:127.0.0.1"
+    volumes:
+      - ts3_data:/app/logs
+      - ts3_files:/app/files
+    networks:
+      ninjaradio_net:
+        aliases:
+          - ts3-server
+          - teamspeak-server
+
   # 3. Mumble VoIP <--> DMR USRP Audio Bridge Bot
   mumble-bridge:
     build:
@@ -218,3 +245,5 @@ volumes:
   mumble_data:
   caddy_data:
   caddy_config:
+  ts3_data:
+  ts3_files:
