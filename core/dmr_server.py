@@ -6,6 +6,7 @@ import logging
 import time
 import os
 from typing import Callable, Optional, Dict, List, Tuple
+from direct_dmr import build_dmr_header_burst, build_dmr_terminator_burst, rewrite_voice_burst_emblc
 
 logger = logging.getLogger("DMR-MasterServer")
 
@@ -43,6 +44,7 @@ def get_db_path() -> Optional[str]:
     return None
 
 _CALLSIGN_MEM_CACHE: Dict[int, str] = {}
+_CSV_CALLBOOK_LOADED: bool = False
 
 
 def lookup_selfcare_dmr_auth(dmr_id: int) -> Tuple[Optional[str], Optional[bool], Optional[str]]:
@@ -71,16 +73,17 @@ def lookup_selfcare_dmr_auth(dmr_id: int) -> Tuple[Optional[str], Optional[bool]
 
 def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
     """Resolves amateur callsign for DMR ID dynamically from SQLite Callbook DB or subscriber_ids.csv."""
+    global _CSV_CALLBOOK_LOADED
     if not dmr_id or dmr_id <= 0:
         return None
     if dmr_id in _CALLSIGN_MEM_CACHE:
-        return _CALLSIGN_MEM_CACHE[dmr_id]
+        return _CALLSIGN_MEM_CACHE[dmr_id] or None
 
     # Resolve base 7-digit DMR ID if dmr_id contains ESSID (e.g. 510205701 -> 5102057)
     lookup_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
     if lookup_id in _CALLSIGN_MEM_CACHE:
         _CALLSIGN_MEM_CACHE[dmr_id] = _CALLSIGN_MEM_CACHE[lookup_id]
-        return _CALLSIGN_MEM_CACHE[dmr_id]
+        return _CALLSIGN_MEM_CACHE[dmr_id] or None
 
     # 1. Check SQLite Callbook table
     db_path = get_db_path()
@@ -99,22 +102,30 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
         except Exception:
             pass
 
-    # 2. Dynamic Fallback: Check /var/lib/dvswitch/subscriber_ids.csv or /app/data/subscriber_ids.csv
-    for p in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv"]:
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        parts = line.strip().split(",")
-                        if len(parts) >= 2 and parts[0].strip().isdigit():
-                            pid = int(parts[0].strip())
-                            if pid == lookup_id or pid == dmr_id:
-                                call = parts[1].strip().upper()
-                                _CALLSIGN_MEM_CACHE[lookup_id] = call
-                                _CALLSIGN_MEM_CACHE[dmr_id] = call
-                                return call
-            except Exception:
-                pass
+    # 2. Load subscriber_ids.csv once into memory cache instead of scanning disk on every miss
+    if not _CSV_CALLBOOK_LOADED:
+        _CSV_CALLBOOK_LOADED = True
+        for p in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv"]:
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            parts = line.strip().split(",")
+                            if len(parts) >= 2 and parts[0].strip().isdigit():
+                                pid = int(parts[0].strip())
+                                c_val = parts[1].strip().upper()
+                                if c_val and pid not in _CALLSIGN_MEM_CACHE:
+                                    _CALLSIGN_MEM_CACHE[pid] = c_val
+                except Exception:
+                    pass
+        if lookup_id in _CALLSIGN_MEM_CACHE:
+            _CALLSIGN_MEM_CACHE[dmr_id] = _CALLSIGN_MEM_CACHE[lookup_id]
+            return _CALLSIGN_MEM_CACHE[dmr_id] or None
+
+    # Cache negative lookup so unlisted IDs (e.g. 9990) do not hit SQLite/disk on every 60ms voice burst
+    _CALLSIGN_MEM_CACHE[lookup_id] = ""
+    _CALLSIGN_MEM_CACHE[dmr_id] = ""
+    return None
 
     return None
 
@@ -267,14 +278,17 @@ class HomeBrewMasterServer:
         self.pending_challenges.clear()
 
     def _remove_client_by_id(self, dmr_id: int, current_addr: Tuple[str, int]):
-        """Removes previous connection entries for the same DMR ID upon new login or address change."""
+        """Removes stale connection entries for the exact same DMR ID upon new login."""
+        now = time.time()
         for a, c in list(self.clients.items()):
             if a != current_addr and c.get("dmr_id") == dmr_id:
-                logger.info(f"[DMR-Master] 🔄 Pruning previous session for DMR ID {dmr_id} at {a}")
-                self.clients.pop(a, None)
+                # Only prune if the previous endpoint is stale (>18s without keepalive) so multiple active apps/devices can coexist
+                if now - c.get("last_seen", 0) > 18.0:
+                    logger.info(f"[DMR-Master] 🔄 Pruning stale session for DMR ID {dmr_id} at {a}")
+                    self.clients.pop(a, None)
 
     def _update_client_seen(self, dmr_id: int, addr: Tuple[str, int]):
-        """Updates last_seen and dynamically shifts client address if NAT port remapped."""
+        """Updates last_seen and dynamically shifts client address only if NAT port remapped on an inactive socket."""
         now = time.time()
         if addr in self.clients:
             self.clients[addr]["last_seen"] = now
@@ -284,16 +298,15 @@ class HomeBrewMasterServer:
                     self.clients[addr]["base_id"] = dmr_id // 100
                     self.clients[addr]["essid"] = dmr_id % 100
         else:
-            # Check if this DMR ID was registered under a different address/port (match exact compound ID or base DMR ID)
-            base_dmr_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+            # Only shift from an old address if it has the EXACT same dmr_id AND hasn't been seen recently (>12s),
+            # preventing two simultaneous apps/devices on the same IP or ID from stealing each other's session on every ping.
             for old_addr, client in list(self.clients.items()):
                 c_id = client.get("dmr_id", 0)
-                c_base = client.get("base_id", c_id // 100 if c_id > 9999999 else c_id)
-                if c_id == dmr_id or (c_base > 0 and c_base == base_dmr_id and addr[0] == old_addr[0]):
+                if c_id == dmr_id and (now - client.get("last_seen", 0) > 12.0):
                     client["last_seen"] = now
                     self.clients[addr] = client
                     if old_addr != addr:
-                        logger.info(f"[DMR-Master] 🔄 Shifted address for {client.get('callsign')} ({c_id}): {old_addr} -> {addr}")
+                        logger.info(f"[DMR-Master] 🔄 Shifted NAT address for {client.get('callsign')} ({c_id}): {old_addr} -> {addr}")
                         self.clients.pop(old_addr, None)
                     return
 
@@ -345,12 +358,13 @@ class HomeBrewMasterServer:
             strict_mode = os.getenv("STRICT_SELFCARE_MODE", "false").lower() == "true"
 
             if sc_status is not None:
-                if sc_status != "APPROVED" or not sc_allow_dmr or not sc_dmr_pwd:
+                if sc_status != "APPROVED" or not sc_allow_dmr:
                     logger.warning(f"[DMR-Master] ❌ Auth denied for {addr} (DMR ID: {dmr_id}) - Self-Care status={sc_status}, allow_dmr={sc_allow_dmr}")
                     self.sock.sendto(MSTNAK, addr)
                     return
-                expected_hash = hashlib.sha256(salt + sc_dmr_pwd.encode("utf-8")).digest()
-                auth_ok = (client_hash == expected_hash)
+                master_hash = hashlib.sha256(salt + self.password.encode("utf-8")).digest()
+                sc_hash = hashlib.sha256(salt + sc_dmr_pwd.encode("utf-8")).digest() if sc_dmr_pwd else None
+                auth_ok = (client_hash == master_hash) or (sc_hash is not None and client_hash == sc_hash) or not self.password
             elif strict_mode:
                 logger.warning(f"[DMR-Master] ❌ Auth denied for {addr} (DMR ID: {dmr_id}) - STRICT_SELFCARE_MODE active & user not registered")
                 self.sock.sendto(MSTNAK, addr)
@@ -508,6 +522,10 @@ class HomeBrewMasterServer:
             peer_id_bytes = data[7:11]
             dmr_id = struct.unpack(">I", peer_id_bytes)[0]
             self._update_client_seen(dmr_id, addr)
+            if addr not in self.clients:
+                logger.info(f"[DMR-Master] ⚠️ RPTPING from unauthenticated {addr} (DMR ID: {dmr_id}), sending MSTNAK to trigger re-login")
+                self.sock.sendto(MSTNAK + peer_id_bytes, addr)
+                return
             # HomeBrew standard Pong: MSTPONG + 4-byte client DMR ID
             pong = MSTPONG + peer_id_bytes
             self.sock.sendto(pong, addr)
@@ -518,6 +536,10 @@ class HomeBrewMasterServer:
             peer_id_bytes = data[4:8]
             dmr_id = struct.unpack(">I", peer_id_bytes)[0]
             self._update_client_seen(dmr_id, addr)
+            if addr not in self.clients:
+                logger.info(f"[DMR-Master] ⚠️ RPTP from unauthenticated {addr} (DMR ID: {dmr_id}), sending MSTNAK to trigger re-login")
+                self.sock.sendto(MSTNAK + peer_id_bytes, addr)
+                return
             self.sock.sendto(MSTPONG + peer_id_bytes, addr)
             self.sock.sendto(MSTP + peer_id_bytes, addr)
             return
@@ -659,6 +681,8 @@ class HomeBrewMasterServer:
                         self.parrot_recordings[addr] = [data]
                         self.parrot_stream_ids[addr] = stream_id
                         logger.info(f"[DMR-Master] 🦜 Parrot started recording from {addr} (DMR ID: {src_id}, TG: {dst_tg}, Slot: {slot})")
+                    elif len(self.parrot_recordings[addr]) < 3:
+                        self.parrot_recordings[addr].append(data)
                 elif data_type == 1:  # Voice Burst
                     if addr not in self.parrot_recordings:
                         self.parrot_recordings[addr] = []
@@ -812,45 +836,47 @@ class HomeBrewMasterServer:
                     break
         callsign_str = sender_call or f"ID-{src_id}"
 
-        # Track Active QSO stream & Last Heard list for locally generated DMRD
-        if data_type == 0:  # Voice Header
-            self.active_stream = {
-                "stream_id": stream_id,
-                "src_id": src_id,
-                "callsign": callsign_str,
-                "dst_tg": dst_tg,
-                "slot": orig_slot,
-                "call_type": call_type,
-                "start_time": now,
-                "last_packet_time": now,
-                "packets": 1
-            }
-            logger.info(f"📻 [DMR-Master] 🎙️ Direct DMR TX: {callsign_str} ({src_id}) -> TG {dst_tg} (TS{orig_slot}, Stream {stream_id})")
-        elif data_type == 1:
-            if self.active_stream and self.active_stream.get("stream_id") == stream_id:
-                self.active_stream["packets"] = self.active_stream.get("packets", 0) + 1
-                self.active_stream["last_packet_time"] = now
-        elif data_type == 2:
-            if self.active_stream and self.active_stream.get("stream_id") == stream_id:
-                duration = round(now - self.active_stream.get("start_time", now), 1)
-                packets = self.active_stream.get("packets", 1) + 1
-                qso_entry = {
-                    "timestamp": self.active_stream.get("start_time", now),
-                    "end_time": now,
-                    "callsign": self.active_stream.get("callsign", callsign_str),
+        # Track Active QSO stream & Last Heard list ONLY for locally generated DMRD (exclude_addr is None),
+        # since inbound hotspot DMRD (exclude_addr != None) is already tracked in _handle_incoming.
+        if exclude_addr is None:
+            if data_type == 0:  # Voice Header
+                self.active_stream = {
+                    "stream_id": stream_id,
                     "src_id": src_id,
+                    "callsign": callsign_str,
                     "dst_tg": dst_tg,
                     "slot": orig_slot,
                     "call_type": call_type,
-                    "duration": max(duration, 0.4),
-                    "packets": packets,
-                    "loss": "0.0%"
+                    "start_time": now,
+                    "last_packet_time": now,
+                    "packets": 1
                 }
-                self.recent_qsos.insert(0, qso_entry)
-                if len(self.recent_qsos) > self.max_recent_qsos:
-                    self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
-                self.active_stream = None
-            logger.info(f"📻 [DMR-Master] ⏹️ Direct DMR TX End: {callsign_str} ({src_id}) -> TG {dst_tg}")
+                logger.info(f"📻 [DMR-Master] 🎙️ Direct DMR TX: {callsign_str} ({src_id}) -> TG {dst_tg} (TS{orig_slot}, Stream {stream_id})")
+            elif data_type == 1:
+                if self.active_stream and self.active_stream.get("stream_id") == stream_id and self.active_stream.get("dst_tg") == dst_tg:
+                    self.active_stream["packets"] = self.active_stream.get("packets", 0) + 1
+                    self.active_stream["last_packet_time"] = now
+            elif data_type == 2:
+                if self.active_stream and self.active_stream.get("stream_id") == stream_id and self.active_stream.get("dst_tg") == dst_tg:
+                    duration = round(now - self.active_stream.get("start_time", now), 1)
+                    packets = self.active_stream.get("packets", 1) + 1
+                    qso_entry = {
+                        "timestamp": self.active_stream.get("start_time", now),
+                        "end_time": now,
+                        "callsign": self.active_stream.get("callsign", callsign_str),
+                        "src_id": src_id,
+                        "dst_tg": dst_tg,
+                        "slot": orig_slot,
+                        "call_type": call_type,
+                        "duration": max(duration, 0.4),
+                        "packets": packets,
+                        "loss": "0.0%"
+                    }
+                    self.recent_qsos.insert(0, qso_entry)
+                    if len(self.recent_qsos) > self.max_recent_qsos:
+                        self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
+                    self.active_stream = None
+                logger.info(f"📻 [DMR-Master] ⏹️ Direct DMR TX End: {callsign_str} ({src_id}) -> TG {dst_tg}")
 
         delivered_count = 0
 
@@ -915,12 +941,12 @@ class HomeBrewMasterServer:
                     # Deliver on the exact slot the HT operator used to key up this TG
                     target_slot = client["last_slot"]
 
-                # Per-hotspot timeslot stream lock to prevent TDMA frame collision on HT (even on same TG)
+                # Per-hotspot timeslot stream lock to prevent TDMA frame collision on HT (and prevent TG-Matrix duplicate stream interleaving)
                 slot_locks = client.setdefault("slot_locks", {})
                 lock = slot_locks.get(target_slot)
                 if lock and now < lock.get("until", 0):
-                    if lock.get("stream_id") != stream_id:
-                        # Another QSO is actively playing on this hotspot's slot; do not corrupt it
+                    if lock.get("stream_id") != stream_id or lock.get("tg") != dst_tg:
+                        # Another QSO (or a TG-Matrix translated duplicate of the same stream_id) is playing on this slot; skip it
                         continue
 
                 if data_type == 2:  # Voice Terminator releases lock shortly after
@@ -1138,6 +1164,13 @@ class HomeBrewMasterServer:
             dst_bytes = echo_dst.to_bytes(3, "big")
             repeater_bytes = struct.pack(">I", int(target_rpt_id))
 
+            if target_client:
+                target_client.setdefault("slot_locks", {})[slot] = {
+                    "stream_id": new_stream_id,
+                    "tg": echo_dst,
+                    "until": time.time() + len(recorded_packets) * 0.062 + 0.5,
+                }
+
             loop = asyncio.get_running_loop()
             next_tx_at = loop.time()
             prev_tx_ts = next_tx_at
@@ -1155,6 +1188,19 @@ class HomeBrewMasterServer:
                 new_bits = slot_bit | echo_call_type_bit | data_type_seq
 
                 payload = pkt[20:]
+                if len(pkt) >= 53:
+                    trailing = pkt[53:] if len(pkt) >= 55 else b"\x00\x00"
+                    try:
+                        if data_type_seq == 0x21:
+                            payload = build_dmr_header_burst(orig_tg, echo_dst, slot, call_type) + trailing
+                        elif data_type_seq == 0x22:
+                            payload = build_dmr_terminator_burst(orig_tg, echo_dst, slot, call_type) + trailing
+                        elif data_type_seq == 0x10 or data_type_seq in (1, 2, 3, 4, 5):
+                            vseq = 0 if data_type_seq == 0x10 else data_type_seq
+                            payload = rewrite_voice_burst_emblc(pkt[20:53], vseq, orig_tg, echo_dst, call_type) + trailing
+                    except Exception:
+                        payload = pkt[20:]
+
                 echo_pkt = DMRD + bytes([out_seq]) + src_bytes + dst_bytes + repeater_bytes + bytes([new_bits]) + struct.pack(">I", new_stream_id) + payload
 
                 tx_now = loop.time()

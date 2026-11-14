@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 import uvicorn
 from dmr_server import HomeBrewMasterServer
 from dmr_client import HomeBrewClient
-from direct_dmr import DirectDmrEngine, build_dmr_header_burst, build_dmr_terminator_burst
+from direct_dmr import DirectDmrEngine, build_dmr_header_burst, build_dmr_terminator_burst, rewrite_voice_burst_emblc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NinjaRadio-Core] %(message)s")
 logger = logging.getLogger("NinjaRadio-Core")
@@ -504,6 +504,13 @@ def rewrite_dmrd_tg_and_slot(raw_packet: bytes, new_tg: int, new_slot: int) -> b
         elif ft_dt == 0x22:  # Voice Terminator
             try:
                 new_payload = build_dmr_terminator_burst(src_id, new_tg, new_slot, call_type)
+                return new_header + new_payload + trailing
+            except Exception:
+                pass
+        elif ft_dt == 0x10 or ft_dt in (1, 2, 3, 4, 5):  # Voice Bursts A..F
+            try:
+                vseq = 0 if ft_dt == 0x10 else ft_dt
+                new_payload = rewrite_voice_burst_emblc(raw_packet[20:53], vseq, src_id, new_tg, call_type)
                 return new_header + new_payload + trailing
             except Exception:
                 pass
@@ -2603,8 +2610,8 @@ usrpAGC = -20,10,100
                 seen_targets.add((t_tg, t_slot))
                 translated_pkt = rewrite_dmrd_tg_and_slot(pkt, t_tg, t_slot)
                 packets_to_route.append((t_tg, t_slot, translated_pkt, t_peer))
-                # Also broadcast the translated TG to local hotspots on our DMR Master Server
-                if self.dmr_master_server:
+                # Also broadcast the translated TG to local hotspots on our DMR Master Server (only if not peer-bound)
+                if self.dmr_master_server and not t_peer:
                     self.dmr_master_server.broadcast_dmrd(translated_pkt)
 
         # Forward original DMRD directly to local repeaters and hotspots via DMR Master Server
@@ -2893,6 +2900,13 @@ usrpAGC = -20,10,100
             slot = traffic.get("slot", 2)
             now = time.time()
             host_str = str(traffic.get("host", ""))
+            origin_addr = None
+            if ":" in host_str:
+                try:
+                    h_ip, h_port = host_str.rsplit(":", 1)
+                    origin_addr = (h_ip, int(h_port))
+                except Exception:
+                    origin_addr = None
             is_local_mmdvm = host_str.startswith("127.0.0.1")
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
@@ -2934,9 +2948,9 @@ usrpAGC = -20,10,100
                             "slot": t_slot,
                             "time": now
                         }
-                        # Also broadcast the translated TG to local hotspots on our DMR Master Server
-                        if self.dmr_master_server:
-                            self.dmr_master_server.broadcast_dmrd(translated_pkt)
+                        # Also broadcast the translated TG to local hotspots on our DMR Master Server (only if not peer-bound)
+                        if self.dmr_master_server and not t_peer:
+                            self.dmr_master_server.broadcast_dmrd(translated_pkt, exclude_addr=origin_addr)
 
             # Forward DMRD packet(s) to matching connected upstream peer clients
             # Suppress forwarding if packet originated from local MMDVM_Bridge (127.0.0.1) or active local Web TX

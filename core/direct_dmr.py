@@ -192,6 +192,33 @@ def dibits_to_bytes(dibits: List[int]) -> bytes:
     return bytes(out)
 
 
+_EMBLC_CENTER_CACHE: Dict[tuple, Dict[int, List[int]]] = {}
+
+
+def rewrite_voice_burst_emblc(
+    payload: bytes,
+    seq: int,
+    src_id: int,
+    dst_tg: int,
+    call_type: str = "group",
+) -> bytes:
+    """Rewrite the 24 center dibits (54..77) of a 33-byte DMR voice burst so Embedded LC matches (src_id, dst_tg)."""
+    if len(payload) < BURST_BYTES:
+        return payload
+    s = seq % 6
+    key = (int(src_id), int(dst_tg), str(call_type))
+    centers = _EMBLC_CENTER_CACHE.get(key)
+    if centers is None:
+        if len(_EMBLC_CENTER_CACHE) > 256:
+            _EMBLC_CENTER_CACHE.clear()
+        emblc_dict = build_dmr_emblc_fragments(int(src_id), int(dst_tg), str(call_type))
+        centers = {idx: get_burst_center_dibits(idx, emblc_dict) for idx in range(6)}
+        _EMBLC_CENTER_CACHE[key] = centers
+    dibits = bytes_to_dibits(payload[:BURST_BYTES])
+    dibits[54:78] = centers.get(s, EMB_CC1_DIBITS)
+    return dibits_to_bytes(dibits) + payload[BURST_BYTES:]
+
+
 def _fr_get_bit(fr: bytearray, row: int, col: int) -> int:
     return fr[row * 24 + col] & 1
 
