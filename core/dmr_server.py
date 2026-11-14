@@ -516,47 +516,60 @@ class HomeBrewMasterServer:
             self.sock.sendto(RPTACK, addr)
             return
 
-        # 4. Keepalive Pings (RPTPING / RPTP / MSTPING / RPTPONG)
-        # 4a. RPTPING (7-byte header + 4-byte DMR ID = 11 bytes): Standard MMDVMHost / MMDVM_Bridge / Pi-Star
+        # 4. Keepalive Pings (RPTPONG / RPTPING / RPTP / MSTPING)
+        # IMPORTANT: Check 7-byte prefixes (RPTPONG, RPTPING) BEFORE 4-byte prefix (RPTP),
+        # because b"RPTPONG" and b"RPTPING" both start with b"RPTP"!
+        # 4a. RPTPONG from peer (11 bytes: b"RPTPONG" + 4-byte DMR ID) — never send a reply (prevents ping-pong storm!)
+        elif data.startswith(RPTPONG) and len(data) >= 11:
+            peer_id_bytes = data[7:11]
+            dmr_id = struct.unpack(">I", peer_id_bytes)[0]
+            self._update_client_seen(dmr_id, addr)
+            return
+
+        # 4b. RPTPING (7-byte header + 4-byte DMR ID = 11 bytes): Standard MMDVMHost / MMDVM_Bridge / Pi-Star
         elif data.startswith(RPTPING) and len(data) >= 11:
             peer_id_bytes = data[7:11]
             dmr_id = struct.unpack(">I", peer_id_bytes)[0]
             self._update_client_seen(dmr_id, addr)
             if addr not in self.clients:
-                logger.info(f"[DMR-Master] ⚠️ RPTPING from unauthenticated {addr} (DMR ID: {dmr_id}), sending MSTNAK to trigger re-login")
-                self.sock.sendto(MSTNAK + peer_id_bytes, addr)
+                now_nak = time.time()
+                last_nak = getattr(self, "_last_nak_by_addr", {}).get(addr, 0.0)
+                if now_nak - last_nak >= 5.0:
+                    if not hasattr(self, "_last_nak_by_addr"):
+                        self._last_nak_by_addr = {}
+                    self._last_nak_by_addr[addr] = now_nak
+                    logger.info(f"[DMR-Master] ⚠️ RPTPING from unauthenticated {addr} (DMR ID: {dmr_id}), sending 1x MSTNAK to trigger re-login")
+                    self.sock.sendto(MSTNAK + peer_id_bytes, addr)
                 return
-            # HomeBrew standard Pong: MSTPONG + 4-byte client DMR ID
+            # HomeBrew standard Pong: 1x MSTPONG + 4-byte client DMR ID
             pong = MSTPONG + peer_id_bytes
             self.sock.sendto(pong, addr)
             return
 
-        # 4b. RPTP (4-byte header + 4-byte DMR ID = 8 bytes): Legacy HomeBrew clients
-        elif data.startswith(RPTP) and len(data) >= 8:
+        # 4c. RPTP (exact 4-byte header + 4-byte DMR ID = 8 bytes): Legacy HomeBrew clients
+        elif data.startswith(RPTP) and len(data) == 8:
             peer_id_bytes = data[4:8]
             dmr_id = struct.unpack(">I", peer_id_bytes)[0]
             self._update_client_seen(dmr_id, addr)
             if addr not in self.clients:
-                logger.info(f"[DMR-Master] ⚠️ RPTP from unauthenticated {addr} (DMR ID: {dmr_id}), sending MSTNAK to trigger re-login")
-                self.sock.sendto(MSTNAK + peer_id_bytes, addr)
+                now_nak = time.time()
+                last_nak = getattr(self, "_last_nak_by_addr", {}).get(addr, 0.0)
+                if now_nak - last_nak >= 5.0:
+                    if not hasattr(self, "_last_nak_by_addr"):
+                        self._last_nak_by_addr = {}
+                    self._last_nak_by_addr[addr] = now_nak
+                    logger.info(f"[DMR-Master] ⚠️ RPTP from unauthenticated {addr} (DMR ID: {dmr_id}), sending 1x MSTNAK to trigger re-login")
+                    self.sock.sendto(MSTNAK + peer_id_bytes, addr)
                 return
             self.sock.sendto(MSTPONG + peer_id_bytes, addr)
-            self.sock.sendto(MSTP + peer_id_bytes, addr)
             return
 
-        # 4c. MSTPING from peer (7-byte header + 4-byte DMR ID = 11 bytes)
+        # 4d. MSTPING from peer (7-byte header + 4-byte DMR ID = 11 bytes)
         elif data.startswith(MSTPING) and len(data) >= 11:
             peer_id_bytes = data[7:11]
             dmr_id = struct.unpack(">I", peer_id_bytes)[0]
             self._update_client_seen(dmr_id, addr)
             self.sock.sendto(MSTPONG + peer_id_bytes, addr)
-            return
-
-        # 4d. RPTPONG from peer (response to master-initiated keepalive)
-        elif data.startswith(RPTPONG) and len(data) >= 11:
-            peer_id_bytes = data[7:11]
-            dmr_id = struct.unpack(">I", peer_id_bytes)[0]
-            self._update_client_seen(dmr_id, addr)
             return
 
         # 5. RPTCL: Client Logout / Disconnect cleanly
@@ -1246,18 +1259,9 @@ class HomeBrewMasterServer:
                     self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
                 self.active_stream = None
 
-            # 2. Outbound keepalive ping to maintain NAT/firewall pinhole open
-            for addr, client in list(self.clients.items()):
-                if client.get("state") in ["CONNECTED", "AUTHENTICATED"]:
-                    dmr_id = client.get("dmr_id", 0)
-                    if dmr_id > 0 and self.sock:
-                        try:
-                            ping_pkt = MSTPING + struct.pack(">I", dmr_id)
-                            self.sock.sendto(ping_pkt, addr)
-                        except Exception:
-                            pass
-
-            # 3. Watchdog timeout: prune clients inactive for > 90 seconds
+            # 2. Watchdog timeout: prune clients inactive for > 90 seconds
+            # (Note: Standard HomeBrew masters do NOT initiate unsolicited MSTPINGs every 5s;
+            # clients send RPTPING every 5s and receive 1x MSTPONG, keeping NAT pinholes open cleanly.)
             for addr, client in list(self.clients.items()):
                 if now - client.get("last_seen", 0) > 90:
                     logger.info(f"[DMR-Master] Hotspot {client.get('callsign')} ({client.get('dmr_id')}) at {addr} timed out (>90s), removing.")

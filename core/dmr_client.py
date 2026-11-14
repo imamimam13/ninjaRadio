@@ -382,14 +382,14 @@ class HomeBrewClient:
             logger.warning(f"[{self.name}] ❌ Authentication REJECTED by Master (MSTNAK)! Invalid password or DMR ID.")
             self._set_state("AUTH_FAILED")
 
-        # 3. Ping Keepalive responses
-        elif data.startswith(MSTPONG) or data.startswith(MSTP) or data.startswith(MSTACK):
-            self.last_ping_rx = time.time()
+        # 3. Ping Keepalive responses (check 7-byte MSTPING / MSTPONG before 4-byte MSTP prefix!)
         elif data.startswith(MSTPING):
             self.last_ping_rx = time.time()
             if self.sock and self.target_addr:
                 pong = RPTPONG + struct.pack(">I", self.dmr_id)
                 self.sock.sendto(pong, self.target_addr)
+        elif data.startswith(MSTPONG) or data.startswith(MSTP) or data.startswith(MSTACK):
+            self.last_ping_rx = time.time()
 
         # 3. DMRD Voice and Data Frames from Network
         elif header == DMRD and len(data) >= 20:

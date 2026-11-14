@@ -248,6 +248,11 @@ class HbpClient(
             return true
         }
 
+        if (starts(d, "MSTPONG")) {
+            // Master acknowledged our RPTPING keepalive (must be checked BEFORE "MSTP" prefix!)
+            return true
+        }
+
         if (starts(d, "MSTPING") || starts(d, "MSTP")) {
             // Immediate reply to master ping to prevent MSTNAK disconnect
             send(Dmr.ascii("RPTPONG") + id)
@@ -258,11 +263,6 @@ class HbpClient(
                 attempt = 0
                 setState(State.CONNECTED, "Tersambung ke DMR master")
             }
-            return true
-        }
-
-        if (starts(d, "MSTPONG")) {
-            // Master acknowledged our RPTPING keepalive
             return true
         }
 
