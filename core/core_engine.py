@@ -1564,13 +1564,17 @@ usrpAGC = -20,10,100
         except Exception as e:
             logger.error(f"Failed to start DMR Master Server on UDP {DMR_MASTER_PORT}: {e}")
 
+        # Start standalone md380-emu vocoder daemon (UDP 2470) for authentic MD-380 AMBE+2 quality
+        if not bool(self.config.get("enable_legacy_ab_daemons", False)):
+            self.start_md380()
+
         # Initialize Direct Z3DMR Engine
         try:
             self.direct_dmr = DirectDmrEngine(
                 dmr_master_broadcast_fn=self.broadcast_direct_dmrd,
                 rpt_id=int(self.config.get("server_dmr_id", 5109999))
             )
-            logger.info("✓ Direct Z3DMR Engine initialized with OpenDMR vocoder")
+            logger.info(f"✓ Direct Z3DMR Engine initialized (Vocoder: {self.direct_dmr.vocoder.version()})")
         except Exception as e:
             logger.error(f"Failed to initialize DirectDmrEngine: {e}")
 
