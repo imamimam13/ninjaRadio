@@ -159,6 +159,7 @@ class HomeBrewMasterServer:
 
         # Native Parrot / Audio Echo Service (TG 9990 & 99990)
         self.parrot_recordings: Dict[Tuple[str, int], list] = {}
+        self.parrot_stream_ids: Dict[Tuple[str, int], int] = {}
         self.parrot_tgs: List[int] = [9990, 99990]
 
         # Loopback suppression & dynamic talkgroup retargeting for local ingress
@@ -654,8 +655,10 @@ class HomeBrewMasterServer:
             # Native Parrot (Configured Parrot Talkgroups or Private Calls)
             if dst_tg in getattr(self, "parrot_tgs", [9990, 99990]):
                 if data_type == 0:  # Voice Header
-                    self.parrot_recordings[addr] = [data]
-                    logger.info(f"[DMR-Master] 🦜 Parrot started recording from {addr} (DMR ID: {src_id}, TG: {dst_tg}, Slot: {slot})")
+                    if addr not in self.parrot_recordings or self.parrot_stream_ids.get(addr) != stream_id:
+                        self.parrot_recordings[addr] = [data]
+                        self.parrot_stream_ids[addr] = stream_id
+                        logger.info(f"[DMR-Master] 🦜 Parrot started recording from {addr} (DMR ID: {src_id}, TG: {dst_tg}, Slot: {slot})")
                 elif data_type == 1:  # Voice Burst
                     if addr not in self.parrot_recordings:
                         self.parrot_recordings[addr] = []
