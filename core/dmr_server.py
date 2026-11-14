@@ -169,6 +169,7 @@ class HomeBrewMasterServer:
         self._pacer_queues: Dict[Tuple[Tuple[str, int], int], asyncio.Queue] = {}
         self._pacer_tasks: Dict[Tuple[Tuple[str, int], int], asyncio.Task] = {}
         self._pacer_streams: Dict[Tuple[Tuple[str, int], int], int] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def parse_mmdvm_options(self, client: dict, options_str: str):
         """Parses all TS1 and TS2 talkgroup subscriptions from RPTC/RPTO options payload."""
@@ -239,6 +240,7 @@ class HomeBrewMasterServer:
     async def start(self):
         self.running = True
         loop = asyncio.get_running_loop()
+        self._loop = loop
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -967,10 +969,30 @@ class HomeBrewMasterServer:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            # Called from a worker thread (e.g. DirectDmrEngine pacer thread): marshal onto main asyncio loop
+            if self._loop is not None and self._loop.is_running():
+                self._loop.call_soon_threadsafe(
+                    self._enqueue_paced_dmrd_on_loop,
+                    self._loop, addr, target_slot, stream_id, data_type, out_pkt, client
+                )
+                return
             if self.sock:
                 self.sock.sendto(out_pkt, addr)
                 client["tx_packets"] = client.get("tx_packets", 0) + 1
             return
+
+        self._enqueue_paced_dmrd_on_loop(loop, addr, target_slot, stream_id, data_type, out_pkt, client)
+
+    def _enqueue_paced_dmrd_on_loop(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        addr: Tuple[str, int],
+        target_slot: int,
+        stream_id: int,
+        data_type: int,
+        out_pkt: bytes,
+        client: dict
+    ):
 
         key = (addr, target_slot)
         q = self._pacer_queues.get(key)
