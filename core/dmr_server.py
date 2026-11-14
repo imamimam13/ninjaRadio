@@ -784,11 +784,11 @@ class HomeBrewMasterServer:
         stream_id = int.from_bytes(data[16:20], "big")
         now = time.time()
 
-        # Deduplicate identical DMR voice bursts within 45ms so MMDVM_Bridge never gets double-fed
+        # Deduplicate identical DMR voice bursts within 25ms so MMDVM_Bridge never gets double-fed
         if data_type == 1 and len(data) >= 53:
             burst_sig = (src_id, dst_tg, stream_id, dtype_vseq, data[20:53])
             last_sig_time = getattr(self, "_last_burst_sigs", {}).get(burst_sig, 0.0)
-            if (now - last_sig_time) < 0.045:
+            if (now - last_sig_time) < 0.025:
                 return
             if not hasattr(self, "_last_burst_sigs"):
                 self._last_burst_sigs = {}
@@ -1023,15 +1023,15 @@ class HomeBrewMasterServer:
                 now = loop.time()
                 if stream_id != last_stream_id or data_type == 0:
                     last_stream_id = stream_id
-                    # 60ms (1-frame) jitter cushion on stream start so network jitter doesn't starve frame 2
-                    await asyncio.sleep(0.060)
+                    # 120ms (2-frame) jitter cushion on stream start so 4G/WiFi jitter doesn't starve MMDVMHost
+                    await asyncio.sleep(0.120)
                     next_send_at = loop.time()
                 else:
                     delay = next_send_at - now
                     if delay > 0.002:
                         await asyncio.sleep(delay)
-                    elif delay < -0.180:
-                        # Catch up if event loop fell behind > 180ms
+                    elif delay < -0.240:
+                        # Catch up if event loop fell behind > 240ms
                         next_send_at = loop.time()
 
                 if self.sock and addr in self.clients:
@@ -1081,6 +1081,9 @@ class HomeBrewMasterServer:
             dst_bytes = echo_dst.to_bytes(3, "big")
             repeater_bytes = struct.pack(">I", int(target_rpt_id))
 
+            loop = asyncio.get_running_loop()
+            next_tx_at = loop.time()
+
             for pkt in recorded_packets:
                 if not self.running or not self.sock:
                     break
@@ -1101,7 +1104,12 @@ class HomeBrewMasterServer:
                 except Exception:
                     pass
 
-                await asyncio.sleep(0.06)
+                next_tx_at += 0.060
+                delay = next_tx_at - loop.time()
+                if delay > 0.002:
+                    await asyncio.sleep(delay)
+                elif delay < -0.180:
+                    next_tx_at = loop.time()
 
             logger.info(f"[DMR-Master] 🦜 Parrot echo playback finished to {caller_id} at {dest_addr}")
         except Exception as e:
