@@ -607,6 +607,7 @@ def find_binary(name: str) -> Optional[str]:
 class DVSwitchCoreManager:
     def __init__(self):
         self.config = {}
+        self.boot_time = time.time()
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.usrp_ingress_sock: Optional[socket.socket] = None
@@ -3602,17 +3603,23 @@ async def get_serverdmr_status():
     if engine_mgr.dmr_master_server:
         data = engine_mgr.dmr_master_server.get_server_status()
     else:
+        use_freedmr = os.getenv("USE_FREEDMR", "false").lower() == "true"
+        freedmr_client = engine_mgr.peer_clients.get("freedmr:62032")
+        uptime_sec = int(time.time() - getattr(engine_mgr, "boot_time", time.time()))
+        m, s = divmod(uptime_sec, 60)
+        h, m = divmod(m, 60)
+        uptime_str = f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
         data = {
-            "online": False,
+            "online": True if use_freedmr else False,
             "port": DMR_MASTER_PORT,
-            "protocol": "HomeBrew / MMDVM Protocol v1",
+            "protocol": "FreeDMR Routing Engine v1 (HBLink3 Based)" if use_freedmr else "HomeBrew / MMDVM Protocol v1",
             "server_callsign": engine_mgr.config.get("server_callsign", "N1NJA"),
             "server_dmr_id": engine_mgr.config.get("server_dmr_id", 5109999),
-            "uptime": "0s",
-            "uptime_seconds": 0,
+            "uptime": uptime_str if use_freedmr else "0s",
+            "uptime_seconds": uptime_sec if use_freedmr else 0,
             "connected_hotspots_count": 0,
-            "total_rx_packets": 0,
-            "total_tx_packets": 0,
+            "total_rx_packets": getattr(freedmr_client, "rx_packets", 0) if freedmr_client else 0,
+            "total_tx_packets": getattr(freedmr_client, "tx_packets", 0) if freedmr_client else 0,
             "active_transmission": None,
             "hotspots": [],
             "recent_qsos": []
