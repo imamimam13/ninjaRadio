@@ -1553,27 +1553,24 @@ usrpAGC = -20,10,100
         self.generate_configs()
         self.running = True
 
-        # 0. Start DMR Master Server (or delegate to FreeDMR)
+        # 0. Start DMR Master Server (or bridge server for FreeDMR [CORE-BRIDGE] PEER)
         use_freedmr = os.getenv("USE_FREEDMR", "false").lower() == "true"
-        if not use_freedmr:
-            try:
-                hotspot_port = int(self.config.get("hotspot_port", DMR_MASTER_PORT))
-                hotspot_pass = str(self.config.get("hotspot_password", "ninjaradio_pass"))
-                server_id = int(self.config.get("server_dmr_id", 5109999))
-                server_call = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
-                self.dmr_master_server = HomeBrewMasterServer(
-                    port=hotspot_port,
-                    password=hotspot_pass,
-                    server_dmr_id=server_id,
-                    server_callsign=server_call,
-                    on_traffic=self.handle_dmr_master_traffic
-                )
-                await self.dmr_master_server.start()
-                logger.info(f"✓ Native DMR Master Server running on UDP port {hotspot_port}")
-            except Exception as e:
-                logger.error(f"Failed to start DMR Master Server on UDP {DMR_MASTER_PORT}: {e}")
-        else:
-            logger.info("✓ DMR Master routing active on FreeDMR engine (port 62031)")
+        hotspot_port = 62035 if use_freedmr else int(self.config.get("hotspot_port", DMR_MASTER_PORT))
+        try:
+            hotspot_pass = str(self.config.get("hotspot_password", "ninjaradio_pass"))
+            server_id = int(self.config.get("server_dmr_id", 5109999))
+            server_call = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
+            self.dmr_master_server = HomeBrewMasterServer(
+                port=hotspot_port,
+                password=hotspot_pass,
+                server_dmr_id=server_id,
+                server_callsign=server_call,
+                on_traffic=self.handle_dmr_master_traffic
+            )
+            await self.dmr_master_server.start()
+            logger.info(f"✓ DMR Bridge Server running on UDP port {hotspot_port} (FreeDMR Mode: {use_freedmr})")
+        except Exception as e:
+            logger.error(f"Failed to start DMR Master/Bridge Server on UDP {hotspot_port}: {e}")
 
         # Initialize Direct Z3DMR Engine
         try:
@@ -3100,36 +3097,6 @@ usrpAGC = -20,10,100
         peers = cfg.get("peering", [])
         active_keys = set()
 
-        if os.getenv("USE_FREEDMR", "false").lower() == "true":
-            freedmr_key = "freedmr:62031"
-            active_keys.add(freedmr_key)
-            if freedmr_key not in self.peer_clients:
-                f_name = "FreeDMR-Master"
-                f_id = int(cfg.get("server_dmr_id", 5109999))
-                f_call = str(cfg.get("server_callsign", "N1NJA")).strip().upper()
-                f_pwd = str(cfg.get("hotspot_password", "ninjaradio_pass")).strip()
-                logger.info(f"[FreeDMR] 🌐 Connecting internal bridge client: {f_name} -> {freedmr_key}")
-                f_client = HomeBrewClient(
-                    name=f_name,
-                    host="freedmr",
-                    port=62031,
-                    dmr_id=f_id,
-                    callsign=f_call,
-                    password=f_pwd,
-                    subscribed_tgs="1025,510,5109,510990,5101,5102,5103,1023,555,9990,91",
-                    rx_freq=str(cfg.get("rx_freq", "438.8000")),
-                    tx_freq=str(cfg.get("tx_freq", "438.8000")),
-                    color_code=int(cfg.get("color_code", 1)),
-                    tx_pwr=int(cfg.get("tx_pwr", 25)),
-                    software_id="NinjaRadio FreeDMR Link",
-                    package_id="N1NJA_Bridge",
-                    url="https://github.com/imamimam13/ninjaRadio",
-                    on_traffic=self.handle_peer_traffic,
-                    on_status_change=self.handle_peer_status_change
-                )
-                self.peer_clients[freedmr_key] = f_client
-                await f_client.start()
-
         for p in peers:
             if p.get("isActive") is True:
                 host = str(p.get("host", "")).strip()
@@ -3296,7 +3263,7 @@ usrpAGC = -20,10,100
                 if is_from_freedmr:
                     # Inbound from FreeDMR (local MMDVM hotspot): forward to external peers (BRIDI, etc.)
                     for p_key, p_client in list(self.peer_clients.items()):
-                        if p_key != "freedmr:62031" and p_client.state == "CONNECTED":
+                        if not p_key.startswith("freedmr:") and p_client.state == "CONNECTED":
                             sub_tgs = getattr(p_client, "subscribed_tgs", [])
                             if not sub_tgs or effective_tg in sub_tgs:
                                 try:
@@ -3305,7 +3272,7 @@ usrpAGC = -20,10,100
                                     logger.debug(f"Failed to forward MMDVM DMRD to {p_client.name}: {ex}")
                 else:
                     # Inbound from external peer (BRIDI, etc.): forward to FreeDMR so local MMDVM hotspots receive it!
-                    f_client = self.peer_clients.get("freedmr:62031")
+                    f_client = self.peer_clients.get("freedmr:62200") or self.peer_clients.get("freedmr:62031")
                     if f_client and f_client.state == "CONNECTED":
                         try:
                             f_client.send_dmrd(fwd_pkt)
@@ -3634,7 +3601,7 @@ async def get_core_status():
 async def get_serverdmr_status():
     use_freedmr = os.getenv("USE_FREEDMR", "false").lower() == "true"
     if use_freedmr:
-        freedmr_client = engine_mgr.peer_clients.get("freedmr:62031")
+        freedmr_client = engine_mgr.peer_clients.get("freedmr:62200") or engine_mgr.peer_clients.get("freedmr:62031")
         uptime_sec = int(time.time() - getattr(engine_mgr, "boot_time", time.time()))
         m, s = divmod(uptime_sec, 60)
         h, m = divmod(m, 60)
