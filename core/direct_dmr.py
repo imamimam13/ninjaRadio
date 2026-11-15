@@ -798,8 +798,8 @@ class DirectDmrEngine:
             try:
                 pkt, interval_s = self._pacer_queue.get()
                 now_mono = time.monotonic()
-                if next_send_mono <= 0.0 or (now_mono - next_send_mono) > 0.24:
-                    # Stream start or after idle gap: send immediately and anchor cadence clock
+                if next_send_mono <= 0.0 or now_mono > next_send_mono:
+                    # Stream start or queue underrun: anchor cadence clock to now to prevent burst bunching
                     next_send_mono = now_mono
                 elif now_mono < next_send_mono:
                     time.sleep(next_send_mono - now_mono)
