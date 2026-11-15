@@ -2,6 +2,19 @@
 set -e
 
 mkdir -p /app/data
+mkdir -p /app/data/svx_pki
+mkdir -p /var/lib/svxlink
+
+# Ensure persistent PKI storage in shared volume /app/data/svx_pki
+if [ ! -L /var/lib/svxlink/pki ]; then
+    if [ -d /var/lib/svxlink/pki ]; then
+        cp -rn /var/lib/svxlink/pki/* /app/data/svx_pki/ 2>/dev/null || true
+        rm -rf /var/lib/svxlink/pki
+    fi
+    ln -sfn /app/data/svx_pki /var/lib/svxlink/pki
+fi
+chmod -R 777 /app/data/svx_pki 2>/dev/null || true
+
 CONF_PATH="/etc/svxlink/svxreflector.conf"
 
 AUTH_KEY="${SVX_AUTH_KEY:-ninjaradio_svx}"
@@ -54,9 +67,19 @@ sans = set([
     f"IP:{detected_ip}",
     f"DNS:{detected_ip}.sslip.io",
     "DNS:svxreflector",
+    "DNS:ninjaradio_svxreflector",
+    "DNS:bridge-svxlink",
+    "DNS:svxlink-bridge",
     "IP:127.0.0.1",
     "DNS:localhost"
 ])
+try:
+    c_ip = socket.gethostbyname(socket.gethostname())
+    if c_ip:
+        sans.add(f"IP:{c_ip}")
+except Exception:
+    pass
+
 if common_name and common_name != detected_ip:
     if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", common_name):
         sans.add(f"IP:{common_name}")
@@ -73,16 +96,29 @@ if custom_san:
 
 alt_names = ",".join(sorted(list(sans)))
 
-# Auto-refresh PKI certificate if server IP or Common Name changed
-pki_cn_file = "/var/lib/svxlink/pki/.last_common_name"
+# Auto-refresh PKI certificate if server IP or Common Name changed, or if reset requested
+pki_dir = "/app/data/svx_pki"
+os.makedirs(pki_dir, exist_ok=True)
+pki_cn_file = f"{pki_dir}/.last_common_name"
+
+reset_requested = os.getenv("RESET_SVX_PKI", "false").lower() == "true" or os.path.exists("/app/data/.reset_svx_pki")
+if reset_requested:
+    print("🧹 Resetting SvxReflector PKI requested by user/admin...")
+    shutil.rmtree(pki_dir, ignore_errors=True)
+    os.makedirs(pki_dir, exist_ok=True)
+    try:
+        os.remove("/app/data/.reset_svx_pki")
+    except Exception:
+        pass
+
 try:
     if os.path.exists(pki_cn_file):
         with open(pki_cn_file, "r") as f:
             last_cn = f.read().strip()
         if last_cn and last_cn != common_name:
             print(f"⚠️ Server IP / Host berubah dari {last_cn} ke {common_name}. Mereset sertifikat PKI...")
-            shutil.rmtree("/var/lib/svxlink/pki", ignore_errors=True)
-    os.makedirs("/var/lib/svxlink/pki", exist_ok=True)
+            shutil.rmtree(pki_dir, ignore_errors=True)
+            os.makedirs(pki_dir, exist_ok=True)
     with open(pki_cn_file, "w") as f:
         f.write(common_name)
 except Exception as e:
@@ -264,8 +300,11 @@ if [ -f "$RELOAD_MARKER" ]; then
 fi
 
 while true; do
+    chmod -R 777 /app/data/svx_pki 2>/dev/null || true
     /usr/bin/svxreflector --config="$CONF_PATH" &
     SVX_PID=$!
+    sleep 2
+    chmod -R 777 /app/data/svx_pki 2>/dev/null || true
 
     while kill -0 "$SVX_PID" 2>/dev/null; do
         sleep 5

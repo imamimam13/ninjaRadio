@@ -367,8 +367,25 @@ class SvxGatewayBot:
         # Ensure /usr/share/svxlink/sounds/en_US exists so SimplexLogic locale initialization succeeds cleanly
         os.makedirs("/usr/share/svxlink/sounds/en_US/Core", exist_ok=True)
         os.makedirs("/usr/share/svxlink/sounds/en_US/Default", exist_ok=True)
+
+        bot_pki_dir = f"{self.runtime_dir}/pki"
         os.makedirs("/var/lib/svxlink/pki", exist_ok=True)
-        os.makedirs(f"{self.runtime_dir}/pki", exist_ok=True)
+        os.makedirs(bot_pki_dir, exist_ok=True)
+
+        # Synchronize fresh CA bundle from shared SvxReflector PKI volume (/app/data/svx_pki)
+        shared_ca = "/app/data/svx_pki/ca-bundle.crt"
+        bot_ca_file = f"{bot_pki_dir}/ca-bundle.crt"
+        default_ca_file = "/var/lib/svxlink/pki/ca-bundle.crt"
+
+        if os.path.exists(shared_ca) and os.path.getsize(shared_ca) > 0:
+            try:
+                import shutil
+                shutil.copy2(shared_ca, default_ca_file)
+                shutil.copy2(shared_ca, bot_ca_file)
+                os.chmod(default_ca_file, 0o644)
+                os.chmod(bot_ca_file, 0o644)
+            except Exception as e:
+                logger.debug(f"[{self.bot_user}] Note syncing shared CA: {e}")
 
         events_tcl_path = "/usr/share/svxlink/events.tcl"
 
@@ -511,6 +528,7 @@ MONITOR_TGS={monitored_tgs_str}
 AUDIO_CODEC=OPUS
 EVENT_HANDLER={events_tcl_path}
 NODE_INFO_FILE={self.runtime_dir}/node_info.json
+CERT_PKI_DIR={bot_pki_dir}
 
 [ReflectorLink]
 CONNECT_LOGICS=SimplexLogic:9:SVX,ReflectorLogic
@@ -576,6 +594,44 @@ PREEMPHASIS=0
                 except Exception:
                     pass
             self.proc = None
+
+    def _heal_ca_bundle(self):
+        """Removes stale/mismatched CA bundle and resyncs from shared /app/data/svx_pki or clears it for clean re-download."""
+        now = time.time()
+        if now - getattr(self, "_last_ca_heal_time", 0.0) < 6.0:
+            return
+        self._last_ca_heal_time = now
+
+        shared_ca = "/app/data/svx_pki/ca-bundle.crt"
+        bot_pki_dir = f"{self.runtime_dir}/pki"
+        bot_ca_file = f"{bot_pki_dir}/ca-bundle.crt"
+        default_ca_file = "/var/lib/svxlink/pki/ca-bundle.crt"
+
+        for p in (bot_ca_file, default_ca_file):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+        if os.path.exists(shared_ca) and os.path.getsize(shared_ca) > 0:
+            try:
+                import shutil
+                shutil.copy2(shared_ca, default_ca_file)
+                shutil.copy2(shared_ca, bot_ca_file)
+                os.chmod(default_ca_file, 0o644)
+                os.chmod(bot_ca_file, 0o644)
+                logger.info(f"[{self.bot_user}] ✓ Auto-healed: resynced fresh CA bundle from {shared_ca}")
+            except Exception as e:
+                logger.warning(f"[{self.bot_user}] Failed to resync shared CA bundle: {e}")
+        else:
+            logger.info(f"[{self.bot_user}] Stale CA bundle cleared. SvxLink will fetch updated CA directly.")
+
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except Exception:
+                pass
 
     def move_to_channel(self, target_channel_name: str, new_tg: int = None, new_slot: int = None, new_cfg: dict = None):
         """Moves this SvxLink bot to a new Reflector Talkgroup / room dynamically."""
@@ -889,6 +945,13 @@ PREEMPHASIS=0
                     elif "ReflectorLogic: Disconnected" in sline:
                         self.connected = False
                         logger.warning(f"[{self.bot_user}] ⚠️ Disconnected from SvxReflector: {sline}")
+                    elif (
+                        "update your CA bundle" in sline
+                        or "Certificate verification failed" in sline
+                        or "certificate verify failed" in sline
+                    ):
+                        logger.warning(f"[{self.bot_user}] 🔄 CA bundle / SSL verification mismatch detected: {sline}")
+                        self._heal_ca_bundle()
                     elif (
                         "Authentication failed" in sline
                         or "Error" in sline
@@ -1275,6 +1338,15 @@ def main():
         logger.info(f"  • SvxReflector Room '{room_name}' <---> DMR TG {tg_val}")
 
     usrp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    # Wait briefly for local SvxReflector to generate its CA bundle if running in same docker environment
+    shared_ca = "/app/data/svx_pki/ca-bundle.crt"
+    if SVX_HOST in ("svxreflector", "127.0.0.1", "localhost"):
+        for _ in range(8):
+            if os.path.exists(shared_ca) and os.path.getsize(shared_ca) > 0:
+                logger.info(f"✓ Detected SvxReflector CA bundle: {shared_ca}")
+                break
+            time.sleep(1.0)
 
     # 1. Spawn Multi-TG SvxLink Bot Pool
     sync_gateway_bots(usrp_sock)
