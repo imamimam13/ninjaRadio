@@ -311,6 +311,9 @@ class SvxGatewayBot:
         self.slot = int(slot or (1 if self.tg in [510, 5108, 91, 1023] else 2))
         self.usrp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.bot_cfg = bot_cfg or {}
+        self.host = str(self.bot_cfg.get("host") or self.bot_cfg.get("server") or SVX_HOST).strip()
+        self.port = int(self.bot_cfg.get("port") or self.bot_cfg.get("host_port") or SVX_PORT)
+        self.auth_key = str(self.bot_cfg.get("auth_key") or self.bot_cfg.get("password") or SVX_AUTH_KEY).strip()
 
         if bot_user:
             self.bot_user = re.sub(r"[^A-Za-z0-9\-]", "", bot_user)[:15].upper()
@@ -372,12 +375,13 @@ class SvxGatewayBot:
         os.makedirs("/var/lib/svxlink/pki", exist_ok=True)
         os.makedirs(bot_pki_dir, exist_ok=True)
 
-        # Synchronize fresh CA bundle from shared SvxReflector PKI volume (/app/data/svx_pki)
+        is_local_svx = self.host.lower() in ("svxreflector", "127.0.0.1", "localhost", "")
         shared_ca = "/app/data/svx_pki/ca-bundle.crt"
         bot_ca_file = f"{bot_pki_dir}/ca-bundle.crt"
         default_ca_file = "/var/lib/svxlink/pki/ca-bundle.crt"
 
-        if os.path.exists(shared_ca) and os.path.getsize(shared_ca) > 0:
+        # Synchronize fresh CA bundle from shared SvxReflector PKI volume (/app/data/svx_pki) for local reflector
+        if is_local_svx and os.path.exists(shared_ca) and os.path.getsize(shared_ca) > 0:
             try:
                 import shutil
                 shutil.copy2(shared_ca, default_ca_file)
@@ -518,10 +522,10 @@ DTMF_CTRL_PTY={self.dtmf_pty_path}
 
 [ReflectorLogic]
 TYPE=Reflector
-HOSTS={SVX_HOST}
-HOST_PORT={SVX_PORT}
+HOSTS={self.host}
+HOST_PORT={self.port}
 CALLSIGN={self.bot_user}
-AUTH_KEY="{SVX_AUTH_KEY}"
+AUTH_KEY="{self.auth_key}"
 DEFAULT_TG={self.tg}
 TG_SELECT_TIMEOUT=60
 MONITOR_TGS={monitored_tgs_str}
@@ -666,9 +670,9 @@ PREEMPHASIS=0
         if os.path.exists(self.dtmf_pty_path):
             try:
                 fd = os.open(self.dtmf_pty_path, os.O_WRONLY | os.O_NONBLOCK)
-                os.write(fd, f"91{tg}#\n".encode("ascii"))
+                os.write(fd, f"9{tg}#\n".encode("ascii"))
                 os.close(fd)
-                logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 91{tg}#)")
+                logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 9{tg}#)")
             except Exception as e:
                 logger.warning(f"[{self.bot_user}] select_talkgroup({tg}) failed: {e}")
 
@@ -731,7 +735,7 @@ PREEMPHASIS=0
 
             tx_call = getattr(self, "current_tx_call", None)
             if tx_call:
-                self._notify_reflector_talker(tx_call, tg or self.tg, sync=(not self.squelch_is_open))
+                self._notify_reflector_talker(tx_call, tg or self.tg, sync=False)
 
             self.last_dmr_rx_play = time.time()
             self._set_squelch(True)
@@ -1092,7 +1096,10 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
 
                 # Route DMR RX: prioritize specific bot dedicated to this talkgroup; fallback to Any-TG gateway
                 dedicated_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
-                if dedicated_bots:
+                connected_dedicated = [bot for bot in dedicated_bots if bot.connected]
+                if connected_dedicated:
+                    target_bots = connected_dedicated
+                elif dedicated_bots:
                     target_bots = dedicated_bots
                 else:
                     target_bots = [bot for bot in gateway_pool.values() if bot.bot_user == "SVX-GATEWAY" or bot.tg == 0]

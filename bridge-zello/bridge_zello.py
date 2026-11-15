@@ -611,14 +611,20 @@ async def zello_websocket_worker():
                 # Background task: Stream audio from DMR -> Zello
                 async def dmr_to_zello_task():
                     last_pcm_time = 0.0
+                    pending_audio = []
                     while is_app_running and bridge_state.ws_connected:
                         try:
                             try:
-                                key_flag, pcm_8k, tg, src_id, slot = await asyncio.wait_for(dmr_to_zello_queue.get(), timeout=0.1)
+                                key_flag, pcm_8k, tg, src_id, slot = await asyncio.wait_for(dmr_to_zello_queue.get(), timeout=0.08)
                             except asyncio.TimeoutError:
-                                # Watchdog: if no DMR audio for > 0.25s while streaming, stop Zello stream
-                                if bridge_state.dmr_to_zello_streaming and (time.time() - last_pcm_time > 0.25):
+                                # Watchdog with VOX hangover guardrail (0.55s): prevent premature cutoffs between speech phrases
+                                if bridge_state.dmr_to_zello_streaming and (time.time() - last_pcm_time > 0.55):
                                     if bridge_state.dmr_stream_id:
+                                        while pending_audio:
+                                            old_opus = pending_audio.pop(0)
+                                            hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
+                                            bridge_state.dmr_stream_seq += 1
+                                            await ws.send(hdr + old_opus)
                                         stop_cmd = {
                                             "command": "stop_stream",
                                             "seq": bridge_state.seq_counter,
@@ -630,6 +636,7 @@ async def zello_websocket_worker():
                                     bridge_state.dmr_to_zello_streaming = False
                                     bridge_state.dmr_stream_id = None
                                     bridge_state.dmr_tx_pcm_buf.clear()
+                                    pending_audio.clear()
                                 continue
 
                             if key_flag == 1 and pcm_8k:
@@ -638,10 +645,13 @@ async def zello_websocket_worker():
 
                                 # Start stream if not yet started
                                 if not bridge_state.dmr_to_zello_streaming:
+                                    talker_call, talker_name = resolve_callbook_info_by_id(src_id)
                                     # 16kHz, 1 frame/pkt, 20ms duration -> codec_header = "gD4BFA=="
+                                    # Crucial: channel attribute ensures live real-time speaker broadcast in Zello
                                     start_cmd = {
                                         "command": "start_stream",
                                         "seq": bridge_state.seq_counter,
+                                        "channel": bridge_state.channel,
                                         "type": "audio",
                                         "codec": "opus",
                                         "codec_header": "gD4BFA==",
@@ -651,21 +661,9 @@ async def zello_websocket_worker():
                                     await ws.send(json.dumps(start_cmd))
                                     bridge_state.dmr_to_zello_streaming = True
                                     bridge_state.dmr_stream_seq = 0
-                                    record_log(f"DMR -> Zello TX Started on TG {tg} (slot {slot})")
-
-                                    # Send text notification into Zello channel with talker callsign & name
-                                    talker_call, talker_name = resolve_callbook_info_by_id(src_id)
-                                    text_cmd = {
-                                        "command": "send_text_message",
-                                        "seq": bridge_state.seq_counter,
-                                        "channel": bridge_state.channel,
-                                        "text": f"🎙️ [DMR TX] {talker_call} ({talker_name}) -> TG {tg}"
-                                    }
-                                    bridge_state.seq_counter += 1
-                                    try:
-                                        await ws.send(json.dumps(text_cmd))
-                                    except Exception as te:
-                                        logger.debug(f"Error sending text notification to Zello: {te}")
+                                    bridge_state.dmr_stream_id = None
+                                    pending_audio.clear()
+                                    record_log(f"DMR -> Zello LIVE TX Started on Channel '{bridge_state.channel}' (TG {tg} from {talker_call})")
 
                                 # Smooth 8kHz -> 16kHz linear interpolation with anti-imaging to eliminate treble harshness
                                 pcm_8k_arr = np.frombuffer(pcm_8k, dtype=np.int16)
@@ -678,25 +676,44 @@ async def zello_websocket_worker():
 
                                 # Encode 20ms of 16kHz PCM (320 samples = 640 bytes) to Opus
                                 opus_bytes = opus_encoder.encode(pcm_16k, frame_size=320)
-                                if opus_bytes and bridge_state.dmr_stream_id:
-                                    # Zello binary audio frame: [0x01][4B stream_id][4B seq][Opus data]
-                                    hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
-                                    bridge_state.dmr_stream_seq += 1
-                                    await ws.send(hdr + opus_bytes)
+                                if opus_bytes:
+                                    if bridge_state.dmr_stream_id:
+                                        # Flush any initial audio buffered while awaiting Zello stream_id response
+                                        while pending_audio:
+                                            old_opus = pending_audio.pop(0)
+                                            hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
+                                            bridge_state.dmr_stream_seq += 1
+                                            await ws.send(hdr + old_opus)
+
+                                        # Zello binary audio frame: [0x01][4B stream_id][4B seq][Opus data]
+                                        hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
+                                        bridge_state.dmr_stream_seq += 1
+                                        await ws.send(hdr + opus_bytes)
+                                    else:
+                                        # Queue up to 40 frames (~800ms) during stream negotiation so audio start is never lost
+                                        if len(pending_audio) < 40:
+                                            pending_audio.append(opus_bytes)
 
                             elif key_flag == 0:
-                                if bridge_state.dmr_to_zello_streaming and bridge_state.dmr_stream_id:
-                                    stop_cmd = {
-                                        "command": "stop_stream",
-                                        "seq": bridge_state.seq_counter,
-                                        "stream_id": bridge_state.dmr_stream_id
-                                    }
-                                    bridge_state.seq_counter += 1
-                                    await ws.send(json.dumps(stop_cmd))
-                                    record_log(f"DMR -> Zello TX Released (stream {bridge_state.dmr_stream_id})")
+                                if bridge_state.dmr_to_zello_streaming:
+                                    if bridge_state.dmr_stream_id:
+                                        while pending_audio:
+                                            old_opus = pending_audio.pop(0)
+                                            hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
+                                            bridge_state.dmr_stream_seq += 1
+                                            await ws.send(hdr + old_opus)
+                                        stop_cmd = {
+                                            "command": "stop_stream",
+                                            "seq": bridge_state.seq_counter,
+                                            "stream_id": bridge_state.dmr_stream_id
+                                        }
+                                        bridge_state.seq_counter += 1
+                                        await ws.send(json.dumps(stop_cmd))
+                                        record_log(f"DMR -> Zello TX Released (stream {bridge_state.dmr_stream_id})")
                                 bridge_state.dmr_to_zello_streaming = False
                                 bridge_state.dmr_stream_id = None
                                 bridge_state.dmr_tx_pcm_buf.clear()
+                                pending_audio.clear()
                         except Exception as de:
                             logger.debug(f"dmr_to_zello note: {de}")
                             await asyncio.sleep(0.01)
