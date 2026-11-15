@@ -121,8 +121,10 @@ interface BridgeSystem {
   TGID: number;
   ON: number[];
   OFF: number[];
-  TO: number;
-  ACTION: string;
+  TIMEOUT?: number;
+  TO?: number;
+  ACTIVE?: boolean;
+  ACTION?: string;
 }
 
 type BridgesMap = Record<string, BridgeSystem[]>;
@@ -220,8 +222,8 @@ export default function ServerDmrPage() {
     const tgid = parseInt(tgClean, 10);
     const updated = { ...bridgesMap };
     updated[tgClean] = [
-      { SYSTEM: "HOTSPOT-MASTER", TS: newTs, TGID: tgid, ON: [tgid], OFF: [4000], TO: newTimeout, ACTION: "VOICE" },
-      { SYSTEM: "CORE-BRIDGE", TS: newTs, TGID: tgid, ON: [tgid], OFF: [4000], TO: newTimeout, ACTION: "VOICE" }
+      { SYSTEM: "HOTSPOT-MASTER", TS: newTs, TGID: tgid, ON: [tgid], OFF: [], TIMEOUT: newTimeout, ACTIVE: true },
+      { SYSTEM: "CORE-BRIDGE", TS: newTs, TGID: tgid, ON: [tgid], OFF: [], TIMEOUT: newTimeout, ACTIVE: true }
     ];
     setBridgesMap(updated);
     setNewTg("");
@@ -768,8 +770,8 @@ export default function ServerDmrPage() {
                           {Object.keys(bridgesMap).length > 0 ? (
                             Object.entries(bridgesMap).map(([tg, systems]) => {
                               const ts = systems[0]?.TS || 2;
-                              const timeout = systems[0]?.TO || 60;
-                              const act = systems[0]?.ACTION || "VOICE";
+                              const timeout = systems[0]?.TIMEOUT || systems[0]?.TO || 60;
+                              const act = systems[0]?.ACTION || (systems[0]?.ACTIVE ? "ACTIVE" : "VOICE");
                               return (
                                 <tr key={tg} className="hover:bg-slate-800/40 transition-colors">
                                   <td className="p-3">
