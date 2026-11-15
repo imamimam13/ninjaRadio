@@ -725,6 +725,35 @@ def resolve_mumble_identity(username: str) -> tuple:
     clean_call = re.sub(r'[^A-Za-z0-9]', '', clean_name)[:8].upper() or f"MUM{virtual_id%1000:03d}"
     return virtual_id, clean_call
 
+_CALLBOOK_CACHE = {}
+
+def lookup_callsign_by_dmr_id(dmr_id: int) -> str:
+    """Resolves amateur callsign for DMR ID dynamically from SQLite Callbook DB."""
+    if not dmr_id or dmr_id <= 0:
+        return "RADIO"
+    if dmr_id in _CALLBOOK_CACHE:
+        return _CALLBOOK_CACHE[dmr_id]
+    db_path = get_db_path()
+    callsign = f"ID-{dmr_id}"
+    if db_path and os.path.exists(db_path):
+        try:
+            import sqlite3
+            with sqlite3.connect(db_path, timeout=1.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ? LIMIT 1", (dmr_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    c_clean = str(row[0]).strip().upper()
+                    name_part = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
+                    if name_part and len(c_clean) + len(name_part) < 18:
+                        callsign = f"{c_clean}-{name_part.split()[0]}"
+                    else:
+                        callsign = c_clean
+        except Exception:
+            pass
+    _CALLBOOK_CACHE[dmr_id] = callsign
+    return callsign
+
 last_tx_reject_alerts = {}
 
 def check_mumble_tx_permission(dmr_id: int, callsign: str, target_tg: int) -> tuple:
@@ -1014,6 +1043,9 @@ class MumbleGatewayBot:
         else:
             clean_name = room_name.replace("NinjaRadio-", "").replace(" ", "-")
             self.bot_user = f"NinjaBot-{clean_name}"[:25]
+        self.default_bot_user = self.bot_user
+        self.current_morphed_callsign = None
+        self.last_dmr_rx_time = 0.0
         self.mumble = None
         self.running = False
         self.thread = None
@@ -1031,6 +1063,100 @@ class MumbleGatewayBot:
             gate_threshold_rms=160.0,
             peak_ceiling=24000.0,
         )
+
+    def _rename(self, new_name: str):
+        """Dispatches UserState to update bot username in Mumble channel."""
+        if not self.mumble or not self.mumble.is_alive():
+            return
+        try:
+            myself = getattr(self.mumble.users, "myself", None)
+            if myself and hasattr(myself, "set_name"):
+                myself.set_name(new_name)
+                return
+            import pymumble_py3.constants as mumble_constants
+            msg = self.mumble.messages[mumble_constants.PYMUMBLE_MSG_TYPES_USERSTATE]()
+            if myself:
+                s_id = myself.get("session") if (isinstance(myself, dict) or hasattr(myself, "__getitem__")) else getattr(myself, "session", None)
+                if s_id is not None:
+                    msg.session = int(s_id)
+            msg.name = str(new_name)
+            self.mumble.send_message(mumble_constants.PYMUMBLE_MSG_TYPES_USERSTATE, msg)
+        except Exception as e:
+            logger.debug(f"[{self.default_bot_user}] Dynamic rename error: {e}")
+
+    def _set_comment(self, comment_str: str):
+        """Dispatches UserState to update bot status comment in Mumble channel."""
+        if not self.mumble or not self.mumble.is_alive():
+            return
+        try:
+            myself = getattr(self.mumble.users, "myself", None)
+            if myself and hasattr(myself, "set_comment"):
+                myself.set_comment(comment_str)
+                return
+            import pymumble_py3.constants as mumble_constants
+            msg = self.mumble.messages[mumble_constants.PYMUMBLE_MSG_TYPES_USERSTATE]()
+            if myself:
+                s_id = myself.get("session") if (isinstance(myself, dict) or hasattr(myself, "__getitem__")) else getattr(myself, "session", None)
+                if s_id is not None:
+                    msg.session = int(s_id)
+            msg.comment = str(comment_str)
+            self.mumble.send_message(mumble_constants.PYMUMBLE_MSG_TYPES_USERSTATE, msg)
+        except Exception as e:
+            logger.debug(f"[{self.default_bot_user}] Dynamic set_comment error: {e}")
+
+    def send_channel_notification(self, callsign: str, dmr_id: int):
+        """Sends a rich formatted notification into the Mumble channel text chat."""
+        if not self.mumble or not self.mumble.is_alive():
+            return
+        try:
+            myself = getattr(self.mumble.users, "myself", None)
+            if not myself:
+                return
+            my_ch_id = myself.get("channel_id") if (isinstance(myself, dict) or hasattr(myself, "__getitem__")) else getattr(myself, "channel_id", None)
+            if my_ch_id is None:
+                return
+
+            msg_html = (
+                f"📻 <b>[DMR RX]</b> Transmisi masuk: <b>{callsign}</b> ({dmr_id}) "
+                f"di <b>TG {self.tg}</b>"
+            )
+
+            target_ch = self.mumble.channels.get(my_ch_id)
+            if target_ch and hasattr(target_ch, "send_text_message"):
+                target_ch.send_text_message(msg_html)
+                return
+
+            import pymumble_py3.constants as mumble_constants
+            msg = self.mumble.messages[mumble_constants.PYMUMBLE_MSG_TYPES_TEXTMESSAGE]()
+            msg.channel_id.append(int(my_ch_id))
+            msg.message = msg_html
+            self.mumble.send_message(mumble_constants.PYMUMBLE_MSG_TYPES_TEXTMESSAGE, msg)
+        except Exception as e:
+            logger.debug(f"[{self.default_bot_user}] Send text notification error: {e}")
+
+    def morph_to_callsign(self, callsign: str, dmr_id: int):
+        """Dynamically renames bot to display the active DMR caller in Mumble."""
+        now_ts = time.time()
+        self.last_dmr_rx_time = now_ts
+        if not callsign or callsign == self.current_morphed_callsign:
+            return
+
+        self.current_morphed_callsign = callsign
+        new_name = f"[DMR] {callsign}"[:25]
+        self._rename(new_name)
+        self._set_comment(f"🔴 <b>TX Live:</b> {callsign} ({dmr_id}) on TG {self.tg}")
+        self.send_channel_notification(callsign, dmr_id)
+        logger.info(f"[{self.default_bot_user}] 👤 Dynamic morph -> '{new_name}' ({dmr_id})")
+
+    def revert_morph(self):
+        """Reverts bot name and status comment back to default when DMR transmission ceases."""
+        if self.current_morphed_callsign is None:
+            return
+        old_call = self.current_morphed_callsign
+        self.current_morphed_callsign = None
+        self._rename(self.default_bot_user)
+        self._set_comment(f"🥷 <b>NinjaRadio Gateway</b> — Bridged to DMR TG {self.tg}")
+        logger.info(f"[{self.default_bot_user}] ⏹️ Reverted morph from '{old_call}' back to '{self.default_bot_user}'")
 
     def move_to_channel(self, target_channel_name: str, new_tg: int = None, new_slot: int = None):
         """Moves this bot into another channel in real-time without reconnection."""
@@ -1133,7 +1259,18 @@ class MumbleGatewayBot:
                     if not user:
                         return
                     uname = user.get("name", "")
-                    if uname.startswith("NinjaBot-") or uname == "SuperUser":
+                    user_sess = user.get("session")
+
+                    # Prevent bot from processing its own sound or another gateway bot's audio
+                    my_sess = None
+                    try:
+                        my_user = getattr(self.mumble.users, "myself", None)
+                        if my_user:
+                            my_sess = my_user.get("session") if (isinstance(my_user, dict) or hasattr(my_user, "__getitem__")) else getattr(my_user, "session", None)
+                    except Exception:
+                        pass
+
+                    if (my_sess is not None and user_sess == my_sess) or uname.startswith("NinjaBot-") or uname.startswith("[DMR]") or uname == "SuperUser":
                         return
 
                     # Verify user is in this bot's channel
@@ -1296,21 +1433,37 @@ def run_usrp_listener(gateway_pool):
                 last_dmr_tx = time.time()
                 pcm_8k = data[32:]
 
-                # Extract talkgroup from USRP header (bytes 16..20)
+                # Extract key_flag, talkgroup, and source DMR ID from USRP header
+                key_flag = struct.unpack(">I", data[12:16])[0]
                 talkgroup = struct.unpack(">I", data[16:20])[0]
+                dmr_id = struct.unpack(">I", data[20:24])[0]
 
                 # Match bot by target talkgroup (Strict isolation: NEVER leak unmapped TGs into unrelated rooms)
                 target_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
                 if not target_bots:
                     continue
 
+                if key_flag == 0:
+                    # Unkey frame from Core DMR Engine
+                    for bot in target_bots:
+                        bot.revert_morph()
+                    continue
+
+                if len(pcm_8k) > 0:
+                    if dmr_id > 0:
+                        callsign = lookup_callsign_by_dmr_id(dmr_id)
+                        for bot in target_bots:
+                            bot.morph_to_callsign(callsign, dmr_id)
+                            bot.play_pcm_8k(pcm_8k)
+                    else:
+                        for bot in target_bots:
+                            bot.play_pcm_8k(pcm_8k)
+
                 if time.time() - last_rx_log > 2.0 and target_bots:
                     last_rx_log = time.time()
-                    bot_names = ", ".join([f"{b.bot_user} in '{b.room_name}'" for b in target_bots])
-                    logger.info(f"[Mumble-Bridge] 🔊 Routing DMR RX (TG {talkgroup}) to {bot_names}")
-
-                for bot in target_bots:
-                    bot.play_pcm_8k(pcm_8k)
+                    bot_names = ", ".join([f"{b.default_bot_user} in '{b.room_name}'" for b in target_bots])
+                    caller_str = f" from {lookup_callsign_by_dmr_id(dmr_id)}" if dmr_id > 0 else ""
+                    logger.info(f"[Mumble-Bridge] 🔊 Routing DMR RX (TG {talkgroup}{caller_str}) to {bot_names}")
 
         except Exception:
             time.sleep(0.02)
@@ -1320,9 +1473,10 @@ def ptt_watchdog_loop(usrp_sock):
     global active_mumble_tx, tx_seq
     while IS_BRIDGING:
         time.sleep(0.05)
+        now = time.time()
         if active_mumble_tx:
             user_info, tg, slot, dmr_id, callsign, last_seen, bot_sock = active_mumble_tx
-            if time.time() - last_seen > 0.65:
+            if now - last_seen > 0.65:
                 try:
                     target_sock = bot_sock or usrp_sock
                     call_bytes = (callsign or "MUMBLE").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
@@ -1336,6 +1490,11 @@ def ptt_watchdog_loop(usrp_sock):
                     b.tx_conditioner.reset()
                 last_mumble_tx = time.time()
                 active_mumble_tx = None
+
+        # Watchdog for DMR RX timeout: Revert morphed bot names if DMR audio stops without unkey packet
+        for b in list(GATEWAY_POOL.values()):
+            if b.current_morphed_callsign is not None and (now - b.last_dmr_rx_time > 0.85):
+                b.revert_morph()
 
 def load_configured_bots():
     """Loads bot definitions from config.json, and ensures every room has an assigned bot."""
