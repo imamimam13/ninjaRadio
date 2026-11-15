@@ -61,6 +61,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private var pendingLearnedKey: Triple<Int, Int, String>? = null
 
     private lateinit var layoutLcdPanel: LinearLayout
+    private var layoutCallerCard: LinearLayout? = null
+    private var viewCallerAccent: View? = null
     private lateinit var tvChannelBadge: TextView
     private lateinit var tvProfileName: TextView
     private lateinit var tvAudioModeBadge: TextView
@@ -128,6 +130,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         profileStore = ProfileStore(this)
 
         layoutLcdPanel = findViewById(R.id.layoutLcdPanel)
+        layoutCallerCard = findViewById(R.id.layoutCallerCard)
+        viewCallerAccent = findViewById(R.id.viewCallerAccent)
         tvChannelBadge = findViewById(R.id.tvChannelBadge)
         tvProfileName = findViewById(R.id.tvProfileName)
         tvAudioModeBadge = findViewById(R.id.tvAudioModeBadge)
@@ -1461,6 +1465,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                     tvRxInfo.text = "STANDBY · SIAP MEMANCAR"
                     tvRxInfo.setTextColor(Color.parseColor("#64748B"))
                     layoutLcdPanel.setBackgroundResource(R.drawable.card_lcd)
+                    layoutCallerCard?.setBackgroundResource(R.drawable.card_zone_caller)
+                    viewCallerAccent?.setBackgroundColor(Color.parseColor("#00F0FF"))
                     startStatusPulse(false)
                 }
                 HbpClient.State.LOGIN,
@@ -1496,6 +1502,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                     tvRxInfo.text = "STANDBY · OFFLINE"
                     tvRxInfo.setTextColor(Color.parseColor("#64748B"))
                     layoutLcdPanel.setBackgroundResource(R.drawable.card_lcd)
+                    layoutCallerCard?.setBackgroundResource(R.drawable.card_zone_caller)
                     hudSmeter.setLevel(0f)
                     hudWaveform.setModeAndLevel(HudWaveformView.Mode.STANDBY, 0f)
                     pbVuMeter.progress = 0
@@ -1510,6 +1517,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         runOnUiThread {
             if (active) {
                 layoutLcdPanel.setBackgroundResource(R.drawable.card_lcd_rx)
+                layoutCallerCard?.setBackgroundResource(R.drawable.card_zone_caller_rx)
+                viewCallerAccent?.setBackgroundColor(Color.parseColor("#34D399"))
                 tvStatus.text = "● RX"
                 tvStatus.setTextColor(Color.parseColor("#34D399"))
                 tvStatus.setBackgroundResource(R.drawable.badge_status_rx)
@@ -1557,6 +1566,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 }
             } else {
                 layoutLcdPanel.setBackgroundResource(R.drawable.card_lcd)
+                layoutCallerCard?.setBackgroundResource(R.drawable.card_zone_caller)
+                viewCallerAccent?.setBackgroundColor(Color.parseColor("#00F0FF"))
                 stopQsoTimer()
                 startStatusPulse(false)
                 hudWaveform.setModeAndLevel(HudWaveformView.Mode.STANDBY, 0f)
@@ -1591,6 +1602,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         runOnUiThread {
             if (active) {
                 layoutLcdPanel.setBackgroundResource(R.drawable.card_lcd_tx)
+                layoutCallerCard?.setBackgroundResource(R.drawable.card_zone_caller_tx)
+                viewCallerAccent?.setBackgroundColor(Color.parseColor("#FB7185"))
                 tvStatus.text = "● TX"
                 tvStatus.setTextColor(Color.parseColor("#F43F5E"))
                 tvStatus.setBackgroundResource(R.drawable.badge_status_tx)
@@ -1613,6 +1626,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 btnPtt.setBackgroundResource(R.drawable.btn_ptt_active)
             } else {
                 layoutLcdPanel.setBackgroundResource(R.drawable.card_lcd)
+                layoutCallerCard?.setBackgroundResource(R.drawable.card_zone_caller)
+                viewCallerAccent?.setBackgroundColor(Color.parseColor("#00F0FF"))
                 stopQsoTimer()
                 startStatusPulse(false)
                 hudWaveform.setModeAndLevel(HudWaveformView.Mode.STANDBY, 0f)

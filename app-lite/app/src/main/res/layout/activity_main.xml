@@ -3,10 +3,10 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="@color/ninja_bg_deep"
+    android:background="#050811"
     android:padding="2dp">
 
-    <!-- Top Tactical Header Bar (Height 20dp) -->
+    <!-- Top Hardware Status Strip (Height 20dp) -->
     <LinearLayout
         android:id="@+id/layoutTopBar"
         android:layout_width="match_parent"
@@ -20,22 +20,21 @@
         android:clickable="true"
         android:focusable="false">
 
-        <!-- Quick Channel Switch Badge -->
         <TextView
             android:id="@+id/tvChannelBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="CH --"
-            android:textColor="@color/ninja_cyan"
+            android:textColor="#00F0FF"
             android:textSize="10sp"
             android:fontFamily="monospace"
             android:textStyle="bold"
             android:background="@drawable/badge_pill"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp"
             android:paddingTop="1dp"
             android:paddingBottom="1dp"
-            android:layout_marginEnd="4dp" />
+            android:layout_marginEnd="5dp" />
 
         <TextView
             android:id="@+id/tvProfileName"
@@ -43,26 +42,25 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="NINJA DMR"
-            android:textColor="@color/ninja_amber"
-            android:textSize="12sp"
-            android:fontFamily="sans-serif-medium"
+            android:textColor="#F8FAFC"
+            android:textSize="11.5sp"
+            android:fontFamily="sans-serif-black"
             android:textStyle="bold"
             android:singleLine="true"
             android:ellipsize="end" />
 
-        <!-- External Jack / VOX Indicator -->
         <TextView
             android:id="@+id/tvAudioModeBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="JACK"
-            android:textColor="@color/ninja_amber"
+            android:text="NC+DSP"
+            android:textColor="#FBBF24"
             android:textSize="9sp"
             android:fontFamily="sans-serif-condensed"
             android:textStyle="bold"
-            android:background="@drawable/badge_pill"
-            android:paddingStart="3dp"
-            android:paddingEnd="3dp"
+            android:background="@drawable/badge_ts_amber"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
             android:paddingTop="1dp"
             android:paddingBottom="1dp"
             android:layout_marginEnd="3dp"
@@ -74,7 +72,7 @@
             android:layout_height="wrap_content"
             android:text="● OFFLINE"
             android:textColor="@color/ninja_text_dim"
-            android:textSize="10sp"
+            android:textSize="9.5sp"
             android:fontFamily="sans-serif-condensed"
             android:textStyle="bold"
             android:background="@drawable/badge_status_offline"
@@ -84,7 +82,7 @@
             android:paddingBottom="1dp" />
     </LinearLayout>
 
-    <!-- Main Cyber SDR LCD / Radio Display Panel (Weight 1) -->
+    <!-- Main Dual-Zone Cockpit Area (Weight 1) -->
     <LinearLayout
         android:id="@+id/layoutLcdPanel"
         android:layout_width="match_parent"
@@ -92,137 +90,171 @@
         android:layout_weight="1"
         android:background="@drawable/card_lcd"
         android:orientation="vertical"
-        android:paddingStart="6dp"
-        android:paddingEnd="6dp"
-        android:paddingTop="3dp"
-        android:paddingBottom="3dp">
+        android:padding="3dp">
 
-        <!-- Line 1: TG, Mode Tag, QSO Timer & Slot Badge Row (Dipasang rapat ke atas LCD) -->
+        <!-- ZONE A: MIL-SPEC AMBER CHANNEL & LAST HEARD CARD -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="20dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:id="@+id/tvTg"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="TG ---"
-                android:textColor="@color/ninja_cyan"
-                android:textSize="14.5sp"
-                android:fontFamily="sans-serif-black"
-                android:textStyle="bold"
-                android:includeFontPadding="false" />
-
-            <TextView
-                android:id="@+id/tvModeBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="STBY"
-                android:textColor="@color/ninja_cyan"
-                android:textSize="9.5sp"
-                android:fontFamily="sans-serif-condensed"
-                android:textStyle="bold"
-                android:background="@drawable/badge_pill"
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp"
-                android:paddingTop="1dp"
-                android:paddingBottom="1dp"
-                android:layout_marginStart="4dp" />
-
-            <View
-                android:layout_width="0dp"
-                android:layout_height="1dp"
-                android:layout_weight="1" />
-
-            <TextView
-                android:id="@+id/tvQsoTimer"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="00:00"
-                android:textColor="@color/ninja_text_faint"
-                android:textSize="10.5sp"
-                android:fontFamily="monospace"
-                android:textStyle="bold"
-                android:layout_marginEnd="4dp" />
-
-            <TextView
-                android:id="@+id/tvSlot"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="TS -"
-                android:textColor="@color/ninja_amber"
-                android:textSize="10.5sp"
-                android:fontFamily="sans-serif-condensed"
-                android:textStyle="bold"
-                android:background="@drawable/badge_pill"
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp"
-                android:paddingTop="1dp"
-                android:paddingBottom="1dp" />
-        </LinearLayout>
-
-        <!-- 3-Baris Stasiun Container (Mengisi ruang tengah dengan Weight 1 sehingga atas & bawah lega) -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
+            android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:gravity="center">
+            android:background="@drawable/card_zone_a"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:layout_marginBottom="2.5dp">
 
-            <!-- Baris 0: Last Heard (LH) Indicator di atas Callsign User (15sp Tebal & Tajam) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="19dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/tvTg"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="TG ---"
+                    android:textColor="#00F0FF"
+                    android:textSize="14sp"
+                    android:fontFamily="sans-serif-black"
+                    android:textStyle="bold"
+                    android:includeFontPadding="false" />
+
+                <TextView
+                    android:id="@+id/tvModeBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="STBY"
+                    android:textColor="#00F0FF"
+                    android:textSize="9sp"
+                    android:fontFamily="sans-serif-condensed"
+                    android:textStyle="bold"
+                    android:background="@drawable/badge_pill"
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp"
+                    android:paddingTop="1dp"
+                    android:paddingBottom="1dp"
+                    android:layout_marginStart="5dp" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/tvQsoTimer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="00:00"
+                    android:textColor="@color/ninja_text_faint"
+                    android:textSize="10.5sp"
+                    android:fontFamily="monospace"
+                    android:textStyle="bold"
+                    android:layout_marginEnd="5dp" />
+
+                <TextView
+                    android:id="@+id/tvSlot"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="TS -"
+                    android:textColor="#FBBF24"
+                    android:textSize="10sp"
+                    android:fontFamily="sans-serif-condensed"
+                    android:textStyle="bold"
+                    android:background="@drawable/badge_ts_amber"
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp"
+                    android:paddingTop="1dp"
+                    android:paddingBottom="1dp" />
+            </LinearLayout>
+
+            <!-- Divider line inside Zone A -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#33F59E0B"
+                android:layout_marginTop="1dp"
+                android:layout_marginBottom="1dp" />
+
+            <!-- Last Heard (LH) Row inside Zone A -->
             <TextView
                 android:id="@+id/tvLastHeard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="LH: -"
-                android:textColor="@color/ninja_amber"
-                android:textSize="15sp"
+                android:textColor="#FBBF24"
+                android:textSize="12sp"
                 android:fontFamily="sans-serif-black"
                 android:textStyle="bold"
-                android:gravity="center"
+                android:gravity="center_vertical"
                 android:singleLine="true"
                 android:ellipsize="end"
                 android:includeFontPadding="false"
-                android:layout_marginBottom="1dp"
                 android:visibility="visible" />
-
-            <!-- Baris 1: Callsign Centered & Pulsating (20sp Lebih Besar & Jelas) -->
-            <TextView
-                android:id="@+id/tvCallsignId"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="NOCALL (0)"
-                android:textColor="@color/ninja_cyan"
-                android:textSize="20sp"
-                android:fontFamily="sans-serif-black"
-                android:textStyle="bold"
-                android:gravity="center"
-                android:singleLine="true"
-                android:ellipsize="end"
-                android:includeFontPadding="false"
-                android:layout_marginBottom="2dp" />
-
-            <!-- Baris 2: Nama & QTH / Status Info (11.5sp) -->
-            <TextView
-                android:id="@+id/tvRxInfo"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="STANDBY · SIAP MEMANCAR"
-                android:textColor="@color/ninja_text_dim"
-                android:textSize="11.5sp"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:singleLine="true"
-                android:includeFontPadding="false"
-                android:ellipsize="marquee"
-                android:marqueeRepeatLimit="marquee_forever"
-                android:focusable="true"
-                android:focusableInTouchMode="true" />
         </LinearLayout>
 
-        <!-- Line 4: 18-Segment Pro LED S-Meter with Peak Hold (Rapat ke bawah LCD) -->
+        <!-- ZONE B: CYBER STEALTH CALLER CARD WITH LEFT VERTICAL LED BAR (Weight 1) -->
+        <LinearLayout
+            android:id="@+id/layoutCallerCard"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_zone_caller"
+            android:padding="2dp"
+            android:layout_marginBottom="2.5dp">
+
+            <!-- Explicit Left Vertical LED Status Bar (100% compatible with Android 5.1+ POC) -->
+            <View
+                android:id="@+id/viewCallerAccent"
+                android:layout_width="5dp"
+                android:layout_height="match_parent"
+                android:background="#00F0FF"
+                android:layout_marginEnd="6dp" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:id="@+id/tvCallsignId"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="NOCALL (0)"
+                    android:textColor="#00F0FF"
+                    android:textSize="19.5sp"
+                    android:fontFamily="sans-serif-black"
+                    android:textStyle="bold"
+                    android:gravity="center"
+                    android:singleLine="true"
+                    android:ellipsize="end"
+                    android:includeFontPadding="false"
+                    android:layout_marginBottom="1.5dp" />
+
+                <TextView
+                    android:id="@+id/tvRxInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="STANDBY · SIAP MEMANCAR"
+                    android:textColor="@color/ninja_text_dim"
+                    android:textSize="11sp"
+                    android:fontFamily="sans-serif-medium"
+                    android:gravity="center"
+                    android:singleLine="true"
+                    android:includeFontPadding="false"
+                    android:ellipsize="marquee"
+                    android:marqueeRepeatLimit="marquee_forever"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 18-Segment Pro LED S-Meter with Peak Hold -->
         <com.ninjadmr.lite.ui.HudSmeterView
             android:id="@+id/hudSmeter"
             android:layout_width="match_parent"
@@ -245,75 +277,119 @@
             android:progress="0" />
     </LinearLayout>
 
-    <!-- Bottom Tactical Buttons Row: Locked Height 34dp (100% Zero Cut-Off) -->
+    <!-- Bottom Tactical Hardware Keys Row with Real Top Color LED Strips (Height 35dp) -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="34dp"
+        android:layout_height="35dp"
         android:orientation="horizontal"
         android:gravity="center"
         android:layout_marginTop="2dp">
 
-        <Button
-            android:id="@+id/btnConnect"
+        <!-- Key 1: CONN (Cyan LED Strip) -->
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:text="CONN"
-            android:textSize="11sp"
-            android:fontFamily="sans-serif-condensed"
-            android:textStyle="bold"
-            android:textColor="@color/ninja_cyan"
-            android:background="@drawable/btn_dpad"
-            android:focusable="true"
-            android:focusableInTouchMode="true"
-            android:layout_marginEnd="1.5dp" />
+            android:orientation="vertical"
+            android:layout_marginEnd="1.5dp">
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:background="#00F0FF" />
+            <Button
+                android:id="@+id/btnConnect"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="CONN"
+                android:textSize="11sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="#00F0FF"
+                android:background="@drawable/btn_key_conn"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/btnPtt"
+        <!-- Key 2: PTT (Crimson LED Strip) -->
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="1.1"
-            android:text="PTT"
-            android:textSize="13sp"
-            android:fontFamily="sans-serif-condensed"
-            android:textStyle="bold"
-            android:textColor="@color/white"
-            android:background="@drawable/btn_ptt"
-            android:focusable="true"
-            android:focusableInTouchMode="true"
+            android:layout_weight="1.12"
+            android:orientation="vertical"
             android:layout_marginStart="1.5dp"
-            android:layout_marginEnd="1.5dp" />
+            android:layout_marginEnd="1.5dp">
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:background="#FB7185" />
+            <Button
+                android:id="@+id/btnPtt"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="PTT"
+                android:textSize="12.5sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="@color/white"
+                android:background="@drawable/btn_ptt"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/btnProfiles"
+        <!-- Key 3: CH / TG (Emerald LED Strip) -->
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1.05"
-            android:text="CH / PROF"
-            android:textSize="11sp"
-            android:fontFamily="sans-serif-condensed"
-            android:textStyle="bold"
-            android:textColor="@color/white"
-            android:background="@drawable/btn_dpad"
-            android:focusable="true"
-            android:focusableInTouchMode="true"
+            android:orientation="vertical"
             android:layout_marginStart="1.5dp"
-            android:layout_marginEnd="1.5dp" />
+            android:layout_marginEnd="1.5dp">
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:background="#10B981" />
+            <Button
+                android:id="@+id/btnProfiles"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="CH / TG"
+                android:textSize="11sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="#34D399"
+                android:background="@drawable/btn_key_ch"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/btnApps"
+        <!-- Key 4: MENU (Amber Gold LED Strip) -->
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="0.95"
-            android:text="MENU"
-            android:textSize="11sp"
-            android:fontFamily="sans-serif-condensed"
-            android:textStyle="bold"
-            android:textColor="@color/ninja_amber"
-            android:background="@drawable/btn_dpad"
-            android:focusable="true"
-            android:focusableInTouchMode="true"
-            android:layout_marginStart="1.5dp" />
+            android:orientation="vertical"
+            android:layout_marginStart="1.5dp">
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:background="#F59E0B" />
+            <Button
+                android:id="@+id/btnApps"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="MENU"
+                android:textSize="11sp"
+                android:fontFamily="sans-serif-condensed"
+                android:textStyle="bold"
+                android:textColor="#FBBF24"
+                android:background="@drawable/btn_key_menu"
+                android:focusable="true"
+                android:focusableInTouchMode="true" />
+        </LinearLayout>
     </LinearLayout>
 
 </LinearLayout>

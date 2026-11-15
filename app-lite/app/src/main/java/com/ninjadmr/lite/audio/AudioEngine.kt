@@ -75,6 +75,8 @@ class AudioEngine {
         dsp.resetRx()
     }
 
+    fun flushRxBuffer() {}
+
     fun resetTxDsp() {
         dsp.resetTx()
     }

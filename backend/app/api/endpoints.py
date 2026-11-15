@@ -2218,6 +2218,56 @@ def _touch_freedmr_reload():
         except Exception:
             pass
 
+@router.get("/freedmr/diag")
+async def get_freedmr_diag():
+    """Diagnostic endpoint to inspect FreeDMR container reachability and socket status."""
+    import socket
+    import subprocess
+
+    results = {
+        "freedmr_dns": False,
+        "freedmr_ip": None,
+        "freedmr_62031_open": False,
+        "freedmr_62032_open": False,
+        "freedmr_log_tail": "",
+        "error": None
+    }
+    
+    # 1. DNS check for freedmr container
+    try:
+        ip = socket.gethostbyname("freedmr")
+        results["freedmr_dns"] = True
+        results["freedmr_ip"] = ip
+    except Exception as e:
+        results["error"] = f"Cannot resolve container 'freedmr': {e}"
+        return results
+
+    # 2. Test UDP connect to 62031 & 62032
+    for port, key in [(62031, "freedmr_62031_open"), (62032, "freedmr_62032_open")]:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(1.5)
+            # Send RPTL ping
+            sock.sendto(b"RPTL\x00\x0f\x68\x63PING\x00\x00\x00\x00", (ip, port))
+            # If it doesn't immediately raise an error, socket is reached
+            results[key] = True
+            sock.close()
+        except Exception as e:
+            results[key] = f"Error: {e}"
+
+    # 3. Check for log file in /app/data or local candidates
+    for log_path in ["/app/data/freedmr.log", "/app/freedmr/freedmr.log"]:
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                    results["freedmr_log_tail"] = "".join(f.readlines()[-30:])
+                break
+            except Exception:
+                pass
+
+    return results
+
+
 @router.get("/freedmr/rules")
 async def get_freedmr_rules():
     """Returns FreeDMR rules.py raw content and parsed Talkgroup Matrix bridges."""
