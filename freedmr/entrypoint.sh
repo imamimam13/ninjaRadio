@@ -88,11 +88,29 @@ if os.path.exists(path):
 
 cd /opt/freedmr
 
+# Ensure config aliases exist for whatever FreeDMR looks for
+cp /opt/freedmr/freedmr.cfg /opt/freedmr/FreeDMR.cfg 2>/dev/null || true
+cp /opt/freedmr/rules.py /opt/freedmr/Rules.py 2>/dev/null || true
+
+# Determine FreeDMR master script
+SCRIPT="bridge_master.py"
+if [ ! -f "/opt/freedmr/$SCRIPT" ]; then
+    if [ -f "/opt/freedmr/bridge.py" ]; then
+        SCRIPT="bridge.py"
+    elif [ -f "/opt/freedmr/FreeDMR.py" ]; then
+        SCRIPT="FreeDMR.py"
+    else
+        SCRIPT=$(ls -1 /opt/freedmr/*master*.py /opt/freedmr/bridge*.py 2>/dev/null | head -n 1 | xargs -n 1 basename)
+    fi
+fi
+
 # Run FreeDMR with automatic live-reload watcher
+echo "✓ FreeDMR Engine using script: $SCRIPT"
 echo "✓ FreeDMR Engine ready. Watching for rules/config updates..."
+
 while true; do
-    echo "[FreeDMR] Starting DMR Master routing daemon..."
-    python3 freedmr.py &
+    echo "[FreeDMR] Starting DMR Master routing daemon (python3 -u $SCRIPT)..."
+    python3 -u "$SCRIPT" -c /opt/freedmr/freedmr.cfg -r /opt/freedmr/rules.py &
     FREEDMR_PID=$!
     
     # Background watcher for reload trigger
