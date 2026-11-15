@@ -4,7 +4,7 @@ set -e
 echo "=================================================="
 echo "  Starting NinjaRadio FreeDMR Engine              "
 echo "  Port Hotspot MMDVM  : 62031/udp                 "
-echo "  Port Core Bridge    : 62032/udp                 "
+echo "  Port Core Bridge    : 62035/udp                 "
 echo "  Port OpenBridge     : 62030/udp                 "
 echo "=================================================="
 

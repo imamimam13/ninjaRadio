@@ -2228,7 +2228,7 @@ async def get_freedmr_diag():
         "freedmr_dns": False,
         "freedmr_ip": None,
         "freedmr_62031_open": False,
-        "freedmr_62032_open": False,
+        "freedmr_62035_open": False,
         "freedmr_log_tail": "",
         "error": None
     }
@@ -2242,8 +2242,8 @@ async def get_freedmr_diag():
         results["error"] = f"Cannot resolve container 'freedmr': {e}"
         return results
 
-    # 2. Test UDP connect to 62031 & 62032
-    for port, key in [(62031, "freedmr_62031_open"), (62032, "freedmr_62032_open")]:
+    # 2. Test UDP connect to 62031 & 62035
+    for port, key in [(62031, "freedmr_62031_open"), (62035, "freedmr_62035_open")]:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(1.5)
