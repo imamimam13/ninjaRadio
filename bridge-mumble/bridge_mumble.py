@@ -1126,8 +1126,8 @@ class MumbleGatewayBot:
             new_name = f"[DMR] {callsign}"[:25]
             self._rename(new_name)
         self._set_comment(f"🔴 <b>TX Live:</b> {callsign} ({dmr_id}) on TG {self.tg}")
-        # Send chat notification to Mumble channel on DMR RX
-        if os.getenv("ENABLE_MUMBLE_CHAT_NOTIF", "true").lower() == "true":
+        # Send chat notification to Mumble channel on DMR RX (disabled by default to prevent client TTS audio read-out)
+        if os.getenv("ENABLE_MUMBLE_CHAT_NOTIF", "false").lower() == "true":
             self.send_channel_notification(callsign, dmr_id)
         logger.info(f"[{self.default_bot_user}] 💬 DMR RX Notification: {callsign} ({dmr_id}) on TG {self.tg}")
 
