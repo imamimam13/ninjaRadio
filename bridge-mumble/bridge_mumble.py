@@ -1189,39 +1189,15 @@ class MumbleGatewayBot:
     def play_pcm_8k(self, pcm_8k: bytes):
         if self.mumble and self.mumble.is_alive() and len(pcm_8k) > 0:
             try:
-                now_ts = time.time()
-                prev_play_time = self.last_rx_play_time
-                self.last_rx_play_time = now_ts
+                self.last_rx_play_time = time.time()
                 samples_8k = np.frombuffer(pcm_8k, dtype=np.int16).astype(np.float32)
                 if len(samples_8k) == 0:
                     return
 
-                # Phase-continuous 6x linear upsampling 8kHz -> 48kHz (zero frame-boundary discontinuity)
-                if now_ts - prev_play_time > 0.25:
-                    self._prev_rx_sample = float(samples_8k[0])
-                    self._rx_agc_gain = 1.0
-
-                rms_8k = float(np.sqrt(np.mean(samples_8k ** 2)))
-                if rms_8k >= 45.0:
-                    desired_gain = min(4.5, max(1.0, 4800.0 / rms_8k))
-                    alpha = 0.25 if desired_gain < self._rx_agc_gain else 0.08
-                    self._rx_agc_gain = (1.0 - alpha) * self._rx_agc_gain + alpha * desired_gain
-                samples_8k = samples_8k * self._rx_agc_gain
-                peak_8k = float(np.max(np.abs(samples_8k)))
-                if peak_8k > 22000.0:
-                    samples_8k = samples_8k * (22000.0 / peak_8k)
-
-                n = len(samples_8k)
-                prev = np.empty(n, dtype=np.float32)
-                prev[0] = self._prev_rx_sample
-                if n > 1:
-                    prev[1:] = samples_8k[:-1]
-                self._prev_rx_sample = float(samples_8k[-1])
-
-                diff = samples_8k - prev
-                samples_48k_f = np.empty(n * 6, dtype=np.float32)
-                for k in range(6):
-                    samples_48k_f[k::6] = prev + diff * ((k + 1) / 6.0)
+                # High quality upsampling 8kHz -> 48kHz from a553e82 (clean, natural speech without harsh cempreng clipping)
+                idx_orig = np.arange(len(samples_8k))
+                idx_target = np.linspace(0, len(samples_8k) - 1, len(samples_8k) * 6)
+                samples_48k_f = np.interp(idx_target, idx_orig, samples_8k)
                 samples_48k = np.clip(samples_48k_f, -32768, 32767).astype(np.int16)
 
                 self.mumble.sound_output.add_sound(samples_48k.tobytes())

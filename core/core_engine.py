@@ -2651,6 +2651,13 @@ usrpAGC = -20,10,100
                             if has_remapped_rule:
                                 continue
 
+                        # Internal FreeDMR Core Master: routes all cross-bridge audio directly to local MMDVM hotspots
+                        if "freedmr" in c_name:
+                            client.send_raw_dmrd(r_pkt)
+                            if p_dtype == 0x21:
+                                logger.info(f"🚀 [DIRECT-DMR-PEER] Ingress TG {p_dst}->TG {r_tg} (TS{r_slot}) forwarded to FreeDMR Core Master (Src: {p_src})")
+                            break
+
                         if sub_tgs:
                             if r_tg in sub_tgs and is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                 client.send_raw_dmrd(r_pkt)
@@ -3109,7 +3116,7 @@ usrpAGC = -20,10,100
                     dmr_id=f_id,
                     callsign=f_call,
                     password=f_pwd,
-                    subscribed_tgs="1025,510,5109,5101,5102,5103,1023,555,9990,91",
+                    subscribed_tgs="1025,510,5109,510990,5101,5102,5103,1023,555,9990,91",
                     rx_freq=str(cfg.get("rx_freq", "438.8000")),
                     tx_freq=str(cfg.get("tx_freq", "438.8000")),
                     color_code=int(cfg.get("color_code", 1)),
@@ -3196,6 +3203,8 @@ usrpAGC = -20,10,100
             now = time.time()
 
             # 1. Loopback suppression: if transmission originated locally, drop!
+            if self.is_transmitting and (src_id == getattr(self, "current_tx_dmr_id", 0) or (getattr(self, "current_tx_tg", 0) and dst_tg == self.current_tx_tg)):
+                return
             if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id):
                 return
 
@@ -3279,6 +3288,29 @@ usrpAGC = -20,10,100
                                 "time": now
                             }
                             self.dmr_master_server.broadcast_dmrd(translated_pkt)
+
+            # Bidirectional DMR Cross-Bridging (FreeDMR <---> External Peers like BRIDI)
+            if raw_packet and self.peer_clients:
+                fwd_pkt = translated_pkt if is_remapped_peer else raw_packet
+                is_from_freedmr = (network_name == "FreeDMR-Master")
+                if is_from_freedmr:
+                    # Inbound from FreeDMR (local MMDVM hotspot): forward to external peers (BRIDI, etc.)
+                    for p_key, p_client in list(self.peer_clients.items()):
+                        if p_key != "freedmr:62031" and p_client.state == "CONNECTED":
+                            sub_tgs = getattr(p_client, "subscribed_tgs", [])
+                            if not sub_tgs or effective_tg in sub_tgs:
+                                try:
+                                    p_client.send_dmrd(fwd_pkt)
+                                except Exception as ex:
+                                    logger.debug(f"Failed to forward MMDVM DMRD to {p_client.name}: {ex}")
+                else:
+                    # Inbound from external peer (BRIDI, etc.): forward to FreeDMR so local MMDVM hotspots receive it!
+                    f_client = self.peer_clients.get("freedmr:62031")
+                    if f_client and f_client.state == "CONNECTED":
+                        try:
+                            f_client.send_dmrd(fwd_pkt)
+                        except Exception as ex:
+                            logger.debug(f"Failed to forward Peer DMRD to FreeDMR: {ex}")
 
             # Direct DMR -> PCM Decoder (libopendmr.so): Decode directly for Web (/dashboard & /radio), Mumble, DVSwitch Mobile, and SvxLink
             decoded_pcm = b""
@@ -3600,26 +3632,130 @@ async def get_core_status():
 
 @app.get("/api/serverdmr/status")
 async def get_serverdmr_status():
-    if engine_mgr.dmr_master_server:
-        data = engine_mgr.dmr_master_server.get_server_status()
-    else:
-        use_freedmr = os.getenv("USE_FREEDMR", "false").lower() == "true"
+    use_freedmr = os.getenv("USE_FREEDMR", "false").lower() == "true"
+    if use_freedmr:
         freedmr_client = engine_mgr.peer_clients.get("freedmr:62031")
         uptime_sec = int(time.time() - getattr(engine_mgr, "boot_time", time.time()))
         m, s = divmod(uptime_sec, 60)
         h, m = divmod(m, 60)
         uptime_str = f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
+
+        hotspots = []
+        # 1. Query FreeDMR reporting socket (freedmr:4321) for actual connected MMDVM/Pi-Star peers
+        try:
+            import socket, pickle
+            s_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s_sock.settimeout(1.5)
+            s_sock.connect(("freedmr", 4321))
+            s_sock.sendall(b"1:\x00,")  # Netstring CONFIG_REQ (opcode 0x00)
+
+            header = b""
+            while b":" not in header and len(header) < 16:
+                b = s_sock.recv(1)
+                if not b:
+                    break
+                header += b
+
+            if b":" in header:
+                length = int(header[:-1])
+                payload = b""
+                while len(payload) < length:
+                    chunk = s_sock.recv(min(8192, length - len(payload)))
+                    if not chunk:
+                        break
+                    payload += chunk
+                try:
+                    s_sock.recv(1)  # trailing comma
+                except Exception:
+                    pass
+                s_sock.close()
+
+                if payload.startswith(b"\x01"):  # CONFIG_SND
+                    systems = pickle.loads(payload[1:])
+                    for sname, sval in systems.items():
+                        if not isinstance(sval, dict):
+                            continue
+                        peers = sval.get("PEERS", {})
+                        if not isinstance(peers, dict):
+                            continue
+                        for pid, pdata in peers.items():
+                            if not isinstance(pdata, dict):
+                                continue
+                            c_call = pdata.get("CALLSIGN", "")
+                            if isinstance(c_call, bytes):
+                                c_call = c_call.decode("ascii", errors="ignore").strip()
+                            c_id = int(pdata.get("RADIO_ID", 0) or 0)
+                            if c_call in ("N1NJA", "FreeDMR-Master") and (c_id == int(engine_mgr.config.get("server_dmr_id", 5109999)) or c_id == 5109999):
+                                continue
+                            c_soft = pdata.get("PACKAGE_ID") or pdata.get("SOFTWARE_ID") or "MMDVM"
+                            if isinstance(c_soft, bytes):
+                                c_soft = c_soft.decode("ascii", errors="ignore").strip()
+                            c_opt = pdata.get("OPTIONS", "TS1/TS2")
+                            if isinstance(c_opt, bytes):
+                                c_opt = c_opt.decode("ascii", errors="ignore").strip()
+                            conn_time = float(pdata.get("CONNECTED", time.time()))
+                            uptime_sec = max(0, int(time.time() - conn_time))
+                            uh, um = divmod(uptime_sec // 60, 60)
+                            hotspots.append({
+                                "callsign": c_call or f"ID-{c_id}",
+                                "dmr_id": c_id,
+                                "addr": f"{pdata.get('IP', 'remote')}:{pdata.get('PORT', 62031)}",
+                                "software": c_soft,
+                                "subscribed_tg": c_opt or "TS1/TS2",
+                                "status": "ONLINE" if pdata.get("CONNECTION") == "YES" else "CONNECTING",
+                                "uptime": f"{uh}h {um}m" if uh else f"{um}m",
+                                "last_seen": int(pdata.get("LAST_PING", time.time())),
+                                "rx_packets": int(pdata.get("PINGS_RECEIVED", 0)),
+                                "tx_packets": int(pdata.get("PINGS_ACKD", 0))
+                            })
+        except Exception as ex:
+            logger.debug(f"FreeDMR report query note: {ex}")
+
+        # 2. Fallback to reading FreeDMR log or shadow server if reporting server had no data
+        if not hotspots and engine_mgr.dmr_master_server:
+            for addr, c in engine_mgr.dmr_master_server.clients.items():
+                hotspots.append({
+                    "callsign": c.get("callsign", "HOTSPOT"),
+                    "dmr_id": c.get("dmr_id", 0),
+                    "addr": f"{addr[0]}:{addr[1]}",
+                    "software": c.get("software", "MMDVM"),
+                    "subscribed_tg": c.get("subscribed_tg", "TS2"),
+                    "status": "ONLINE",
+                    "uptime": "Active",
+                    "last_seen": int(c.get("last_seen", time.time())),
+                    "rx_packets": int(c.get("rx_packets", 0)),
+                    "tx_packets": int(c.get("tx_packets", 0))
+                })
+
         data = {
-            "online": True if use_freedmr else False,
+            "online": True,
             "port": DMR_MASTER_PORT,
-            "protocol": "FreeDMR Routing Engine v1 (HBLink3 Based)" if use_freedmr else "HomeBrew / MMDVM Protocol v1",
+            "protocol": "FreeDMR Routing Engine v1 (HBLink3 Based)",
             "server_callsign": engine_mgr.config.get("server_callsign", "N1NJA"),
             "server_dmr_id": engine_mgr.config.get("server_dmr_id", 5109999),
-            "uptime": uptime_str if use_freedmr else "0s",
-            "uptime_seconds": uptime_sec if use_freedmr else 0,
-            "connected_hotspots_count": 0,
+            "uptime": uptime_str,
+            "uptime_seconds": uptime_sec,
+            "connected_hotspots_count": len(hotspots),
             "total_rx_packets": getattr(freedmr_client, "rx_packets", 0) if freedmr_client else 0,
             "total_tx_packets": getattr(freedmr_client, "tx_packets", 0) if freedmr_client else 0,
+            "active_transmission": getattr(engine_mgr.dmr_master_server, "active_transmission", None) if engine_mgr.dmr_master_server else None,
+            "hotspots": hotspots,
+            "recent_qsos": getattr(engine_mgr.dmr_master_server, "recent_qsos", []) if engine_mgr.dmr_master_server else []
+        }
+    elif engine_mgr.dmr_master_server:
+        data = engine_mgr.dmr_master_server.get_server_status()
+    else:
+        data = {
+            "online": False,
+            "port": DMR_MASTER_PORT,
+            "protocol": "HomeBrew / MMDVM Protocol v1",
+            "server_callsign": engine_mgr.config.get("server_callsign", "N1NJA"),
+            "server_dmr_id": engine_mgr.config.get("server_dmr_id", 5109999),
+            "uptime": "0s",
+            "uptime_seconds": 0,
+            "connected_hotspots_count": 0,
+            "total_rx_packets": 0,
+            "total_tx_packets": 0,
             "active_transmission": None,
             "hotspots": [],
             "recent_qsos": []

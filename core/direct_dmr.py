@@ -798,8 +798,8 @@ class DirectDmrEngine:
             try:
                 pkt, interval_s = self._pacer_queue.get()
                 now_mono = time.monotonic()
-                if next_send_mono <= 0.0 or now_mono > next_send_mono:
-                    # Stream start or queue underrun: anchor cadence clock to now to prevent burst bunching
+                if next_send_mono <= 0.0 or (now_mono - next_send_mono) > 0.24:
+                    # Stream start or after idle gap: send immediately and anchor cadence clock
                     next_send_mono = now_mono
                 elif now_mono < next_send_mono:
                     time.sleep(next_send_mono - now_mono)
@@ -817,16 +817,21 @@ class DirectDmrEngine:
 
     def _condition_tx_burst(self, burst_pcm: bytes) -> Tuple[bytes, int]:
         """
-        Telecom conditioning preserving clean speech formants for the AMBE vocoder.
-        Avoids non-linear tanh saturation to preserve natural vocal harmonics and prevent pitch jitter.
+        Continuous telecom biquad filter (300Hz HPF + 3200Hz LPF) with smooth tanh soft limiter.
+        Avoids brick-wall gating cuts and preserves natural speech syllables for the AMBE vocoder.
         """
         samples = struct.unpack("<480h", burst_pcm[:BURST_PCM_BYTES])
-        peak = max(abs(s) for s in samples) if samples else 0
-        if peak > 24000:
-            scale = 24000.0 / peak
-            processed = [int(s * scale) for s in samples]
-        else:
-            processed = list(samples)
+        processed = []
+        for s in samples:
+            f_val = self.lpf.process(self.hpf.process(float(s)))
+            sign = 1.0 if f_val >= 0 else -1.0
+            x = abs(f_val)
+            if x <= 16000.0:
+                y = x
+            else:
+                y = 16000.0 + 6000.0 * math.tanh((x - 16000.0) / 8000.0)
+            processed.append(max(-32767, min(32767, int(sign * y))))
+        peak = max(abs(p) for p in processed) if processed else 0
         return struct.pack("<480h", *processed), peak
 
     def reset_rx_state(self):
