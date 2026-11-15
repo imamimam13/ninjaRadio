@@ -187,6 +187,7 @@ class SelfCareServiceRequest(BaseModel):
 
 class SelfCareRotatePasswordRequest(BaseModel):
     protocol: str  # dmr | svxlink | mumble
+    new_password: Optional[str] = None
 
 
 class AdminApprovalRequest(BaseModel):

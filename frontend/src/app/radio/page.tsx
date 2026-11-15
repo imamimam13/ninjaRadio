@@ -279,10 +279,40 @@ export default function RadioPocketMode() {
   // Default identity is Monitor Mode (TX locked) until user creates profile or enters PIN
   const [activeProfile, setActiveProfile] = useState<UserProfile>(DEFAULT_MONITOR_PROFILE);
 
-  // Sync saved active operator profile to backend/core on load
+  // Sync saved active operator profile to backend/core on load, auto-detect logged-in Self-Care user
   useEffect(() => {
     if (typeof window !== "undefined") {
       try {
+        const scToken = localStorage.getItem("ninjaradio_selfcare_token");
+        if (scToken) {
+          fetch("/api/selfcare/me", {
+            headers: { Authorization: `Bearer ${scToken}` },
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((u) => {
+              if (u && u.status === "APPROVED" && u.dmr_id > 0) {
+                const scProf: UserProfile = {
+                  id: `sc_${u.id}`,
+                  callsign: u.callsign,
+                  name: u.name,
+                  dmrId: u.dmr_id,
+                  category: (u.organization || "Amatir") as any,
+                  isMonitorOnly: false,
+                  defaultTg: 510,
+                };
+                setActiveProfile(scProf);
+                localStorage.setItem("ninjaradio_active_profile", JSON.stringify(scProf));
+                fetch("/api/operator/switch", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ callsign: u.callsign, dmr_id: u.dmr_id }),
+                }).catch(() => {});
+                return;
+              }
+            })
+            .catch(() => {});
+        }
+
         const saved = localStorage.getItem("ninjaradio_active_profile");
         if (saved) {
           const p = JSON.parse(saved);
@@ -301,7 +331,11 @@ export default function RadioPocketMode() {
 
   // Anti-Abuse / Operator Auth Modal State
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authModeTab, setAuthModeTab] = useState<"custom" | "pin">("custom");
+  const [authModeTab, setAuthModeTab] = useState<"login" | "custom" | "pin">("login");
+  const [loginIdent, setLoginIdent] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginErrorMsg, setLoginErrorMsg] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authPinInput, setAuthPinInput] = useState("");
   const [authPinError, setAuthPinError] = useState("");
   const [isVerifyingAuthPin, setIsVerifyingAuthPin] = useState(false);
@@ -2856,7 +2890,18 @@ export default function RadioPocketMode() {
             </div>
 
             {/* Mode Tabs */}
-            <div className="grid grid-cols-2 p-1 bg-slate-900 border border-slate-800 rounded-xl text-xs font-bold font-mono">
+            <div className="grid grid-cols-3 p-1 bg-slate-900 border border-slate-800 rounded-xl text-xs font-bold font-mono">
+              <button
+                type="button"
+                onClick={() => setAuthModeTab("login")}
+                className={`py-2 rounded-lg transition-all ${
+                  authModeTab === "login"
+                    ? "bg-emerald-500 text-slate-950 font-black shadow"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                👤 Login Akun
+              </button>
               <button
                 type="button"
                 onClick={() => setAuthModeTab("custom")}
@@ -2866,7 +2911,7 @@ export default function RadioPocketMode() {
                     : "text-slate-400 hover:text-white"
                 }`}
               >
-                📝 Callsign Sendiri
+                📝 Profil Cepat
               </button>
               <button
                 type="button"
@@ -2877,9 +2922,102 @@ export default function RadioPocketMode() {
                     : "text-slate-400 hover:text-white"
                 }`}
               >
-                🔑 PIN Operator (Test)
+                🔑 PIN Server
               </button>
             </div>
+
+            {/* Tab 0: Login Akun Terdaftar */}
+            {authModeTab === "login" && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!loginIdent.trim() || !loginPass.trim()) return;
+                  setIsLoggingIn(true);
+                  setLoginErrorMsg("");
+                  try {
+                    const res = await fetch("/api/selfcare/login", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ identifier: loginIdent.trim(), password: loginPass.trim() }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      setLoginErrorMsg(data.detail || "Login gagal. Periksa Callsign / Password.");
+                    } else if (data.user) {
+                      localStorage.setItem("ninjaradio_selfcare_token", data.token);
+                      const scProf: UserProfile = {
+                        id: `sc_${data.user.id}`,
+                        callsign: data.user.callsign,
+                        name: data.user.name,
+                        dmrId: data.user.dmr_id,
+                        category: (data.user.organization || "Amatir") as any,
+                        isMonitorOnly: false,
+                        defaultTg: 510,
+                      };
+                      setActiveProfile(scProf);
+                      localStorage.setItem("ninjaradio_active_profile", JSON.stringify(scProf));
+                      fetch("/api/operator/switch", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ callsign: data.user.callsign, dmr_id: data.user.dmr_id }),
+                      }).catch(() => {});
+                      setShowAuthModal(false);
+                      setLoginPass("");
+                    }
+                  } catch {
+                    setLoginErrorMsg("Gagal menghubungi server.");
+                  } finally {
+                    setIsLoggingIn(false);
+                  }
+                }}
+                className="space-y-3"
+              >
+                <div>
+                  <label className="block text-slate-300 text-xs mb-1 font-semibold">Callsign / DMR ID Anda:</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contoh: NN73NN / 7100001"
+                    value={loginIdent}
+                    onChange={(e) => { setLoginIdent(e.target.value.toUpperCase()); setLoginErrorMsg(""); }}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono uppercase font-bold focus:border-emerald-400 outline-none text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 text-xs mb-1 font-semibold">Password Akun Self-Care:</label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Password Akun Anda"
+                    value={loginPass}
+                    onChange={(e) => { setLoginPass(e.target.value); setLoginErrorMsg(""); }}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono focus:border-emerald-400 outline-none text-sm"
+                  />
+                  {loginErrorMsg && (
+                    <p className="text-red-400 text-[11px] font-bold mt-1.5 text-center">{loginErrorMsg}</p>
+                  )}
+                </div>
+                <div className="pt-1 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthModal(false)}
+                    className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-700"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isLoggingIn}
+                    className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-emerald-500/20"
+                  >
+                    {isLoggingIn ? "Memproses..." : "Masuk & Buka PTT"}
+                  </button>
+                </div>
+                <p className="text-[10px] text-center text-slate-400">
+                  Belum punya akun? Buka menu <a href="/account" className="text-emerald-400 underline font-bold">/account</a> untuk registrasi.
+                </p>
+              </form>
+            )}
 
             {/* Tab 1: Buat Profil Sendiri */}
             {authModeTab === "custom" && (

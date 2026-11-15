@@ -449,8 +449,12 @@ class HomeBrewMasterServer:
                     self.sock.sendto(MSTNAK, addr)
                     return
                 master_hash = hashlib.sha256(salt + self.password.encode("utf-8")).digest()
-                sc_hash = hashlib.sha256(salt + sc_dmr_pwd.encode("utf-8")).digest() if sc_dmr_pwd else None
-                auth_ok = (client_hash == master_hash) or (sc_hash is not None and client_hash == sc_hash) or not self.password
+                valid_hashes = {master_hash}
+                if sc_dmr_pwd:
+                    valid_hashes.add(hashlib.sha256(salt + sc_dmr_pwd.encode("utf-8")).digest())
+                    valid_hashes.add(hashlib.sha256(salt + sc_dmr_pwd.upper().encode("utf-8")).digest())
+                    valid_hashes.add(hashlib.sha256(salt + sc_dmr_pwd.lower().encode("utf-8")).digest())
+                auth_ok = (client_hash in valid_hashes) or not self.password
             elif strict_mode:
                 logger.warning(f"[DMR-Master] ❌ Auth denied for {addr} (DMR ID: {dmr_id}) - STRICT_SELFCARE_MODE active & user not registered")
                 self.sock.sendto(MSTNAK, addr)

@@ -6,7 +6,7 @@ import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import {
   KeyRound, Copy, Check, RefreshCw, ShieldAlert, ShieldCheck,
-  LogOut, Radio, Wifi, UserCheck, Send
+  LogOut, Radio, Wifi, UserCheck, Send, Pencil
 } from "lucide-react";
 
 interface UserAccount {
@@ -110,6 +110,12 @@ export default function AccountPage() {
         localStorage.setItem("ninjaradio_selfcare_token", data.token);
         setToken(data.token);
         setUser(data.user);
+        setZelloInput(data.user.zello_username || "");
+        setReqDmr(data.user.req_dmr);
+        setReqSvx(data.user.req_svxlink);
+        setReqMumble(data.user.req_mumble);
+        setReqDvs(data.user.req_dvswitch);
+        setReqZello(data.user.req_zello);
       }
     } catch (err: any) {
       setLoginError(err.message);
@@ -138,7 +144,31 @@ export default function AccountPage() {
     if (res.ok) {
       const updated = await res.json();
       setUser(updated);
-      setActionMsg(`Password baru 6-karakter untuk ${protocol.toUpperCase()} berhasil dibuat.`);
+      setActionMsg(`Password acak 6-karakter untuk ${protocol.toUpperCase()} berhasil dibuat.`);
+    }
+  };
+
+  const handleCustomPassword = async (protocol: string, currentVal: string) => {
+    const input = window.prompt(`Masukkan password baru untuk ${protocol.toUpperCase()} (4 - 32 karakter):`, currentVal);
+    if (!input || !input.trim()) return;
+    const clean = input.trim();
+    if (clean.length < 4 || clean.length > 32) {
+      alert("Password minimal 4 karakter dan maksimal 32 karakter.");
+      return;
+    }
+    setActionMsg(null);
+    const res = await fetch("/api/selfcare/rotate-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ protocol, new_password: clean }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      setUser(updated);
+      setActionMsg(`Password ${protocol.toUpperCase()} berhasil diubah ke: ${clean}`);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      setActionMsg(err.detail || "Gagal mengubah password.");
     }
   };
 
@@ -175,6 +205,12 @@ export default function AccountPage() {
     if (res.ok) {
       const updated = await res.json();
       setUser(updated);
+      setZelloInput(updated.zello_username || "");
+      setReqDmr(updated.req_dmr);
+      setReqSvx(updated.req_svxlink);
+      setReqMumble(updated.req_mumble);
+      setReqDvs(updated.req_dvswitch);
+      setReqZello(updated.req_zello);
       setActionMsg(
         updated.status === "APPROVED"
           ? "✓ Izin layanan dan kredensial protokol berhasil diperbarui."
@@ -320,6 +356,7 @@ export default function AccountPage() {
                     port: "UDP 62031",
                     userLabel: `DMR ID: ${user.dmr_id}`,
                     pwd: user.dmr_password,
+                    isMumble: false,
                   },
                   {
                     key: "svxlink",
@@ -328,6 +365,7 @@ export default function AccountPage() {
                     port: "TCP/UDP 5300",
                     userLabel: `CALLSIGN: ${user.callsign}`,
                     pwd: user.svxlink_password,
+                    isMumble: false,
                   },
                   {
                     key: "mumble",
@@ -335,7 +373,8 @@ export default function AccountPage() {
                     allowed: user.allow_mumble,
                     port: "TCP/UDP 64738",
                     userLabel: `Username: ${user.callsign}`,
-                    pwd: user.mumble_password,
+                    pwd: "BEBAS / KOSONGKAN",
+                    isMumble: true,
                   },
                 ].map((proto) => (
                   <div key={proto.key} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
@@ -354,25 +393,48 @@ export default function AccountPage() {
                         <div className="text-slate-400">
                           {proto.port} • {proto.userLabel}
                         </div>
-                        <div className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
-                          <span className="font-mono text-base tracking-widest text-cyan-300">{proto.pwd}</span>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => copyText(proto.key, proto.pwd)}
-                              className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                              title="Salin Password"
-                            >
-                              {copiedKey === proto.key ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                            </button>
-                            <button
-                              onClick={() => handleRotatePassword(proto.key)}
-                              className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300"
-                              title="Buat Password Baru (6 Karakter)"
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                            </button>
+                        {proto.isMumble ? (
+                          <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1">
+                            <div className="font-mono text-sm tracking-wide text-cyan-300 font-bold">
+                              Password: (Kosongkan)
+                            </div>
+                            <p className="text-[11px] text-slate-400 leading-relaxed">
+                              Di aplikasi Mumla / Mumble, cukup masukkan <b>Username: {user.callsign}</b> dan biarkan kolom password kosong. Sistem server memverifikasi izin TX otomatis.
+                            </p>
                           </div>
-                        </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                              <span className="font-mono text-base tracking-widest text-cyan-300 font-bold">{proto.pwd}</span>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  onClick={() => copyText(proto.key, proto.pwd)}
+                                  className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
+                                  title="Salin Password"
+                                >
+                                  {copiedKey === proto.key ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  onClick={() => handleCustomPassword(proto.key, proto.pwd)}
+                                  className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400"
+                                  title="Ubah Password Sendiri (Custom)"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleRotatePassword(proto.key)}
+                                  className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300"
+                                  title="Acak Password Baru (6 Karakter)"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-[10px] text-slate-500">
+                              *Gunakan password di atas pada Hotspot Pi-Star / SvxLink Anda. Klik ikon pensil untuk mengubah sendiri password.
+                            </p>
+                          </>
+                        )}
                       </div>
                     ) : (
                       <p className="text-xs text-slate-500">Ajukan akses layanan ini di form di bawah jika diperlukan.</p>
