@@ -814,10 +814,11 @@ class HomeBrewMasterServer:
             rssi_str = f"-{raw_rssi} dBm" if 20 <= raw_rssi <= 140 else "Digital IP"
             ber_str = f"{min(raw_ber, 100) * 0.1:.1f}%" if (20 <= raw_rssi <= 140) else "0.0%"
 
-            st = self._stream_loss_stats.get(stream_id)
-            if st is None or (data_type == 0 and (now - st.get("ts", 0) > 2.5)):
+            st_key = (src_id, slot)
+            st = self._stream_loss_stats.get(st_key)
+            if st is None or (now - st.get("ts", 0) > 1.2) or data_type == 0:
                 if len(self._stream_loss_stats) > 64:
-                    cutoff = now - 120.0
+                    cutoff = now - 60.0
                     self._stream_loss_stats = {k: v for k, v in self._stream_loss_stats.items() if v.get("ts", 0) > cutoff}
                 st = {
                     "max_seq": pkt_seq,
@@ -826,7 +827,7 @@ class HomeBrewMasterServer:
                     "seen_window": {pkt_seq},
                     "ts": now
                 }
-                self._stream_loss_stats[stream_id] = st
+                self._stream_loss_stats[st_key] = st
             else:
                 max_s = st["max_seq"]
                 diff = (pkt_seq - max_s) & 0xFF
@@ -909,6 +910,7 @@ class HomeBrewMasterServer:
                     if len(self.recent_qsos) > self.max_recent_qsos:
                         self.recent_qsos = self.recent_qsos[:self.max_recent_qsos]
                     self.active_stream = None
+                self._stream_loss_stats.pop(st_key, None)
                 self._stream_loss_stats.pop(stream_id, None)
 
             # Fire callback to core engine
