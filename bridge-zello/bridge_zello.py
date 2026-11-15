@@ -612,6 +612,24 @@ async def zello_websocket_worker():
                 async def dmr_to_zello_task():
                     last_pcm_time = 0.0
                     pending_audio = []
+                    next_frame_time = time.monotonic()
+
+                    async def send_paced_frame(opus_frame: bytes):
+                        nonlocal next_frame_time
+                        if not bridge_state.dmr_stream_id:
+                            return
+                        now_m = time.monotonic()
+                        if now_m < next_frame_time:
+                            await asyncio.sleep(next_frame_time - now_m)
+                            next_frame_time += 0.020
+                        else:
+                            if now_m - next_frame_time > 0.060:
+                                next_frame_time = now_m
+                            next_frame_time += 0.020
+                        hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
+                        bridge_state.dmr_stream_seq += 1
+                        await ws.send(hdr + opus_frame)
+
                     while is_app_running and bridge_state.ws_connected:
                         try:
                             try:
@@ -622,9 +640,10 @@ async def zello_websocket_worker():
                                     if bridge_state.dmr_stream_id:
                                         while pending_audio:
                                             old_opus = pending_audio.pop(0)
-                                            hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
-                                            bridge_state.dmr_stream_seq += 1
-                                            await ws.send(hdr + old_opus)
+                                            await send_paced_frame(old_opus)
+                                        now_m = time.monotonic()
+                                        if now_m < next_frame_time:
+                                            await asyncio.sleep(next_frame_time - now_m)
                                         stop_cmd = {
                                             "command": "stop_stream",
                                             "seq": bridge_state.seq_counter,
@@ -662,6 +681,7 @@ async def zello_websocket_worker():
                                     bridge_state.dmr_to_zello_streaming = True
                                     bridge_state.dmr_stream_seq = 0
                                     bridge_state.dmr_stream_id = None
+                                    next_frame_time = time.monotonic()
                                     pending_audio.clear()
                                     record_log(f"DMR -> Zello LIVE TX Started on Channel '{bridge_state.channel}' (TG {tg} from {talker_call})")
 
@@ -681,14 +701,10 @@ async def zello_websocket_worker():
                                         # Flush any initial audio buffered while awaiting Zello stream_id response
                                         while pending_audio:
                                             old_opus = pending_audio.pop(0)
-                                            hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
-                                            bridge_state.dmr_stream_seq += 1
-                                            await ws.send(hdr + old_opus)
+                                            await send_paced_frame(old_opus)
 
-                                        # Zello binary audio frame: [0x01][4B stream_id][4B seq][Opus data]
-                                        hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
-                                        bridge_state.dmr_stream_seq += 1
-                                        await ws.send(hdr + opus_bytes)
+                                        # Zello binary audio frame with real-time 20ms pacing
+                                        await send_paced_frame(opus_bytes)
                                     else:
                                         # Queue up to 40 frames (~800ms) during stream negotiation so audio start is never lost
                                         if len(pending_audio) < 40:
@@ -699,9 +715,10 @@ async def zello_websocket_worker():
                                     if bridge_state.dmr_stream_id:
                                         while pending_audio:
                                             old_opus = pending_audio.pop(0)
-                                            hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
-                                            bridge_state.dmr_stream_seq += 1
-                                            await ws.send(hdr + old_opus)
+                                            await send_paced_frame(old_opus)
+                                        now_m = time.monotonic()
+                                        if now_m < next_frame_time:
+                                            await asyncio.sleep(next_frame_time - now_m)
                                         stop_cmd = {
                                             "command": "stop_stream",
                                             "seq": bridge_state.seq_counter,
