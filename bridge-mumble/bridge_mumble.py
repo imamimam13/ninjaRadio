@@ -34,6 +34,7 @@ MUMBLE_PASSWORD = os.getenv("MUMBLE_PASSWORD", "")
 USRP_HOST = os.getenv("DMR_USRP_HOST", "core")
 USRP_PORT = int(os.getenv("DMR_USRP_PORT", "32345"))
 TARGET_TG = int(os.getenv("TARGET_TG", "510"))
+ENABLE_MUMBLE_NAME_MORPH = os.getenv("ENABLE_MUMBLE_NAME_MORPH", "false").lower() == "true"
 
 # State tracking
 last_mumble_tx = 0.0
@@ -1135,28 +1136,30 @@ class MumbleGatewayBot:
             logger.debug(f"[{self.default_bot_user}] Send text notification error: {e}")
 
     def morph_to_callsign(self, callsign: str, dmr_id: int):
-        """Dynamically renames bot to display the active DMR caller in Mumble."""
+        """Displays active DMR caller in Mumble via text notification and status comment."""
         now_ts = time.time()
         self.last_dmr_rx_time = now_ts
         if not callsign or callsign == self.current_morphed_callsign:
             return
 
         self.current_morphed_callsign = callsign
-        new_name = f"[DMR] {callsign}"[:25]
-        self._rename(new_name)
+        if ENABLE_MUMBLE_NAME_MORPH:
+            new_name = f"[DMR] {callsign}"[:25]
+            self._rename(new_name)
         self._set_comment(f"🔴 <b>TX Live:</b> {callsign} ({dmr_id}) on TG {self.tg}")
         self.send_channel_notification(callsign, dmr_id)
-        logger.info(f"[{self.default_bot_user}] 👤 Dynamic morph -> '{new_name}' ({dmr_id})")
+        logger.info(f"[{self.default_bot_user}] 💬 DMR RX Notification: {callsign} ({dmr_id}) on TG {self.tg}")
 
     def revert_morph(self):
-        """Reverts bot name and status comment back to default when DMR transmission ceases."""
+        """Reverts status comment back to default when DMR transmission ceases."""
         if self.current_morphed_callsign is None:
             return
         old_call = self.current_morphed_callsign
         self.current_morphed_callsign = None
-        self._rename(self.default_bot_user)
+        if ENABLE_MUMBLE_NAME_MORPH:
+            self._rename(self.default_bot_user)
         self._set_comment(f"🥷 <b>NinjaRadio Gateway</b> — Bridged to DMR TG {self.tg}")
-        logger.info(f"[{self.default_bot_user}] ⏹️ Reverted morph from '{old_call}' back to '{self.default_bot_user}'")
+        logger.info(f"[{self.default_bot_user}] ⏹️ Finished DMR RX stream from '{old_call}'")
 
     def move_to_channel(self, target_channel_name: str, new_tg: int = None, new_slot: int = None):
         """Moves this bot into another channel in real-time without reconnection."""
