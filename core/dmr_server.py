@@ -815,19 +815,41 @@ class HomeBrewMasterServer:
             ber_str = f"{min(raw_ber, 100) * 0.1:.1f}%" if (20 <= raw_rssi <= 140) else "0.0%"
 
             st = self._stream_loss_stats.get(stream_id)
-            if st is None or data_type == 0:
+            if st is None or (data_type == 0 and (now - st.get("ts", 0) > 2.5)):
                 if len(self._stream_loss_stats) > 64:
                     cutoff = now - 120.0
                     self._stream_loss_stats = {k: v for k, v in self._stream_loss_stats.items() if v.get("ts", 0) > cutoff}
-                st = {"last_seq": pkt_seq, "rx": 1, "lost": 0, "ts": now}
+                st = {
+                    "max_seq": pkt_seq,
+                    "rx": 1,
+                    "lost": 0,
+                    "seen_window": {pkt_seq},
+                    "ts": now
+                }
                 self._stream_loss_stats[stream_id] = st
             else:
-                gap = (pkt_seq - st["last_seq"] - 1) & 0xFF
-                if 0 < gap < 32:
-                    st["lost"] += gap
-                st["last_seq"] = pkt_seq
-                st["rx"] += 1
+                max_s = st["max_seq"]
+                diff = (pkt_seq - max_s) & 0xFF
+                if 0 < diff < 128:
+                    gap = diff - 1
+                    if gap > 0:
+                        st["lost"] += min(gap, 32)
+                    st["max_seq"] = pkt_seq
+                    st["rx"] += 1
+                    seen = st.setdefault("seen_window", set())
+                    seen.add(pkt_seq)
+                    if len(seen) > 64:
+                        seen.clear()
+                        seen.add(pkt_seq)
+                elif diff >= 128:
+                    seen = st.setdefault("seen_window", set())
+                    if pkt_seq not in seen:
+                        seen.add(pkt_seq)
+                        st["rx"] += 1
+                        if st["lost"] > 0:
+                            st["lost"] -= 1
                 st["ts"] = now
+
             total_expected = st["rx"] + st["lost"]
             loss_pct = (st["lost"] / total_expected * 100.0) if total_expected > 0 else 0.0
             loss_str = f"{loss_pct:.1f}%"
