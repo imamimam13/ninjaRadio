@@ -817,21 +817,16 @@ class DirectDmrEngine:
 
     def _condition_tx_burst(self, burst_pcm: bytes) -> Tuple[bytes, int]:
         """
-        Continuous telecom biquad filter (300Hz HPF + 3200Hz LPF) with smooth tanh soft limiter.
-        Avoids brick-wall gating cuts and preserves natural speech syllables for the AMBE vocoder.
+        Telecom conditioning preserving clean speech formants for the AMBE vocoder.
+        Avoids non-linear tanh saturation to preserve natural vocal harmonics and prevent pitch jitter.
         """
         samples = struct.unpack("<480h", burst_pcm[:BURST_PCM_BYTES])
-        processed = []
-        for s in samples:
-            f_val = self.lpf.process(self.hpf.process(float(s)))
-            sign = 1.0 if f_val >= 0 else -1.0
-            x = abs(f_val)
-            if x <= 16000.0:
-                y = x
-            else:
-                y = 16000.0 + 6000.0 * math.tanh((x - 16000.0) / 8000.0)
-            processed.append(max(-32767, min(32767, int(sign * y))))
-        peak = max(abs(p) for p in processed) if processed else 0
+        peak = max(abs(s) for s in samples) if samples else 0
+        if peak > 24000:
+            scale = 24000.0 / peak
+            processed = [int(s * scale) for s in samples]
+        else:
+            processed = list(samples)
         return struct.pack("<480h", *processed), peak
 
     def reset_rx_state(self):

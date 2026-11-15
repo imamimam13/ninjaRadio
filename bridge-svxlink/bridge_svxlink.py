@@ -672,6 +672,7 @@ PREEMPHASIS=0
                 os.write(fd, f"9{tg}#\n".encode("ascii"))
                 os.close(fd)
                 logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 9{tg}#)")
+                time.sleep(0.08)
             except Exception as e:
                 logger.warning(f"[{self.bot_user}] select_talkgroup({tg}) failed: {e}")
 
