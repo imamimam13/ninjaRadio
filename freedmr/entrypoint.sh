@@ -54,6 +54,9 @@ cd /opt/freedmr
 cp /opt/freedmr/freedmr.cfg /opt/freedmr/FreeDMR.cfg 2>/dev/null || true
 cp /opt/freedmr/rules.py /opt/freedmr/Rules.py 2>/dev/null || true
 
+# Neutralize i8n_voice_map to prevent KeyError on missing audio phonetic mappings
+echo "voiceMap = {}" > /opt/freedmr/i8n_voice_map.py
+
 # Determine FreeDMR master script
 SCRIPT="bridge_master.py"
 if [ ! -f "/opt/freedmr/$SCRIPT" ]; then
