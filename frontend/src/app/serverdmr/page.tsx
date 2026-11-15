@@ -183,7 +183,7 @@ export default function ServerDmrPage() {
                   DMR MASTER SERVER
                 </h1>
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded-full font-bold bg-cyan-950/80 text-cyan-400 border border-cyan-800">
-                  HOMEBREW v1
+                  {telemetry?.protocol?.includes("FreeDMR") ? "FREEDMR v1" : "HOMEBREW v1"}
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-slate-400 font-mono mt-0.5">
