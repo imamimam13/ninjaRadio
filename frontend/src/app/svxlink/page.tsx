@@ -126,6 +126,110 @@ export default function SvxLinkPage() {
   const [savingBot, setSavingBot] = useState(false);
   const [showBotForm, setShowBotForm] = useState(false);
 
+  // Interactive Logic & Config Generator State
+  const [genNodeType, setGenNodeType] = useState<"simplex" | "repeater">("simplex");
+  const [genCallsign, setGenCallsign] = useState("YB0NINJA");
+  const [genDefaultTg, setGenDefaultTg] = useState("510");
+  const [genMonitoredTgs, setGenMonitoredTgs] = useState("510, 5109, 5108");
+  const [genAuthKey, setGenAuthKey] = useState("ninjaradio_svx");
+  const [genHost, setGenHost] = useState("");
+  const [genEchoLink, setGenEchoLink] = useState(false);
+  const [genEchoCall, setGenEchoCall] = useState("");
+  const [genEchoPass, setGenEchoPass] = useState("");
+  const [genTimeout, setGenTimeout] = useState("180");
+  const [genActiveTab, setGenActiveTab] = useState<"config" | "deploy" | "guide">("config");
+
+  const getEffectiveHost = () => {
+    if (genHost.trim()) return genHost.trim();
+    if (typeof window !== "undefined") return window.location.hostname;
+    return "43.173.13.117";
+  };
+
+  const getGeneratedSvxlinkConf = () => {
+    const host = getEffectiveHost();
+    const logicName = genNodeType === "repeater" ? "RepeaterLogic" : "SimplexLogic";
+    const logicType = genNodeType === "repeater" ? "Repeater" : "Simplex";
+    const cleanCall = genCallsign.trim().toUpperCase() || "YB0NINJA";
+    const elModule = genEchoLink ? "MODULES=ModuleEchoLink\n" : "";
+    const elConfig = genEchoLink && genEchoCall.trim() ? `
+[ModuleEchoLink]
+NAME=EchoLink
+ID=2
+TIMEOUT=300
+SERVERS=servers.echolink.org
+CALLSIGN=${genEchoCall.trim().toUpperCase()}
+PASSWORD=${genEchoPass.trim()}
+SYSOPNAME=${cleanCall} Gateway
+LOCATION=NinjaRadio Reflector TG ${genDefaultTg}
+MAX_QSOS=10
+MAX_CONNECTIONS=11
+LINK_IDLE_TIMEOUT=300
+DESCRIPTION="Connected to NinjaRadio Reflector"
+` : "";
+
+    return `###############################################################################
+# SvxLink Node Configuration for NinjaRadio Multi-TG Reflector
+# Logic: ${logicName} <--> ReflectorLogic (Jembatan ReflectorLink)
+# Generated automatically by NinjaRadio NOC System
+###############################################################################
+
+[GLOBAL]
+LOGICS=${logicName},ReflectorLogic
+LINKS=ReflectorLink
+TIMESTAMP_FORMAT="%Y-%m-%d %H:%M:%S"
+CARD_SAMPLE_RATE=16000
+CARD_CHANNELS=1
+
+[${logicName}]
+TYPE=${logicType}
+RX=Rx1
+TX=Tx1
+${elModule}CALLSIGN=${cleanCall}
+SHORT_IDENT_INTERVAL=10
+LONG_IDENT_INTERVAL=60
+IDENT_ONLY_AFTER_TX=4
+DEFAULT_LANG=en_US
+RGR_SOUND_DELAY=250
+REPORT_CTCSS=0
+TX_TIMEOUT=${genTimeout}
+
+[ReflectorLogic]
+TYPE=Reflector
+HOSTS=${host}
+HOST_PORT=5300
+AUTH_KEY="${genAuthKey.trim() || "ninjaradio_svx"}"
+CALLSIGN="${cleanCall}"
+DEFAULT_TG=${genDefaultTg.trim() || "510"}
+MONITOR_TGS=${genMonitoredTgs.trim() || "510"}
+TG_SELECT_TIMEOUT=60
+ANNOUNCE_REMOTE_TALKERS=1
+
+[ReflectorLink]
+CONNECT_LOGICS=${logicName}:999:Reflector,ReflectorLogic
+DEFAULT_ACTIVE=1
+
+[Rx1]
+TYPE=Local
+AUDIO_DEV=alsa:plughw:0
+AUDIO_CHANNEL=0
+SQL_DET=VOX
+SQL_START_DELAY=0
+SQL_DELAY=0
+SQL_HANGTIME=400
+VOX_FILTER_DEPTH=20
+VOX_THRESH=1000
+DEEMPHASIS=0
+
+[Tx1]
+TYPE=Local
+AUDIO_DEV=alsa:plughw:0
+AUDIO_CHANNEL=0
+PTT_TYPE=NONE
+TIMEOUT=${genTimeout}
+PREEMPHASIS=0
+${elConfig}`;
+  };
+
   const fetchAll = async () => {
     try {
       const [telRes, botRes, logRes] = await Promise.all([
@@ -1100,115 +1204,351 @@ export default function SvxLinkPage() {
             </div>
           </div>
 
-          {/* Connection Guide for External SvxLink Repeaters / Analog Nodes */}
-          <div className="bg-[#0b121e]/80 border border-cyan-900/30 rounded-2xl p-5 shadow-xl space-y-4">
-            <div className="flex items-center gap-2">
-              <Terminal className="w-5 h-5 text-emerald-400" />
-              <h2 className="font-heading font-bold text-base text-white">
-                CARA CONNECT NODE SVXLINK / REPEATER ANALOG EKSTERNAL KE SERVER INI
-              </h2>
-            </div>
-
-            <p className="text-xs text-slate-400 font-mono">
-              Masukkan konfigurasi berikut pada file <code className="text-emerald-400">/etc/svxlink/svxlink.conf</code> di Raspberry Pi / Repeater Analog Anda untuk terhubung ke Multi-TG Reflector NinjaRadio:
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono">
-              <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-1">
-                <span className="text-slate-500 block">Reflector Host / IP:</span>
-                <div className="flex items-center justify-between">
-                  <span className="text-white font-bold">
-                    {typeof window !== "undefined" ? window.location.hostname : "43.173.13.117"}
-                  </span>
-                  <button
-                    onClick={() =>
-                      copyToClipboard(
-                        typeof window !== "undefined" ? window.location.hostname : "43.173.13.117",
-                        "host"
-                      )
-                    }
-                    className="text-slate-400 hover:text-cyan-400"
-                  >
-                    {copiedField === "host" ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
+          {/* Interactive SvxLink Logic & Client Config Generator (Mandiri) */}
+          <div className="bg-[#0b121e]/80 border border-cyan-900/30 rounded-2xl p-5 shadow-xl space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-cyan-900/30 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-950/80 border border-emerald-800/80 flex items-center justify-center">
+                  <Terminal className="w-5 h-5 text-emerald-400" />
                 </div>
-              </div>
-
-              <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-1">
-                <span className="text-slate-500 block">Port (TCP & UDP):</span>
-                <div className="flex items-center justify-between">
-                  <span className="text-cyan-400 font-bold">{telemetry?.server_port || 5300}</span>
-                  <button
-                    onClick={() => copyToClipboard(String(telemetry?.server_port || 5300), "port")}
-                    className="text-slate-400 hover:text-cyan-400"
-                  >
-                    {copiedField === "port" ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-1">
-                <span className="text-slate-500 block">AUTH_KEY:</span>
-                <div className="flex items-center justify-between">
-                  <span className="text-emerald-400 font-bold">{telemetry?.auth_key || "ninjaradio_svx"}</span>
-                  <button
-                    onClick={() => copyToClipboard(telemetry?.auth_key || "ninjaradio_svx", "auth")}
-                    className="text-slate-400 hover:text-cyan-400"
-                  >
-                    {copiedField === "auth" ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Informational Card: Guide to Managing & Adding Nodes Manually */}
-            <div className="p-4 bg-slate-950/80 rounded-xl border border-cyan-900/40 space-y-3 text-xs font-mono">
-              <div className="flex items-center gap-2 text-cyan-400 font-bold">
-                <HelpCircle className="w-4 h-4 text-cyan-400" />
-                <span>PANDUAN PENGELOLAAN & PENAMBAHAN NODE MANUAL MATRIX:</span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] text-slate-300">
-                <div className="p-2.5 rounded-lg bg-[#080e18] border border-slate-800 space-y-1">
-                  <div className="font-bold text-emerald-400 flex items-center gap-1.5">
-                    <Bot className="w-3.5 h-3.5" />
-                    <span>1. Node Bot SvxLink (Local)</span>
-                  </div>
-                  <p className="text-slate-400">
-                    Gunakan form di atas untuk menambah atau mengedit bot. Klik tombol <span className="text-cyan-300 font-bold">[✏️]</span> pada baris tabel untuk memuat konfigurasi bot, lalu klik <span className="text-emerald-400 font-bold">Simpan</span> tanpa restart daemon.
+                <div>
+                  <h2 className="font-heading font-bold text-base sm:text-lg text-white">
+                    INTERACTIVE SVXLINK LOGIC & CLIENT CONFIG GENERATOR (MANDIRI)
+                  </h2>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    Rancang, pahami, dan sesuaikan konfigurasi Logic SvxLink untuk Node Fisik (Raspberry Pi/HT/Repeater) Anda secara mandiri.
                   </p>
                 </div>
-                <div className="p-2.5 rounded-lg bg-[#080e18] border border-slate-800 space-y-1">
+              </div>
+
+              {/* Navigation Tabs */}
+              <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-950/80 border border-slate-800 text-xs font-mono">
+                <button
+                  type="button"
+                  onClick={() => setGenActiveTab("config")}
+                  className={`px-3 py-1.5 rounded-lg transition-all font-bold ${
+                    genActiveTab === "config"
+                      ? "bg-cyan-500 text-black shadow-[0_0_12px_rgba(6,182,212,0.4)]"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Generator & Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGenActiveTab("deploy")}
+                  className={`px-3 py-1.5 rounded-lg transition-all font-bold ${
+                    genActiveTab === "deploy"
+                      ? "bg-emerald-500 text-black shadow-[0_0_12px_rgba(16,185,129,0.4)]"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Deploy Command
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGenActiveTab("guide")}
+                  className={`px-3 py-1.5 rounded-lg transition-all font-bold ${
+                    genActiveTab === "guide"
+                      ? "bg-purple-500 text-black shadow-[0_0_12px_rgba(168,85,247,0.4)]"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Bedah Logic (Edukasi)
+                </button>
+              </div>
+            </div>
+
+            {/* TAB 1: GENERATOR & LIVE PREVIEW */}
+            {genActiveTab === "config" && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                {/* Form Parameters (Left Column) */}
+                <div className="lg:col-span-5 space-y-4 text-xs font-mono">
+                  {/* Node Logic Type */}
+                  <div className="space-y-1.5">
+                    <label className="text-slate-400 font-bold block">Tipe Logic Node:</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setGenNodeType("simplex")}
+                        className={`p-2.5 rounded-xl border text-center transition-all ${
+                          genNodeType === "simplex"
+                            ? "bg-cyan-950/70 border-cyan-500 text-cyan-300 font-bold"
+                            : "bg-slate-950/50 border-slate-800 text-slate-400 hover:border-slate-700"
+                        }`}
+                      >
+                        <div className="font-bold text-white">SimplexLogic</div>
+                        <div className="text-[10px] text-slate-400">HT / Soundcard / Hotspot</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGenNodeType("repeater")}
+                        className={`p-2.5 rounded-xl border text-center transition-all ${
+                          genNodeType === "repeater"
+                            ? "bg-cyan-950/70 border-cyan-500 text-cyan-300 font-bold"
+                            : "bg-slate-950/50 border-slate-800 text-slate-400 hover:border-slate-700"
+                        }`}
+                      >
+                        <div className="font-bold text-white">RepeaterLogic</div>
+                        <div className="text-[10px] text-slate-400">Repeater Duplex / COR</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Callsign & Host */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-bold">Callsign Node:</label>
+                      <input
+                        type="text"
+                        value={genCallsign}
+                        onChange={(e) => setGenCallsign(e.target.value.toUpperCase())}
+                        placeholder="YB0NINJA"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-cyan-300 font-bold focus:border-cyan-500 focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-bold">Auth Key Reflector:</label>
+                      <input
+                        type="text"
+                        value={genAuthKey}
+                        onChange={(e) => setGenAuthKey(e.target.value)}
+                        placeholder="ninjaradio_svx"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-emerald-300 font-bold focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Target Default TG & Presets */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-slate-400 font-bold">Default Talkgroup (TG):</label>
+                      <span className="text-[10px] text-cyan-400">Jalur PTT Utama</span>
+                    </div>
+                    <input
+                      type="number"
+                      value={genDefaultTg}
+                      onChange={(e) => setGenDefaultTg(e.target.value)}
+                      placeholder="510"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-white font-bold focus:border-cyan-500 focus:outline-none"
+                    />
+                    {/* Quick Presets */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      {[
+                        { label: "510 Nasional", tg: "510" },
+                        { label: "5109 Nusantara", tg: "5109" },
+                        { label: "5108 Darurat", tg: "5108" },
+                        { label: "91 Worldwide", tg: "91" }
+                      ].map((chip) => (
+                        <button
+                          key={chip.tg}
+                          type="button"
+                          onClick={() => setGenDefaultTg(chip.tg)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                            genDefaultTg === chip.tg
+                              ? "bg-cyan-500 text-black border-cyan-400"
+                              : "bg-slate-900 text-slate-300 border-slate-800 hover:border-cyan-700"
+                          }`}
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Monitored TGs */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-slate-400 font-bold">Monitored Talkgroups:</label>
+                      <span className="text-[10px] text-slate-500">Pisahkan dengan koma</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={genMonitoredTgs}
+                      onChange={(e) => setGenMonitoredTgs(e.target.value)}
+                      placeholder="510, 5109, 5108"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-200 font-mono focus:border-cyan-500 focus:outline-none"
+                    />
+                    <p className="text-[10px] text-slate-500">
+                      Audio dari TG ini akan ikut terdengar di node Anda saat TG default sedang hening.
+                    </p>
+                  </div>
+
+                  {/* TX Timeout & Host */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-bold">TX Timeout (detik):</label>
+                      <input
+                        type="number"
+                        value={genTimeout}
+                        onChange={(e) => setGenTimeout(e.target.value)}
+                        placeholder="180"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-bold">Custom Host (Opsional):</label>
+                      <input
+                        type="text"
+                        value={genHost}
+                        onChange={(e) => setGenHost(e.target.value)}
+                        placeholder={typeof window !== "undefined" ? window.location.hostname : "43.173.13.117"}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-200 focus:border-cyan-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* EchoLink Module Toggle */}
+                  <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-2">
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <span className="font-bold text-slate-300">Aktifkan Modul EchoLink</span>
+                      <input
+                        type="checkbox"
+                        checked={genEchoLink}
+                        onChange={(e) => setGenEchoLink(e.target.checked)}
+                        className="w-4 h-4 rounded text-cyan-500 bg-slate-900 border-slate-700"
+                      />
+                    </label>
+                    {genEchoLink && (
+                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800/80">
+                        <input
+                          type="text"
+                          value={genEchoCall}
+                          onChange={(e) => setGenEchoCall(e.target.value.toUpperCase())}
+                          placeholder="Callsign EchoLink"
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-cyan-300 text-[11px]"
+                        />
+                        <input
+                          type="password"
+                          value={genEchoPass}
+                          onChange={(e) => setGenEchoPass(e.target.value)}
+                          placeholder="Password EchoLink"
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-[11px]"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Live Preview Column (Right Column) */}
+                <div className="lg:col-span-7 flex flex-col space-y-2 font-mono text-xs">
+                  <div className="flex items-center justify-between bg-slate-950/90 p-2.5 px-3 rounded-xl border border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_8px_#06b6d4]" />
+                      <span className="text-slate-300 font-bold">/etc/svxlink/svxlink.conf (LIVE PREVIEW)</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(getGeneratedSvxlinkConf(), "conf")}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black font-bold transition-all shadow-[0_0_12px_rgba(6,182,212,0.3)] cursor-pointer"
+                    >
+                      {copiedField === "conf" ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-black" />
+                          <span>COPIED!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-black" />
+                          <span>COPY CONFIG</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Code View Block */}
+                  <div className="relative flex-1 bg-[#060a12] p-4 rounded-xl border border-cyan-900/40 text-slate-300 font-mono text-[11px] leading-relaxed overflow-x-auto max-h-[460px] shadow-inner select-all">
+                    <pre>{getGeneratedSvxlinkConf()}</pre>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: DEPLOY COMMAND (ONE-LINER) */}
+            {genActiveTab === "deploy" && (
+              <div className="space-y-4 text-xs font-mono">
+                <p className="text-slate-300">
+                  Jalankan perintah berikut di terminal Raspberry Pi / Server Linux Node Anda untuk langsung memasang dan mengaktifkan file konfigurasi ini secara otomatis:
+                </p>
+
+                <div className="bg-[#060a12] p-4 rounded-xl border border-emerald-900/50 space-y-3">
+                  <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                    <span className="text-emerald-400 font-bold">One-Liner Terminal Deploy Script:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        copyToClipboard(
+                          `sudo tee /etc/svxlink/svxlink.conf << 'EOF'\n${getGeneratedSvxlinkConf()}\nEOF\nsudo systemctl restart svxlink\nsudo systemctl status svxlink`,
+                          "deploy_cmd"
+                        )
+                      }
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500 text-black font-bold hover:bg-emerald-400 transition-colors"
+                    >
+                      {copiedField === "deploy_cmd" ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>COPY SCRIPT</span>
+                    </button>
+                  </div>
+                  <pre className="text-emerald-300/90 overflow-x-auto select-all text-[11px] leading-relaxed">
+{`sudo tee /etc/svxlink/svxlink.conf << 'EOF'
+${getGeneratedSvxlinkConf()}
+EOF
+sudo systemctl restart svxlink
+sudo systemctl status svxlink`}
+                  </pre>
+                </div>
+
+                <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 text-slate-400 space-y-1">
+                  <div className="text-white font-bold">Tips Monitoring:</div>
+                  <div>Gunakan perintah <code className="text-cyan-400">sudo journalctl -u svxlink -f</code> untuk melihat log koneksi real-time saat Node Anda berbicara dengan Reflector NinjaRadio.</div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: BEDAH LOGIC (EDUKASI MANDIRI) */}
+            {genActiveTab === "guide" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
+                <div className="p-4 bg-slate-950/70 rounded-xl border border-cyan-900/30 space-y-2">
                   <div className="font-bold text-cyan-400 flex items-center gap-1.5">
-                    <Globe className="w-3.5 h-3.5" />
-                    <span>2. Node DMR Peering (FreeDMR/BM)</span>
+                    <Layers className="w-4 h-4" />
+                    <span>1. [GLOBAL] & [ReflectorLink]</span>
                   </div>
-                  <p className="text-slate-400">
-                    Kartu seperti <code className="text-cyan-300">DMR-BRIDI</code>, <code className="text-cyan-300">DMR-TOMBOLPTT</code> diatur di menu <a href="/settings" className="text-cyan-400 underline font-bold">Settings</a> (Peering) dan rute TG-nya di menu <a href="/matrix" className="text-cyan-400 underline font-bold">TG Matrix</a>.
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    <code className="text-slate-200">LOGICS=SimplexLogic,ReflectorLogic</code> memberi tahu SvxLink untuk menjalankan dua mesin logika sekaligus. Parameter <code className="text-slate-200">CONNECT_LOGICS=SimplexLogic:999:Reflector,ReflectorLogic</code> berfungsi sebagai kabel audio virtual yang menyambungkan suara mikrofon fisik/HT lokal langsung ke saluran Reflector server.
                   </p>
                 </div>
-                <div className="p-2.5 rounded-lg bg-[#080e18] border border-slate-800 space-y-1">
-                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
-                    <Smartphone className="w-3.5 h-3.5" />
-                    <span>3. Node Client / Mobile Eksternal</span>
+
+                <div className="p-4 bg-slate-950/70 rounded-xl border border-emerald-900/30 space-y-2">
+                  <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+                    <Radio className="w-4 h-4" />
+                    <span>2. [ReflectorLogic] (Pintu Masuk Reflector)</span>
                   </div>
-                  <p className="text-slate-400">
-                    Aplikasi Android SvxLink atau repeater fisik dapat terhubung via Host: <code className="text-amber-300 font-bold">43.173.13.117</code>, Port: <code className="text-amber-300 font-bold">5300</code>, Auth: <code className="text-amber-300 font-bold">ninjaradio_svx</code> (mendukung Protocol 2.0 & 1.0).
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    <code className="text-slate-200">DEFAULT_TG</code> adalah kamar Talkgroup utama Anda. Begitu PTT ditekan tanpa perintah DTMF, suara otomatis dikirim ke TG ini. <code className="text-slate-200">MONITOR_TGS</code> memungkinkan Anda mendengarkan percakapan dari kamar TG lain tanpa harus pindah saluran.
+                  </p>
+                </div>
+
+                <div className="p-4 bg-slate-950/70 rounded-xl border border-purple-900/30 space-y-2">
+                  <div className="font-bold text-purple-400 flex items-center gap-1.5">
+                    <Sliders className="w-4 h-4" />
+                    <span>3. [Rx1] & [Tx1] (Perangkat Audio / VOX)</span>
+                  </div>
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    <code className="text-slate-200">SQL_DET=VOX</code> mendeteksi suara otomatis saat Anda berbicara ke mikrofon USB/soundcard tanpa memerlukan pin PTT hardware eksternal. Jika menggunakan pin GPIO Raspberry Pi, Anda cukup mengganti <code className="text-slate-200">SQL_DET=GPIO</code> dan mengisi pin GPIO-nya.
+                  </p>
+                </div>
+
+                <div className="p-4 bg-slate-950/70 rounded-xl border border-amber-900/30 space-y-2">
+                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                    <ExternalLink className="w-4 h-4" />
+                    <span>4. Pindah Talkgroup via DTMF (*91)</span>
+                  </div>
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    Klien atau HT yang terhubung ke SvxLink dapat berpindah Talkgroup secara dinamis menggunakan keypad DTMF radio: ketik <code className="text-amber-300 font-bold">*91510#</code> untuk pindah ke TG 510, atau <code className="text-amber-300 font-bold">*915109#</code> untuk pindah ke TG 5109.
                   </p>
                 </div>
               </div>
-            </div>
+            )}
+          </div>
 
             {logs.length > 0 && (
               <div className="pt-3 border-t border-slate-800">
