@@ -29,6 +29,7 @@ EXPOSE 62031/udp 62030/udp
 
 COPY freedmr.cfg /opt/freedmr/freedmr.cfg
 COPY rules.py /opt/freedmr/rules.py
+COPY ninjaradio_auth.py /opt/freedmr/ninjaradio_auth.py
 COPY entrypoint.sh /opt/freedmr/entrypoint.sh
 RUN chmod +x /opt/freedmr/entrypoint.sh
 

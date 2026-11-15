@@ -35,6 +35,7 @@ services:
     volumes:
       - ./freedmr/freedmr.cfg:/opt/freedmr/freedmr.cfg
       - ./freedmr/rules.py:/opt/freedmr/rules.py
+      - ./freedmr/ninjaradio_auth.py:/opt/freedmr/ninjaradio_auth.py
       - ninjaradio_data:/app/data
     networks:
       - ninjaradio_net

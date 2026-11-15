@@ -56,6 +56,27 @@ cp /opt/freedmr/rules.py /opt/freedmr/Rules.py 2>/dev/null || true
 # Neutralize i8n_voice_map to prevent KeyError on missing audio phonetic mappings
 echo "voiceMap = {}" > /opt/freedmr/i8n_voice_map.py
 
+# Hook dynamic SQLite Self-Care authentication into hblink.py
+python3 -c "
+import os
+hb_path = '/opt/freedmr/hblink.py'
+if os.path.exists(hb_path):
+    with open(hb_path, 'r', encoding='utf-8') as f:
+        src = f.read()
+    old_block = \"_calc_hash = bhex(sha256(_salt_str+self._config['PASSPHRASE']).hexdigest())\"
+    if old_block in src and 'ninjaradio_auth' not in src:
+        new_block = '''try:
+                        from ninjaradio_auth import verify_peer_login
+                        _is_valid = verify_peer_login(int(_this_peer['RADIO_ID']), _salt_str, _sent_hash, self._config['PASSPHRASE'])
+                    except Exception as _ae:
+                        _is_valid = (_sent_hash == bhex(sha256(_salt_str+self._config['PASSPHRASE']).hexdigest()))
+                    _calc_hash = _sent_hash if _is_valid else b'INVALID_HASH_VALUE_FAIL''''
+        src = src.replace(old_block, new_block, 1)
+        with open(hb_path, 'w', encoding='utf-8') as f:
+            f.write(src)
+        print('✓ Integrated dynamic Self-Care DMR password authentication into FreeDMR')
+" 2>/dev/null || true
+
 # Determine FreeDMR master script
 SCRIPT="bridge_master.py"
 if [ ! -f "/opt/freedmr/$SCRIPT" ]; then
