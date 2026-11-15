@@ -974,11 +974,10 @@ async def web_ptt_transmit(
                     status_code=403,
                     detail=f"Akun {token_user.callsign} berstatus {token_user.status} (hanya bisa RX/Monitor sampai disetujui Admin)."
                 )
+            # Automatically enable allow_web for approved accounts
             if not token_user.allow_web:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Akun {token_user.callsign} belum memiliki izin layanan Web PTT. Ajukan di menu /account."
-                )
+                token_user.allow_web = True
+                await session.commit()
 
         is_allowed, reason = await CallbookService.check_tx_permission(session, dmr_id, callsign, tg)
         if not is_allowed:
@@ -3189,6 +3188,7 @@ async def selfcare_request_services(
             setattr(user, f"allow_{svc}", req_val)
             if svc in ["dmr", "svxlink", "mumble"] and req_val and not getattr(user, f"{svc}_password"):
                 setattr(user, f"{svc}_password", generate_protocol_password(6))
+        await SelfCareService._sync_callbook_entry(session, user)
         trigger_protocol_reload()
 
     await session.commit()
@@ -3223,12 +3223,20 @@ async def selfcare_rotate_password(
     if user.status != "APPROVED":
         raise HTTPException(status_code=403, detail="Akun harus berstatus APPROVED untuk mengatur ulang password protokol.")
     proto = payload.protocol.strip().lower()
+    clean_pwd = payload.new_password.strip() if payload.new_password else ""
+    if clean_pwd:
+        if len(clean_pwd) < 4 or len(clean_pwd) > 32:
+            raise HTTPException(status_code=400, detail="Password minimal 4 karakter dan maksimal 32 karakter.")
+        new_pwd = clean_pwd
+    else:
+        new_pwd = generate_protocol_password(6)
+
     if proto == "dmr" and user.allow_dmr:
-        user.dmr_password = generate_protocol_password(6)
+        user.dmr_password = new_pwd
     elif proto == "svxlink" and user.allow_svxlink:
-        user.svxlink_password = generate_protocol_password(6)
+        user.svxlink_password = new_pwd
     elif proto == "mumble" and user.allow_mumble:
-        user.mumble_password = generate_protocol_password(6)
+        user.mumble_password = new_pwd
     else:
         raise HTTPException(status_code=400, detail="Protokol tidak valid atau belum disetujui untuk akun Anda.")
 
@@ -3299,6 +3307,63 @@ async def admin_suspend_registration(
         if item.id == user.id:
             return item
     raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
+
+
+# ----------------- FreeDMR Configuration Management -----------------
+
+def get_freedmr_cfg_path() -> str:
+    candidates = [
+        "/app/freedmr/freedmr.cfg",
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../freedmr/freedmr.cfg")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../freedmr/freedmr.cfg")),
+        "/home/ubuntu/ninjaRadio/freedmr/freedmr.cfg",
+        "./freedmr/freedmr.cfg",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
+
+
+@router.get("/freedmr/config")
+async def get_freedmr_config():
+    """Returns the content of freedmr.cfg for the admin panel editor."""
+    path = get_freedmr_cfg_path()
+    content = ""
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Gagal membaca freedmr.cfg: {e}")
+    return {"path": path, "content": content}
+
+
+@router.post("/freedmr/config")
+async def save_freedmr_config(payload: dict, _: None = Depends(_require_admin_pin)):
+    """Saves updated content into freedmr.cfg and triggers daemon reload."""
+    path = get_freedmr_cfg_path()
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Konten konfigurasi freedmr.cfg tidak boleh kosong.")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content + "\n")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal menyimpan freedmr.cfg: {e}")
+
+    # Write reload marker
+    for d in ["/app/data", "./data"]:
+        if os.path.isdir(d):
+            try:
+                with open(os.path.join(d, ".freedmr_reload"), "w", encoding="utf-8") as f:
+                    f.write(str(time.time()))
+            except Exception:
+                pass
+            break
+
+    return {"status": "SUCCESS", "message": "Konfigurasi freedmr.cfg berhasil disimpan."}
 
 
 # ----------------- Callbook Auto-Sync URL Sources -----------------

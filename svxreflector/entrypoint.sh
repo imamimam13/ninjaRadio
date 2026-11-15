@@ -204,7 +204,7 @@ for db_p in db_paths:
             conn = sqlite3.connect(db_p)
             cur = conn.cursor()
             sc_rows = cur.execute(
-                "SELECT callsign, svxlink_password FROM user_accounts WHERE status = 'APPROVED' AND allow_svxlink = 1 AND svxlink_password != ''"
+                "SELECT callsign, svxlink_password FROM user_accounts WHERE status = 'APPROVED' AND (allow_svxlink = 1 OR allow_svxlink = '1' OR allow_svxlink = 'true' OR allow_svxlink = 'True') AND svxlink_password IS NOT NULL AND svxlink_password != ''"
             ).fetchall()
             for sc_call, sc_pwd in sc_rows:
                 c_clean = re.sub(r"[^A-Za-z0-9\-]", "", str(sc_call or "").strip().upper())
@@ -265,8 +265,11 @@ for u in sorted_users:
         conf_content += f"{u} = NinjaReflectorNodes\n"
 
 for sc_call, sc_pwd in sorted(selfcare_users.items()):
-    if sc_call not in sorted_users:
-        conf_content += f"{sc_call} = KEY_{sc_call}\n"
+    conf_content += f"{sc_call} = KEY_{sc_call}\n"
+    conf_content += f"{sc_call.lower()} = KEY_{sc_call}\n"
+    for sfx in ["-M", "-L", "-R", "-P", "-ND", "-1", "-2", "-3"]:
+        conf_content += f"{sc_call}{sfx} = KEY_{sc_call}\n"
+        conf_content += f"{sc_call.lower()}{sfx.lower()} = KEY_{sc_call}\n"
 
 # Wildcard fallback MUST be placed AFTER specific callsigns so individual passwords match first
 if not strict_mode:

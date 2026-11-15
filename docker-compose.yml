@@ -20,7 +20,25 @@ services:
     networks:
       - ninjaradio_net
 
-  # 1. Radio DV Core Engine (FreeDMR Protocol + DVSwitch USRP Ports)
+  # 1. Official FreeDMR Network Master & Routing Engine
+  freedmr:
+    image: hacknix/freedmr:latest
+    container_name: ninjaradio_freedmr
+    restart: unless-stopped
+    ports:
+      # DMR Hotspot MMDVM Port (Pi-Star / OpenGD77)
+      - "62031:62031/udp"
+      # OpenBridge Peering Port (BrandMeister / FreeDMR)
+      - "62030:62030/udp"
+    volumes:
+      - ./freedmr/freedmr.cfg:/opt/freedmr/freedmr.cfg
+      - ./freedmr/rules.py:/opt/freedmr/rules.py
+      - ./freedmr/json:/opt/freedmr/json
+      - ninjaradio_data:/app/data
+    networks:
+      - ninjaradio_net
+
+  # 1b. Radio DV Core Engine (Direct Audio Bridges, Vocoders & DVSwitch USRP)
   core:
     build:
       context: ./core
@@ -28,15 +46,14 @@ services:
     container_name: ninjaradio_core
     restart: unless-stopped
     ports:
-      # DMR Hotspot MMDVM Port (Pi-Star / OpenGD77)
-      - "62031:62031/udp"
-      # OpenBridge Peering Port (BrandMeister / FreeDMR)
-      - "62030:62030/udp"
       # DVSwitch Mobile Android & USRP Audio Port
       - "${USRP_AUDIO_PORT:-32345}:${USRP_AUDIO_PORT:-32345}/udp"
     environment:
       - TZ=${TZ:-Asia/Jakarta}
       - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
+      - USE_FREEDMR=true
+    depends_on:
+      - freedmr
     volumes:
       - ./core:/app
       - ninjaradio_data:/app/data
@@ -135,7 +152,6 @@ services:
       - DEFAULT_TALKGROUP=${DEFAULT_TALKGROUP}
     volumes:
       - ./svxreflector/entrypoint.sh:/app/entrypoint.sh
-      - ./svxreflector/svxreflector.conf:/etc/svxlink/svxreflector.conf
       - ninjaradio_data:/app/data
     networks:
       - ninjaradio_net
@@ -213,6 +229,7 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:////app/data/ninjaradio.db
     volumes:
       - ./backend:/app/backend
+      - ./freedmr:/app/freedmr
       - ninjaradio_data:/app/data
     depends_on:
       - core
