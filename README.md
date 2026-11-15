@@ -31,11 +31,12 @@
 3. [Cheat-Sheet Port, Firewall & Kredensial Default](#-cheat-sheet-port-firewall--kredensial-default)
 4. [Kebutuhan Sistem](#-kebutuhan-sistem-system-requirements)
 5. [Panduan Instalasi & Deployment](#-panduan-instalasi--deployment)
-6. [Panduan Menggunakan Semua Fitur Web](#-panduan-menggunakan-semua-fitur-web)
-7. [Panduan Lengkap Setup Callbook & TX Firewall](#-panduan-lengkap-setup-callbook--tx-firewall)
-8. [Panduan Koneksi Perangkat & Klien](#-panduan-koneksi-perangkat--klien)
-9. [Komponen & Library Open-Source](#-komponen--library-yang-diintegrasikan-upstream-attribution--modifications)
-10. [Kontribusi & Lisensi](#-kontribusi--lisensi)
+6. [Cheat-Sheet Perintah Docker (Restart, Rebuild & Logs)](#-cheat-sheet-perintah-docker-restart-rebuild--logs)
+7. [Panduan Menggunakan Semua Fitur Web](#-panduan-menggunakan-semua-fitur-web)
+8. [Panduan Lengkap Setup Callbook & TX Firewall](#-panduan-lengkap-setup-callbook--tx-firewall)
+9. [Panduan Koneksi Perangkat & Klien](#-panduan-koneksi-perangkat--klien)
+10. [Komponen & Library Open-Source](#-komponen--library-yang-diintegrasikan-upstream-attribution--modifications)
+11. [Kontribusi & Lisensi](#-kontribusi--lisensi)
 
 ---
 
@@ -231,6 +232,106 @@ Untuk menjalankan core engine secara mandiri di lapangan tanpa VPS dan tanpa int
    python core/core_engine.py
    ```
 4. Nyalakan **Hotspot Portabel Wi-Fi** di HP Anda. Hotspot Pi-Star atau klien lain di jaringan hotspot tersebut dapat langsung terhubung ke IP gateway HP (umumnya `192.168.43.1`).
+
+---
+
+## 🛠️ Cheat-Sheet Perintah Docker (Restart, Rebuild & Logs)
+
+Semua perintah di bawah ini dijalankan dari dalam direktori proyek di server VPS (`cd /home/ubuntu/ninjaRadio`):
+
+### 1. Perintah Restart Cepat per Layanan
+
+Gunakan perintah ini jika layanan tertentu mengalami hambatan atau ingin di-refresh tanpa mengganggu layanan lain:
+
+| Layanan Target | Perintah Restart Cepat | Fungsi / Catatan |
+| :--- | :--- | :--- |
+| **SvxLink Bridge (Bot Pool)** | `docker compose restart svxlink-bridge` | Me-restart bot bridge SvxLink tanpa memutus server SvxReflector. |
+| **SvxReflector Server** | `docker compose restart svxreflector` | Me-restart daemon reflector analog. |
+| **SvxLink & Reflector Sekaligus** | `docker compose restart svxreflector svxlink-bridge` | Me-restart seluruh ekosistem SvxLink analog. |
+| **Zello Bridge** | `docker compose restart zello-bridge` | Me-reconnect koneksi WebSocket Zello Channel API. |
+| **Core DV Engine (DMR)** | `docker compose restart core` | Me-restart DMR Master, USRP, dan OpenDMR Vocoder. |
+| **Backend API (FastAPI)** | `docker compose restart backend` | Me-reload supervisor, Callbook SQLite, dan endpoint REST/WS. |
+| **Web Frontend (Next.js)** | `docker compose restart frontend` | Me-restart server Next.js port 3000. |
+| **Mumble Bridge** | `docker compose restart mumble-bridge` | Me-reconnect bot bridge Mumble ke room DMR. |
+| **Mumble Server (Murmur)** | `docker compose restart mumble-server` | Me-restart server VoIP Murmur port 64738. |
+| **TeamSpeak 3 Server** | `docker compose restart teamspeak-server` | Me-restart server TS3 port 9987/10011/30033. |
+| **Reverse Proxy (Caddy SSL)** | `docker compose restart proxy` | Me-reload Caddy SSL dan proxy routing. |
+
+---
+
+### 2. Perintah Rebuild per Layanan (Setelah Update Kode Git)
+
+Jika Anda melakukan `git pull` atau mengubah konfigurasi kode sumber Python/Next.js pada satu container tertentu:
+
+```bash
+# Rebuild & restart hanya bridge SvxLink:
+docker compose up -d --build svxlink-bridge
+
+# Rebuild & restart hanya bridge Zello:
+docker compose up -d --build zello-bridge
+
+# Rebuild & restart hanya Core DV Engine:
+docker compose up -d --build core
+
+# Rebuild & restart hanya Web Frontend:
+docker compose up -d --build frontend
+
+# Rebuild & restart hanya Backend API:
+docker compose up -d --build backend
+```
+
+---
+
+### 3. Perintah Manajemen Seluruh Container (All-in-One)
+
+```bash
+# Restart SEMUA 10 container sekaligus:
+docker compose restart
+
+# Pull update terbaru dari GitHub lalu rebuild & restart SEMUA container:
+git pull origin main && docker compose up -d --build
+
+# Cek status kesehatan seluruh container (pastikan semua "Up"):
+docker compose ps
+
+# Menghentikan sementara semua container (data volume tetap aman):
+docker compose stop
+
+# Menyalakan kembali semua container yang dihentikan:
+docker compose start
+
+# Mematikan total semua container:
+docker compose down
+
+# Memantau penggunaan CPU & RAM real-time setiap container:
+docker stats
+```
+
+---
+
+### 4. Perintah Memantau Log Real-Time (Troubleshooting & Debugging)
+
+Gunakan parameter `-f` (*follow*) untuk melihat aktivitas percakapan, koneksi radio, dan log error secara langsung:
+
+```bash
+# Pantau log pergerakan SvxLink Bot & Reflector:
+docker compose logs -f svxlink-bridge
+
+# Pantau log koneksi SvxReflector (koneksi node luar / handshake SSL):
+docker compose logs -f svxreflector
+
+# Pantau log Zello Bridge (stream masuk/keluar, token JWT, audio live):
+docker compose logs -f zello-bridge
+
+# Pantau log Core Engine (trafik DMR, HomeBrew hotspot, OpenBridge, USRP):
+docker compose logs -f core
+
+# Pantau log Backend API:
+docker compose logs -f backend
+
+# Pantau log seluruh 10 container sekaligus (100 baris terakhir):
+docker compose logs -f --tail=100
+```
 
 ---
 
