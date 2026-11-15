@@ -323,10 +323,14 @@ class OpusEncoderWrapper:
             err = ctypes.c_int()
             # 2048 = OPUS_APPLICATION_VOIP
             self.enc = _opus_lib.opus_encoder_create(sample_rate, channels, 2048, ctypes.byref(err))
+            if err.value != 0 or not self.enc:
+                logger.error(f"[OpusEncoder] opus_encoder_create failed with error: {err.value}")
+            else:
+                logger.info(f"[OpusEncoder] Created native Opus encoder (rate={sample_rate}, channels={channels})")
         self.sample_rate = sample_rate
         self.channels = channels
 
-    def encode(self, pcm_data: bytes, frame_size=320) -> bytes:
+    def encode(self, pcm_data: bytes, frame_size=960) -> bytes:
         if not self.enc or not pcm_data:
             return b""
         n_samples = len(pcm_data) // 2
@@ -335,6 +339,8 @@ class OpusEncoderWrapper:
         ret = _opus_lib.opus_encode(self.enc, in_buf, frame_size, out_buf, 1275)
         if ret > 0:
             return bytes(out_buf.raw[:ret])
+        elif ret < 0:
+            logger.warning(f"[OpusEncoder] opus_encode error: {ret}")
         return b""
 
     def __del__(self):
@@ -614,22 +620,57 @@ async def zello_websocket_worker():
                     last_pcm_time = 0.0
                     pending_audio = []
                     next_frame_time = time.monotonic()
+                    tx_packet_count = 0
 
-                    async def send_paced_frame(opus_frame: bytes):
-                        nonlocal next_frame_time
-                        if not bridge_state.dmr_stream_id:
+                    async def send_paced_frame(opus_frame: bytes, is_burst: bool = False):
+                        nonlocal next_frame_time, tx_packet_count
+                        if not bridge_state.dmr_stream_id or not opus_frame:
                             return
                         now_m = time.monotonic()
-                        if now_m < next_frame_time:
-                            await asyncio.sleep(next_frame_time - now_m)
-                            next_frame_time += 0.020
+                        if not is_burst:
+                            if now_m < next_frame_time:
+                                await asyncio.sleep(next_frame_time - now_m)
+                                next_frame_time += 0.060
+                            else:
+                                if now_m - next_frame_time > 0.180:
+                                    next_frame_time = now_m
+                                next_frame_time += 0.060
                         else:
-                            if now_m - next_frame_time > 0.060:
-                                next_frame_time = now_m
-                            next_frame_time += 0.020
-                        hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, bridge_state.dmr_stream_seq)
+                            # Immediate burst: pre-fill mobile jitter buffer without sleeping
+                            next_frame_time = now_m + 0.060
+
+                        # Zello client-to-server audio packet: [0x01][4B stream_id][4B packet_id=0][Opus payload]
+                        hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, 0)
+                        tx_packet_count += 1
                         bridge_state.dmr_stream_seq += 1
                         await ws.send(hdr + opus_frame)
+
+                        if tx_packet_count == 1:
+                            record_log(f"🎙️ [DMR -> Zello] Sending packet 1 ({len(opus_frame)}B Opus 60ms, stream_id={bridge_state.dmr_stream_id})")
+                        elif tx_packet_count % 50 == 0:
+                            record_log(f"🎙️ [DMR -> Zello] Streaming: {tx_packet_count} frames (60ms) sent to stream {bridge_state.dmr_stream_id}")
+
+                    def encode_60ms_frame(raw_8k_chunk: bytes) -> bytes:
+                        """Takes 960 bytes of 8kHz PCM (480 samples = 60ms), upsamples 2x to 16kHz, applies AGC, and encodes to Opus"""
+                        if len(raw_8k_chunk) < 960:
+                            raw_8k_chunk = raw_8k_chunk.ljust(960, b"\x00")
+                        pcm_8k_arr = np.frombuffer(raw_8k_chunk[:960], dtype=np.int16).astype(np.float32)
+                        
+                        # Gentle AGC / boost so DMR voice is clearly audible on mobile phone speakers
+                        rms = float(np.sqrt(np.mean(pcm_8k_arr ** 2))) if len(pcm_8k_arr) > 0 else 0.0
+                        gain = 1.6
+                        if rms >= 30.0 and rms < 3500.0:
+                            gain = min(3.2, 5000.0 / rms)
+                        pcm_boosted = np.tanh(pcm_8k_arr / 32768.0 * gain) * 32767.0
+
+                        # 2x Linear Interpolation: 480 samples @ 8kHz -> 960 samples @ 16kHz (60ms)
+                        pcm_16k_arr = np.empty(len(pcm_boosted) * 2, dtype=np.float32)
+                        pcm_16k_arr[0::2] = pcm_boosted
+                        pcm_16k_arr[1:-1:2] = 0.5 * (pcm_boosted[:-1] + pcm_boosted[1:])
+                        pcm_16k_arr[-1] = pcm_boosted[-1]
+                        pcm_16k = np.clip(pcm_16k_arr, -32768, 32767).astype(np.int16).tobytes()
+
+                        return opus_encoder.encode(pcm_16k, frame_size=960)
 
                     while is_app_running and bridge_state.ws_connected:
                         try:
@@ -639,9 +680,16 @@ async def zello_websocket_worker():
                                 # Watchdog with VOX hangover guardrail (0.55s): prevent premature cutoffs between speech phrases
                                 if bridge_state.dmr_to_zello_streaming and (time.time() - last_pcm_time > 0.55):
                                     if bridge_state.dmr_stream_id:
+                                        # Flush any pending audio
                                         while pending_audio:
                                             old_opus = pending_audio.pop(0)
-                                            await send_paced_frame(old_opus)
+                                            await send_paced_frame(old_opus, is_burst=False)
+                                        # Flush remaining audio buffer if any (< 960 bytes)
+                                        if len(bridge_state.dmr_tx_pcm_buf) > 0:
+                                            final_opus = encode_60ms_frame(bytes(bridge_state.dmr_tx_pcm_buf))
+                                            bridge_state.dmr_tx_pcm_buf.clear()
+                                            if final_opus:
+                                                await send_paced_frame(final_opus, is_burst=False)
                                         now_m = time.monotonic()
                                         if now_m < next_frame_time:
                                             await asyncio.sleep(next_frame_time - now_m)
@@ -652,11 +700,12 @@ async def zello_websocket_worker():
                                         }
                                         bridge_state.seq_counter += 1
                                         await ws.send(json.dumps(stop_cmd))
-                                        record_log(f"DMR -> Zello TX Ended (stream {bridge_state.dmr_stream_id})")
+                                        record_log(f"DMR -> Zello TX Ended (stream {bridge_state.dmr_stream_id}, total {tx_packet_count} frames sent)")
                                     bridge_state.dmr_to_zello_streaming = False
                                     bridge_state.dmr_stream_id = None
                                     bridge_state.dmr_tx_pcm_buf.clear()
                                     pending_audio.clear()
+                                    tx_packet_count = 0
                                 continue
 
                             if key_flag == 1 and pcm_8k:
@@ -666,57 +715,60 @@ async def zello_websocket_worker():
                                 # Start stream if not yet started
                                 if not bridge_state.dmr_to_zello_streaming:
                                     talker_call, talker_name = resolve_callbook_info_by_id(src_id)
-                                    # 16kHz, 1 frame/pkt, 20ms duration -> codec_header = "gD4BFA=="
-                                    # Crucial: channel attribute ensures live real-time speaker broadcast in Zello
+                                    # Standard Zello Channel API: 16kHz, 1 frame/pkt, 60ms duration -> codec_header = "gD4BPA=="
+                                    # Crucial: 60ms duration satisfies Zello mobile jitter buffer for immediate live loudspeaker playback
                                     start_cmd = {
                                         "command": "start_stream",
                                         "seq": bridge_state.seq_counter,
                                         "channel": bridge_state.channel,
                                         "type": "audio",
                                         "codec": "opus",
-                                        "codec_header": "gD4BFA==",
-                                        "packet_duration": 20
+                                        "codec_header": "gD4BPA==",
+                                        "packet_duration": 60
                                     }
                                     bridge_state.seq_counter += 1
                                     await ws.send(json.dumps(start_cmd))
                                     bridge_state.dmr_to_zello_streaming = True
                                     bridge_state.dmr_stream_seq = 0
                                     bridge_state.dmr_stream_id = None
+                                    tx_packet_count = 0
                                     next_frame_time = time.monotonic()
                                     pending_audio.clear()
+                                    bridge_state.dmr_tx_pcm_buf.clear()
                                     record_log(f"DMR -> Zello LIVE TX Started on Channel '{bridge_state.channel}' (TG {tg} from {talker_call})")
 
-                                # Smooth 8kHz -> 16kHz linear interpolation with anti-imaging to eliminate treble harshness
-                                pcm_8k_arr = np.frombuffer(pcm_8k, dtype=np.int16)
-                                pcm_8k_f = pcm_8k_arr.astype(np.float32)
-                                pcm_16k_arr = np.empty(len(pcm_8k_f) * 2, dtype=np.float32)
-                                pcm_16k_arr[0::2] = pcm_8k_f
-                                pcm_16k_arr[1:-1:2] = 0.5 * (pcm_8k_f[:-1] + pcm_8k_f[1:])
-                                pcm_16k_arr[-1] = pcm_8k_f[-1]
-                                pcm_16k = np.clip(pcm_16k_arr, -32768, 32767).astype(np.int16).tobytes()
+                                # Accumulate incoming 8kHz PCM chunks (320 bytes = 20ms) into 60ms (960 bytes) frames
+                                bridge_state.dmr_tx_pcm_buf.extend(pcm_8k)
+                                while len(bridge_state.dmr_tx_pcm_buf) >= 960:
+                                    chunk_60ms = bytes(bridge_state.dmr_tx_pcm_buf[:960])
+                                    del bridge_state.dmr_tx_pcm_buf[:960]
+                                    opus_bytes = encode_60ms_frame(chunk_60ms)
+                                    if opus_bytes:
+                                        if bridge_state.dmr_stream_id:
+                                            # Flush any initial audio buffered while awaiting Zello stream_id response
+                                            while pending_audio:
+                                                old_opus = pending_audio.pop(0)
+                                                # Send first 2 frames as burst to seed mobile jitter buffer
+                                                await send_paced_frame(old_opus, is_burst=(tx_packet_count < 2))
 
-                                # Encode 20ms of 16kHz PCM (320 samples = 640 bytes) to Opus
-                                opus_bytes = opus_encoder.encode(pcm_16k, frame_size=320)
-                                if opus_bytes:
-                                    if bridge_state.dmr_stream_id:
-                                        # Flush any initial audio buffered while awaiting Zello stream_id response
-                                        while pending_audio:
-                                            old_opus = pending_audio.pop(0)
-                                            await send_paced_frame(old_opus)
-
-                                        # Zello binary audio frame with real-time 20ms pacing
-                                        await send_paced_frame(opus_bytes)
-                                    else:
-                                        # Queue up to 40 frames (~800ms) during stream negotiation so audio start is never lost
-                                        if len(pending_audio) < 40:
-                                            pending_audio.append(opus_bytes)
+                                            await send_paced_frame(opus_bytes, is_burst=(tx_packet_count < 2))
+                                        else:
+                                            # Queue up to 15 frames (~900ms) during stream negotiation so audio start is never lost
+                                            if len(pending_audio) < 15:
+                                                pending_audio.append(opus_bytes)
 
                             elif key_flag == 0:
                                 if bridge_state.dmr_to_zello_streaming:
                                     if bridge_state.dmr_stream_id:
                                         while pending_audio:
                                             old_opus = pending_audio.pop(0)
-                                            await send_paced_frame(old_opus)
+                                            await send_paced_frame(old_opus, is_burst=False)
+                                        # Flush remaining audio buffer if any (< 960 bytes)
+                                        if len(bridge_state.dmr_tx_pcm_buf) > 0:
+                                            final_opus = encode_60ms_frame(bytes(bridge_state.dmr_tx_pcm_buf))
+                                            bridge_state.dmr_tx_pcm_buf.clear()
+                                            if final_opus:
+                                                await send_paced_frame(final_opus, is_burst=False)
                                         now_m = time.monotonic()
                                         if now_m < next_frame_time:
                                             await asyncio.sleep(next_frame_time - now_m)
@@ -727,11 +779,12 @@ async def zello_websocket_worker():
                                         }
                                         bridge_state.seq_counter += 1
                                         await ws.send(json.dumps(stop_cmd))
-                                        record_log(f"DMR -> Zello TX Released (stream {bridge_state.dmr_stream_id})")
+                                        record_log(f"DMR -> Zello TX Released (stream {bridge_state.dmr_stream_id}, total {tx_packet_count} frames sent)")
                                 bridge_state.dmr_to_zello_streaming = False
                                 bridge_state.dmr_stream_id = None
                                 bridge_state.dmr_tx_pcm_buf.clear()
                                 pending_audio.clear()
+                                tx_packet_count = 0
                         except Exception as de:
                             logger.debug(f"dmr_to_zello note: {de}")
                             await asyncio.sleep(0.01)
