@@ -747,9 +747,9 @@ export default function ServerDmrPage() {
                     <div className="p-3 bg-cyan-950/30 border border-cyan-800/40 rounded-xl text-xs text-cyan-300 font-mono flex items-start gap-2.5">
                       <Info className="w-4 h-4 text-cyan-400 mt-0.5 shrink-0" />
                       <div>
-                        <strong>Matriks Talkgroup (Conference Bridges):</strong> Setiap Talkgroup dihubungkan secara simetris antara 
-                        <span className="text-white font-bold"> HOTSPOT-MASTER</span> (port 62031) dan 
-                        <span className="text-white font-bold"> CORE-BRIDGE</span> (Web Audio / USRP port 62035). Perubahan langsung aktif setelah disimpan.
+                        <strong>Matriks Talkgroup (Conference Bridges):</strong> Konfigurasi routing Talkgroup untuk bridging antara 
+                        <span className="text-white font-bold"> HOTSPOT-MASTER</span> (port 62031) dan trunk 
+                        <span className="text-white font-bold"> OpenBridge / Interlink</span> (port 62030). Perubahan langsung aktif setelah disimpan.
                       </div>
                     </div>
 
@@ -885,7 +885,7 @@ export default function ServerDmrPage() {
                   <div className="space-y-2">
                     <div className="text-xs text-slate-400 font-mono flex items-center justify-between">
                       <span>Configuration File: <code>freedmr.cfg</code></span>
-                      <span className="text-[11px] text-slate-400">Port MMDVM 62031, Core Bridge 62035, OpenBridge 62030</span>
+                      <span className="text-[11px] text-slate-400">Port DMR Master 62031, OpenBridge Trunk 62030</span>
                     </div>
                     <textarea
                       value={rawCfgCode}

@@ -2228,7 +2228,6 @@ async def get_freedmr_diag():
         "freedmr_dns": False,
         "freedmr_ip": None,
         "freedmr_62031_open": False,
-        "freedmr_62035_open": False,
         "freedmr_log_tail": "",
         "error": None
     }
@@ -2242,18 +2241,16 @@ async def get_freedmr_diag():
         results["error"] = f"Cannot resolve container 'freedmr': {e}"
         return results
 
-    # 2. Test UDP connect to 62031 & 62035
-    for port, key in [(62031, "freedmr_62031_open"), (62035, "freedmr_62035_open")]:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(1.5)
-            # Send RPTL ping
-            sock.sendto(b"RPTL\x00\x0f\x68\x63PING\x00\x00\x00\x00", (ip, port))
-            # If it doesn't immediately raise an error, socket is reached
-            results[key] = True
-            sock.close()
-        except Exception as e:
-            results[key] = f"Error: {e}"
+    # 2. Test UDP connect to DMR Master (62031)
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(1.5)
+        # Send RPTL ping
+        sock.sendto(b"RPTL\x00\x0f\x68\x63PING\x00\x00\x00\x00", (ip, 62031))
+        results["freedmr_62031_open"] = True
+        sock.close()
+    except Exception as e:
+        results["freedmr_62031_open"] = f"Error: {e}"
 
     # 3. Check for log file in /app/data or local candidates
     for log_path in ["/app/data/freedmr.log", "/app/freedmr/freedmr.log"]:
