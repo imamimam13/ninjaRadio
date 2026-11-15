@@ -739,6 +739,18 @@ async def zello_websocket_worker():
                                     pending_audio.clear()
                                     bridge_state.dmr_tx_pcm_buf.clear()
                                     record_log(f"DMR -> Zello LIVE TX Started on Channel '{bridge_state.channel}' (TG {tg} from {talker_call})")
+                                    # Send text notification to Zello channel on new DMR transmission
+                                    try:
+                                        text_cmd = {
+                                            "command": "send_text_message",
+                                            "seq": bridge_state.seq_counter,
+                                            "channel": bridge_state.channel,
+                                            "text": f"📻 [DMR RX] {talker_call} ({src_id}) on TG {tg}"
+                                        }
+                                        bridge_state.seq_counter += 1
+                                        await ws.send(json.dumps(text_cmd))
+                                    except Exception as te:
+                                        logger.debug(f"Note sending text notification to Zello: {te}")
 
                                 # Accumulate incoming 8kHz PCM chunks (320 bytes = 20ms) into 60ms (960 bytes) frames
                                 bridge_state.dmr_tx_pcm_buf.extend(pcm_8k)
