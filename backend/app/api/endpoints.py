@@ -3181,6 +3181,16 @@ async def selfcare_request_services(
             setattr(user, field, bool(val))
     if payload.zello_username is not None:
         user.zello_username = payload.zello_username.strip()
+
+    # If the user is already APPROVED, automatically sync their allowed services and generate missing credentials
+    if user.status == "APPROVED":
+        for svc in ["dmr", "svxlink", "mumble", "dvswitch", "zello"]:
+            req_val = getattr(user, f"req_{svc}")
+            setattr(user, f"allow_{svc}", req_val)
+            if svc in ["dmr", "svxlink", "mumble"] and req_val and not getattr(user, f"{svc}_password"):
+                setattr(user, f"{svc}_password", generate_protocol_password(6))
+        trigger_protocol_reload()
+
     await session.commit()
     await session.refresh(user)
     return sanitize_user_response(user)

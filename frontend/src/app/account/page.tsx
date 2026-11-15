@@ -175,7 +175,11 @@ export default function AccountPage() {
     if (res.ok) {
       const updated = await res.json();
       setUser(updated);
-      setActionMsg("Permintaan layanan tambahan berhasil dikirim ke Admin.");
+      setActionMsg(
+        updated.status === "APPROVED"
+          ? "✓ Izin layanan dan kredensial protokol berhasil diperbarui."
+          : "Permintaan layanan tambahan berhasil dikirim ke Admin."
+      );
     }
   };
 

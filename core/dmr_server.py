@@ -55,14 +55,22 @@ def lookup_selfcare_dmr_auth(dmr_id: int) -> Tuple[Optional[str], Optional[bool]
     db_path = get_db_path()
     if not db_path:
         return None, None, None
-    base_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
+    s_id = str(dmr_id).strip()
+    candidates = [dmr_id]
+    if len(s_id) == 9:
+        candidates.append(int(s_id[:7]))
+    elif len(s_id) == 8:
+        candidates.append(int(s_id[:7]))
+    elif dmr_id > 9999999:
+        candidates.append(dmr_id // 100)
     try:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:
             cur = conn.cursor()
+            placeholders = ",".join("?" for _ in candidates)
             cur.execute(
-                "SELECT status, allow_dmr, dmr_password FROM user_accounts WHERE dmr_id = ? OR dmr_id = ?",
-                (dmr_id, base_id),
+                f"SELECT status, allow_dmr, dmr_password FROM user_accounts WHERE dmr_id IN ({placeholders})",
+                tuple(candidates),
             )
             row = cur.fetchone()
             if row:

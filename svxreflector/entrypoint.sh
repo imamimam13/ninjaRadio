@@ -254,9 +254,6 @@ SUBJECT_ALT_NAME={alt_names}
 [USERS]
 """
 
-if not strict_mode:
-    conf_content += "* = NinjaReflectorNodes\n"
-
 for u in sorted_users:
     # Self-Care users get their own individual password key
     base_u = re.sub(r"-[A-Z0-9]{1,2}$", "", u).strip().upper()
@@ -270,6 +267,10 @@ for u in sorted_users:
 for sc_call, sc_pwd in sorted(selfcare_users.items()):
     if sc_call not in sorted_users:
         conf_content += f"{sc_call} = KEY_{sc_call}\n"
+
+# Wildcard fallback MUST be placed AFTER specific callsigns so individual passwords match first
+if not strict_mode:
+    conf_content += "* = NinjaReflectorNodes\n"
 
 conf_content += f"""
 [PASSWORDS]

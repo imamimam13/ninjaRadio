@@ -110,45 +110,24 @@ def get_mumble_sqlite_path():
     return None
 
 def sync_mumble_users_direct_sqlite():
-    """Syncs Self-Care APPROVED Mumble users & unique passwords into Murmur's SQLite users table."""
+    """
+    Cleans up any broken non-SuperUser entries in Murmur's users table.
+    Modern Murmur validates user passwords with its internal PBKDF2 salt & kdf iterations.
+    Inserting raw SHA-1 hashes causes Murmur to reject client connections with 'Wrong password'.
+    TX permission is strictly enforced at the audio bridge layer via check_mumble_tx_permission().
+    """
     murmur_db = get_mumble_sqlite_path()
-    app_db = get_db_path()
-    if not murmur_db or not app_db:
+    if not murmur_db:
         return
     import sqlite3
-    import hashlib
     try:
-        with sqlite3.connect(app_db, timeout=2.0) as aconn:
-            acur = aconn.cursor()
-            acur.execute("SELECT callsign, status, allow_mumble, mumble_password FROM user_accounts")
-            accounts = acur.fetchall()
-        if not accounts:
-            return
-
         with sqlite3.connect(murmur_db, timeout=3.0) as mconn:
             mcur = mconn.cursor()
             mcur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
             if not mcur.fetchone():
                 return
-            for callsign, status, allow_mumble, mumble_pwd in accounts:
-                uname = str(callsign or "").strip().upper()
-                if not uname or uname == "SUPERUSER":
-                    continue
-                if str(status or "").upper() == "APPROVED" and bool(allow_mumble) and mumble_pwd:
-                    pw_hash = hashlib.sha1(str(mumble_pwd).encode("utf-8")).hexdigest()
-                    mcur.execute("SELECT user_id FROM users WHERE server_id = 1 AND UPPER(name) = ?", (uname,))
-                    existing = mcur.fetchone()
-                    if existing:
-                        mcur.execute("UPDATE users SET pw = ? WHERE server_id = 1 AND user_id = ?", (pw_hash, existing[0]))
-                    else:
-                        mcur.execute("SELECT COALESCE(MAX(user_id), 0) FROM users WHERE server_id = 1")
-                        next_uid = int(mcur.fetchone()[0] or 0) + 1
-                        mcur.execute(
-                            "INSERT INTO users (server_id, user_id, name, pw) VALUES (1, ?, ?, ?)",
-                            (next_uid, uname, pw_hash)
-                        )
-                else:
-                    mcur.execute("DELETE FROM users WHERE server_id = 1 AND UPPER(name) = ?", (uname,))
+            # Remove any broken user registrations so users can connect cleanly without hash mismatch
+            mcur.execute("DELETE FROM users WHERE server_id = 1 AND UPPER(name) != 'SUPERUSER' AND user_id > 0")
             mconn.commit()
     except Exception as e:
         logger.debug(f"Murmur user sync note: {e}")
