@@ -72,7 +72,10 @@ if os.path.exists(hb_path):
                         _is_valid = (_sent_hash == bhex(sha256(_salt_str+self._config['PASSPHRASE']).hexdigest()))
                     _calc_hash = _sent_hash if _is_valid else b'INVALID_HASH_VALUE_FAIL''''
         src = src.replace(old_block, new_block, 1)
-        with open(hb_path, 'w', encoding='utf-8') as f:
+    if 'self.send_config()' in src:
+        src = src.replace('self.send_config()', 'self._factory.send_config()')
+        print('✓ Patched FreeDMR reporting socket handler in hblink.py')
+    with open(hb_path, 'w', encoding='utf-8') as f:
             f.write(src)
         print('✓ Integrated dynamic Self-Care DMR password authentication into FreeDMR')
 " 2>/dev/null || true

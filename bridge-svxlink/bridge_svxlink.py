@@ -350,16 +350,6 @@ class SvxGatewayBot:
         self._prev_rx_sample: float = 0.0
 
         self.tx_pcm_buffer = bytearray()
-        self._tx_agc_gain: float = 1.0
-        from ambe_dsp import AmbeAudioConditioner
-        self.tx_conditioner = AmbeAudioConditioner(
-            input_rate=16000,
-            lowcut_hz=300.0,
-            highcut_hz=3300.0,
-            filter_order=5,
-            gate_threshold_rms=15.0,
-            peak_ceiling=20000.0,
-        )
 
     def _build_svxlink_environment(self):
         """Creates isolated config & Tcl event overrides so SvxLink reports talker_start/talker_stop to Python."""
@@ -723,7 +713,7 @@ PREEMPHASIS=0
         Receives 8kHz 16-bit mono PCM from NinjaRadio DirectDmrEngine (UDP 12348),
         selects target talkgroup, upsamples 2x to 16kHz S16_LE, opens Rx1 PTY squelch, and feeds SvxLink UDP socket.
         """
-        if not self.running or not self.connected or len(pcm_8k) == 0:
+        if not self.running or len(pcm_8k) == 0:
             return
         # Echo suppression: do not feed DMR audio back if SvxLink is currently talking into DMR
         if self.is_transmitting_to_dmr or (time.time() - self.last_svx_audio_rx < 0.35):
@@ -733,51 +723,32 @@ PREEMPHASIS=0
             if tg and tg > 0:
                 self.select_talkgroup(tg)
 
-            tx_call = getattr(self, "current_tx_call", None)
-            if tx_call:
-                self._notify_reflector_talker(tx_call, tg or self.tg, sync=False)
-
             self.last_dmr_rx_play = time.time()
             self._set_squelch(True)
 
             samples_8k = np.frombuffer(pcm_8k, dtype=np.int16).astype(np.float32)
-            n = len(samples_8k)
-            if n == 0:
+            if len(samples_8k) == 0:
                 return
 
-            # Exact 2x linear interpolation (8kHz -> 16kHz) preserving inter-frame phase continuity
-            samples_16k = np.empty(n * 2, dtype=np.float32)
-            samples_16k[0] = 0.5 * (self._prev_rx_sample + samples_8k[0])
-            samples_16k[1::2] = samples_8k
-            if n > 1:
-                samples_16k[2::2] = 0.5 * (samples_8k[:-1] + samples_8k[1:])
-            self._prev_rx_sample = float(samples_8k[-1])
+            # Clean 2x linear interpolation (8kHz -> 16kHz from a553e82)
+            idx_orig = np.arange(len(samples_8k))
+            idx_target = np.linspace(0, len(samples_8k) - 1, len(samples_8k) * 2)
+            samples_16k = np.clip(np.interp(idx_target, idx_orig, samples_8k), -32768, 32767).astype(np.int16)
 
-            pcm_16k_bytes = np.clip(samples_16k, -32768, 32767).astype(np.int16).tobytes()
-            self.usrp_sock.sendto(pcm_16k_bytes, ("127.0.0.1", self.udp_rx_into_svx))
+            self.usrp_sock.sendto(samples_16k.tobytes(), ("127.0.0.1", self.udp_rx_into_svx))
         except Exception as e:
             logger.debug(f"[{self.bot_user}] play_pcm_8k error: {e}")
 
     def _squelch_watchdog_loop(self):
-        """Closes SvxLink Rx1 squelch cleanly when DMR RX stream stops, keeps LocalRx fed during brief jitter, and unkeys DMR when SvxLink talker stops."""
+        """Closes SvxLink Rx1 squelch cleanly when DMR RX stream stops, and unkeys DMR when SvxLink talker stops."""
         global last_svx_tx
-        silence_16k_20ms = b"\x00" * 640
         while self.running:
-            time.sleep(0.02)
+            time.sleep(0.05)
             now = time.time()
 
-            # 1. Close Rx1 squelch 350ms after DMR RX stops; feed 20ms comfort silence during brief jitter gaps
-            if self.squelch_is_open:
-                gap = now - self.last_dmr_rx_play
-                if gap > 0.35:
-                    self._set_squelch(False)
-                    if self._last_delegated_call:
-                        self._notify_reflector_talker("", self.tg)
-                elif gap > 0.100:
-                    try:
-                        self.usrp_sock.sendto(silence_16k_20ms, ("127.0.0.1", self.udp_rx_into_svx))
-                    except Exception:
-                        pass
+            # 1. Close Rx1 squelch 250ms after DMR RX stops (a553e82)
+            if self.squelch_is_open and (now - self.last_dmr_rx_play > 0.25):
+                self._set_squelch(False)
 
             # 2. Release Direct DMR PTT 450ms after SvxLink Tx1 audio stops
             if self.is_transmitting_to_dmr and (now - self.last_svx_audio_rx > 0.45):
@@ -799,8 +770,7 @@ PREEMPHASIS=0
         except Exception:
             pass
         self.tx_pcm_buffer.clear()
-        self._tx_agc_gain = 1.0
-        self.tx_conditioner.reset()
+        self._tx_agc_gain = 1.5
         self.active_talker_tg = None
 
     def _audio_tx_from_svx_loop(self):
@@ -868,26 +838,27 @@ PREEMPHASIS=0
                     self.is_transmitting_to_dmr = True
                     self.active_talker_dmr_id = user_dmr_id
                     self.tx_pcm_buffer.clear()
-                    self.tx_conditioner.reset()
+                    self._tx_agc_gain = 1.5
                     logger.info(f"[{self.bot_user}] 🔴 SVXLINK->DMR TX from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {tx_tg} Slot {tx_slot}")
 
-                # Route through stateful AMBE Conditioner: 16k -> 8k polyphase sinc resampling,
-                # 5th-order Butterworth Band-Pass (300Hz - 3300Hz, eliminates CTCSS & rumble),
-                # and peak ceiling limiter.
-                clean_8k_bytes = self.tx_conditioner.process_frame(pcm_16k, return_bytes=True)
-                if clean_8k_bytes:
-                    pcm_8k_arr = np.frombuffer(clean_8k_bytes, dtype=np.int16).astype(np.float32)
-                    rms_8k = float(np.sqrt(np.mean(pcm_8k_arr ** 2)))
-                    if rms_8k >= 45.0:
-                        desired_gain = min(2.0, max(0.8, 2200.0 / rms_8k))
+                # Downsample 16kHz -> 8kHz (clean 2:1 decimation from a553e82 - Zero robot sound)
+                n_8k = len(pcm_16k) // 2
+                if n_8k > 0:
+                    pcm_8k_arr = pcm_16k[:n_8k * 2].astype(np.float32).reshape(-1, 2).mean(axis=1)
+                    # Smooth TX AGC for SvxLink audio so AMBE vocoder receives nominal speech dynamics
+                    if not hasattr(self, "_tx_agc_gain"):
+                        self._tx_agc_gain = 1.5
+                    rms_8k = float(np.sqrt(np.mean(pcm_8k_arr ** 2))) if len(pcm_8k_arr) > 0 else 0.0
+                    if rms_8k >= 40.0:
+                        desired_gain = min(4.5, max(1.0, 4500.0 / rms_8k))
                         alpha = 0.25 if desired_gain < self._tx_agc_gain else 0.08
                         self._tx_agc_gain = (1.0 - alpha) * self._tx_agc_gain + alpha * desired_gain
-                    if self._tx_agc_gain != 1.0:
                         pcm_8k_arr = pcm_8k_arr * self._tx_agc_gain
                     peak = float(np.max(np.abs(pcm_8k_arr))) if len(pcm_8k_arr) > 0 else 0.0
-                    if peak > 20000.0:
-                        pcm_8k_arr = pcm_8k_arr * (20000.0 / peak)
-                    self.tx_pcm_buffer.extend(np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes())
+                    if peak > 24000.0:
+                        pcm_8k_arr = pcm_8k_arr * (24000.0 / peak)
+                    pcm_8k_bytes = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
+                    self.tx_pcm_buffer.extend(pcm_8k_bytes)
 
                 call_bytes = (user_callsign or "SVXLINK").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                 while len(self.tx_pcm_buffer) >= 320:
@@ -1119,6 +1090,16 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     last_rx_log = time.time()
                     bot_names = ", ".join([f"{b.bot_user} ('{b.room_name}')" for b in target_bots])
                     logger.info(f"[SvxLink-Bridge] 🔊 Routing DMR RX (TG {talkgroup} from {caller_call or dmr_id}) -> {bot_names}")
+
+                # Self-Echo Guard: Drop incoming DMR audio if it matches an active talker on SvxLink or if bot is currently transmitting
+                c_up = (caller_call or "").strip().upper()
+                active_talkers = {b.active_talker_call.upper() for b in gateway_pool.values() if b.active_talker_call}
+                active_ids = {b.active_talker_dmr_id for b in gateway_pool.values() if b.active_talker_dmr_id}
+                internal_bot_users = {b.bot_user.upper() for b in gateway_pool.values()}
+                if (c_up and c_up in active_talkers) or (dmr_id and dmr_id in active_ids) or (c_up and c_up in internal_bot_users):
+                    continue
+                if any(b.is_transmitting_to_dmr for b in target_bots):
+                    continue
 
                 for bot in target_bots:
                     bot.current_tx_call = caller_call
