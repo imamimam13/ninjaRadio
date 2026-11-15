@@ -215,39 +215,45 @@ class HomeBrewMasterServer:
             return True
         now = time.time()
 
-        # If this stream_id was already rejected because it keyed up while dst_tg was busy,
-        # keep rejecting the entire stream so it never barges in mid-sentence without a Voice Header.
-        rej_ts = self._rejected_stream_ids.get(stream_id)
-        if rej_ts is not None and (now - rej_ts) < 15.0:
-            if data_type == 2:
-                self._rejected_stream_ids.pop(stream_id, None)
-            else:
-                self._rejected_stream_ids[stream_id] = now
-            return False
-
+        # Check if dst_tg is currently busy with another stream
         lock = self.tg_locks.get(dst_tg)
-        if lock and now < lock.get("until", 0.0):
-            if lock.get("stream_id") != stream_id:
-                # Allow same station at same address to immediately re-key after its own terminator
-                if not (lock.get("ended", False) and lock.get("src_id") == src_id and lock.get("addr") == origin_addr):
-                    self._rejected_stream_ids[stream_id] = now
-                    if len(self._rejected_stream_ids) > 256:
-                        cutoff = now - 30.0
-                        self._rejected_stream_ids = {k: v for k, v in self._rejected_stream_ids.items() if v > cutoff}
-                    logger.warning(
-                        f"🚫 [TG-LOCK] Rejected simultaneous PTT on TG {dst_tg} from {origin_addr or 'Local/Peer'} "
-                        f"(ID: {src_id}, Stream: {stream_id}) — TG {dst_tg} is busy with ID {lock.get('src_id')} "
-                        f"at {lock.get('addr')} (Stream: {lock.get('stream_id')})"
-                    )
-                    return False
+        is_locked_by_other = lock and now < lock.get("until", 0.0) and lock.get("stream_id") != stream_id
 
+        # If previous stream ended or lock expired, release reject flag immediately
+        if not is_locked_by_other:
+            self._rejected_stream_ids.pop(stream_id, None)
+        else:
+            # If this stream was already rejected because TG is busy with another stream,
+            # drop packet to prevent mid-sentence collision
+            rej_ts = self._rejected_stream_ids.get(stream_id)
+            if rej_ts is not None and (now - rej_ts) < 1.0:
+                if data_type == 2:
+                    self._rejected_stream_ids.pop(stream_id, None)
+                return False
+
+            # Allow same station at same address to immediately re-key after its own terminator
+            if not (lock.get("ended", False) and lock.get("src_id") == src_id and lock.get("addr") == origin_addr):
+                self._rejected_stream_ids[stream_id] = now
+                if len(self._rejected_stream_ids) > 256:
+                    cutoff = now - 15.0
+                    self._rejected_stream_ids = {k: v for k, v in self._rejected_stream_ids.items() if v > cutoff}
+                logger.warning(
+                    f"🚫 [TG-LOCK] Rejected simultaneous PTT on TG {dst_tg} from {origin_addr or 'Local/Peer'} "
+                    f"(ID: {src_id}, Stream: {stream_id}) — TG {dst_tg} is busy with ID {lock.get('src_id')} "
+                    f"at {lock.get('addr')} (Stream: {lock.get('stream_id')})"
+                )
+                return False
+
+        # Lock acquired or refreshed
         self.tg_locks[dst_tg] = {
             "stream_id": stream_id,
             "src_id": src_id,
             "addr": origin_addr,
             "ended": (data_type == 2),
-            "until": now + (0.25 if data_type == 2 else 1.8),
+            "until": now + (0.10 if data_type == 2 else 0.40),
         }
+        if data_type == 2:
+            self._rejected_stream_ids.pop(stream_id, None)
         return True
 
     def parse_mmdvm_options(self, client: dict, options_str: str):
@@ -1127,11 +1133,12 @@ class HomeBrewMasterServer:
             out_pkt = data[:11] + rpt_bytes + bytes([new_bits]) + data[16:]
 
             try:
-                if not is_local_bridge:
-                    self._enqueue_paced_dmrd(addr, target_slot, stream_id, data_type, out_pkt, client)
-                else:
-                    self.sock.sendto(out_pkt, addr)
-                    client["tx_packets"] = client.get("tx_packets", 0) + 1
+                # Direct hardware/vocoder cadence delivery to hotspots & bridge:
+                # Inbound packets (from hotspots, peers, or DirectDmr pacer thread) already possess
+                # accurate 60ms TDMA timing. Sending directly prevents asyncio event-loop jitter (~15-25ms)
+                # from causing buffer starvation/loss-of-sync ("robotic audio") on MMDVMHost clients.
+                self.sock.sendto(out_pkt, addr)
+                client["tx_packets"] = client.get("tx_packets", 0) + 1
                 delivered_count += 1
             except Exception as e:
                 logger.debug(f"[DMR-Master] Failed to send DMRD to {addr}: {e}")

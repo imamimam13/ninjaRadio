@@ -3057,6 +3057,25 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                             except Exception:
                                 pass
+                elif data_type == 2:
+                    # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
+                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                    unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0) + (b"\x00" * 320)
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                    except Exception:
+                        try:
+                            self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                        except Exception:
+                            pass
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                    except Exception:
+                        pass
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                    except Exception:
+                        pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_dmr_master_traffic note: {e}")
@@ -3293,6 +3312,25 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                             except Exception:
                                 pass
+                elif data_type == 2:
+                    # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
+                    self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
+                    unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0) + (b"\x00" * 320)
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
+                    except Exception:
+                        try:
+                            self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
+                        except Exception:
+                            pass
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                    except Exception:
+                        pass
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                    except Exception:
+                        pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
         except Exception as e:
             logger.debug(f"handle_peer_traffic note: {e}")

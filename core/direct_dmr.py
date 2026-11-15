@@ -1002,21 +1002,20 @@ class DirectDmrEngine:
         if not raw_pcm or len(raw_pcm) < BURST_PCM_BYTES:
             return raw_pcm
 
-        # Isolated telecom filter trio per slot/stream to prevent inter-talker phase distortion
+        # Standard telecom bandpass filter (300-3400Hz) per slot/stream to restore voice intelligibility
         if not hasattr(self, "_rx_filters"):
             self._rx_filters = {}
         if stream_key not in self._rx_filters:
             self._rx_filters[stream_key] = (
                 BiquadFilter(HPF_300HZ_B, HPF_300HZ_A),
-                BiquadFilter(LPF_2350HZ_B, LPF_2350HZ_A),
-                BiquadFilter(NOTCH_2000HZ_B, NOTCH_2000HZ_A),
-                DeemphasisFilter(alpha=0.80)
+                BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A),
+                DeemphasisFilter(alpha=0.60)
             )
-        hpf, lpf, notch, deemph = self._rx_filters[stream_key]
+        hpf, lpf, deemph = self._rx_filters[stream_key]
 
         import math
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
-        filtered = [deemph.process(notch.process(lpf.process(hpf.process(float(s))))) for s in samples]
+        filtered = [deemph.process(lpf.process(hpf.process(float(s)))) for s in samples]
 
         # Smooth per-stream RX AGC: keep peer audio warm & slightly louder without harshness
         if not hasattr(self, "_rx_agc"):

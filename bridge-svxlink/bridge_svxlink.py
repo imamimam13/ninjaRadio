@@ -424,10 +424,6 @@ namespace eval SimplexLogic {
     proc squelch_open {args} {}
     proc activating_link {args} {}
     proc deactivating_link {args} {}
-    proc dtmf_digit_received {args} {}
-    proc dtmf_cmd_received {args} {}
-    proc dtmf_command_received {args} {}
-    proc talkgroup_selected {args} {}
     proc playMsg {args} {}
     proc playSilence {args} {}
 }
@@ -436,9 +432,8 @@ namespace eval Logic {
     proc activating_link {args} {}
     proc deactivating_link {args} {}
     proc send_rgr_sound {args} {}
-    proc dtmf_digit_received {args} {}
-    proc dtmf_cmd_received {args} {}
     proc playMsg {args} {}
+    proc playSilence {args} {}
 }
 """
         with open(f"{local_events_dir}/SimplexLogic.tcl", "w", encoding="utf-8") as wf:
@@ -483,13 +478,17 @@ namespace eval EchoLink {
             with open(f"{local_events_dir}/EchoLink.tcl", "w", encoding="utf-8") as wf:
                 wf.write(echolink_tcl)
 
-        # For dedicated bots (tg > 0), only monitor their own talkgroup to prevent hearing cross-bot reflector traffic
-        # For dynamic Any-TG gateway (tg == 0), monitor all configured talkgroups
-        if self.tg > 0:
+        # For dedicated channel bots, only monitor their own talkgroup to prevent hearing cross-bot reflector traffic
+        # For dynamic Any-TG gateway (SVX-GATEWAY or tg == 0), monitor configured rooms and dynamic talkgroups (510990)
+        if self.tg > 0 and self.bot_user != "SVX-GATEWAY":
             monitored_tgs_str = f"{self.tg}"
         else:
-            all_tgs = sorted(list(set([self.tg] + list(load_room_mappings().values()))))
-            monitored_tgs_str = ",".join(str(t) for t in all_tgs if t > 0)
+            all_tgs = set(load_room_mappings().values())
+            if self.tg > 0:
+                all_tgs.add(self.tg)
+            all_tgs.update([510, 5109, 510990, 9990])
+            sorted_tgs = sorted([t for t in all_tgs if t > 0])
+            monitored_tgs_str = ",".join(str(t) for t in sorted_tgs)
             if not monitored_tgs_str:
                 monitored_tgs_str = "0"
 
@@ -787,11 +786,7 @@ PREEMPHASIS=0
         if not self.is_transmitting_to_dmr:
             return
         self.is_transmitting_to_dmr = False
-        call_str = self.active_talker_call or ""
-        if not call_str or call_str.upper().startswith("SVX"):
-            self.tx_pcm_buffer.clear()
-            self.tx_conditioner.reset()
-            return
+        call_str = self.active_talker_call or getattr(self, "_last_delegated_call", "") or "SVX-STATION"
         dmr_id = self.active_talker_dmr_id or 5109999
         tx_tg = self.tg if self.tg > 0 else (getattr(self, "active_talker_tg", None) or 510)
         tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
