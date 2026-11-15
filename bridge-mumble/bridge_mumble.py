@@ -1147,7 +1147,9 @@ class MumbleGatewayBot:
             new_name = f"[DMR] {callsign}"[:25]
             self._rename(new_name)
         self._set_comment(f"🔴 <b>TX Live:</b> {callsign} ({dmr_id}) on TG {self.tg}")
-        self.send_channel_notification(callsign, dmr_id)
+        # Text chat notification disabled by default to prevent Mumble client TTS from reading it aloud
+        if os.getenv("ENABLE_MUMBLE_CHAT_NOTIF", "false").lower() == "true":
+            self.send_channel_notification(callsign, dmr_id)
         logger.info(f"[{self.default_bot_user}] 💬 DMR RX Notification: {callsign} ({dmr_id}) on TG {self.tg}")
 
     def revert_morph(self):
