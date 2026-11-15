@@ -47,6 +47,7 @@ IS_BRIDGING = True
 ROOM_MAPPINGS = {}
 GATEWAY_POOL: Dict[str, "SvxGatewayBot"] = {}  # bot_name -> SvxGatewayBot
 PORT_ALLOCATOR_INDEX = 0
+ACTIVE_TX_TG_LOCKS: Dict[int, Tuple[str, float]] = {}  # tg -> (bot_user, timestamp)
 
 
 def allocate_udp_port_pair() -> Tuple[int, int]:
@@ -769,6 +770,8 @@ PREEMPHASIS=0
             logger.info(f"[{self.bot_user}] ⏹️ DIRECT DMR RELEASE from {call_str} ({dmr_id}) -> TG {tx_tg} Slot {tx_slot}")
         except Exception:
             pass
+        if tx_tg in ACTIVE_TX_TG_LOCKS and ACTIVE_TX_TG_LOCKS[tx_tg][0] == self.bot_user:
+            ACTIVE_TX_TG_LOCKS.pop(tx_tg, None)
         self.tx_pcm_buffer.clear()
         self._tx_agc_gain = 1.5
         self.active_talker_tg = None
@@ -826,11 +829,19 @@ PREEMPHASIS=0
                 if self.tg == 0 and any(b is not self and b.tg == tx_tg and b.connected for b in GATEWAY_POOL.values()):
                     continue
 
+                # Singleton TG Lock: If another bot is already transmitting on this talkgroup, drop duplicate audio!
+                now = time.time()
+                active_holder = ACTIVE_TX_TG_LOCKS.get(tx_tg)
+                if active_holder:
+                    holder_bot, holder_ts = active_holder
+                    if holder_bot != self.bot_user and (now - holder_ts < 0.65):
+                        continue
+                ACTIVE_TX_TG_LOCKS[tx_tg] = (self.bot_user, now)
+
                 is_allowed, reason = check_svxlink_tx_permission(user_dmr_id, user_callsign, tx_tg)
                 if not is_allowed:
                     continue
 
-                now = time.time()
                 self.last_svx_audio_rx = now
                 last_svx_tx = now
 
