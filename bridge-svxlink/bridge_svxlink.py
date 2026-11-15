@@ -357,8 +357,8 @@ class SvxGatewayBot:
             lowcut_hz=300.0,
             highcut_hz=3300.0,
             filter_order=5,
-            gate_threshold_rms=120.0,
-            peak_ceiling=24000.0,
+            gate_threshold_rms=15.0,
+            peak_ceiling=20000.0,
         )
 
     def _build_svxlink_environment(self):
@@ -875,21 +875,23 @@ PREEMPHASIS=0
                     self.tx_conditioner.reset()
                     logger.info(f"[{self.bot_user}] 🔴 SVXLINK->DMR TX from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {tx_tg} Slot {tx_slot}")
 
-                # Downsample 16kHz -> 8kHz (clean 2:1 decimation) + smooth AGC for quiet SvxLink TX
-                n_8k = len(pcm_16k) // 2
-                if n_8k > 0:
-                    pcm_8k_arr = pcm_16k[:n_8k * 2].astype(np.float32).reshape(-1, 2).mean(axis=1)
+                # Route through stateful AMBE Conditioner: 16k -> 8k polyphase sinc resampling,
+                # 5th-order Butterworth Band-Pass (300Hz - 3300Hz, eliminates CTCSS & rumble),
+                # and peak ceiling limiter.
+                clean_8k_bytes = self.tx_conditioner.process_frame(pcm_16k, return_bytes=True)
+                if clean_8k_bytes:
+                    pcm_8k_arr = np.frombuffer(clean_8k_bytes, dtype=np.int16).astype(np.float32)
                     rms_8k = float(np.sqrt(np.mean(pcm_8k_arr ** 2)))
                     if rms_8k >= 45.0:
-                        desired_gain = min(4.5, max(1.0, 4800.0 / rms_8k))
+                        desired_gain = min(2.0, max(0.8, 2200.0 / rms_8k))
                         alpha = 0.25 if desired_gain < self._tx_agc_gain else 0.08
                         self._tx_agc_gain = (1.0 - alpha) * self._tx_agc_gain + alpha * desired_gain
-                    pcm_8k_arr = pcm_8k_arr * self._tx_agc_gain
+                    if self._tx_agc_gain != 1.0:
+                        pcm_8k_arr = pcm_8k_arr * self._tx_agc_gain
                     peak = float(np.max(np.abs(pcm_8k_arr))) if len(pcm_8k_arr) > 0 else 0.0
-                    if peak > 22000.0:
-                        pcm_8k_arr = pcm_8k_arr * (22000.0 / peak)
-                    pcm_8k_bytes = np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes()
-                    self.tx_pcm_buffer.extend(pcm_8k_bytes)
+                    if peak > 20000.0:
+                        pcm_8k_arr = pcm_8k_arr * (20000.0 / peak)
+                    self.tx_pcm_buffer.extend(np.clip(pcm_8k_arr, -32768, 32767).astype(np.int16).tobytes())
 
                 call_bytes = (user_callsign or "SVXLINK").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                 while len(self.tx_pcm_buffer) >= 320:
