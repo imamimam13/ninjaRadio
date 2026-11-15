@@ -97,6 +97,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
     { href: "/dvswitch", label: "DVSWITCH", icon: Terminal, tag: "PORT 32345", desc: "Mobile USRP Audio", isProtected: true },
     { href: "/mumla", label: "MUMLA", icon: Volume2, tag: "VOIP POOL", desc: "Multi-Bot Gateway", isProtected: true },
     { href: "/svxlink", label: "SVXLINK", icon: Radio, tag: "PORT 5300", desc: "Multi-TG Reflector & EchoLink", isProtected: true },
+    { href: "/teamspeak", label: "TEAMSPEAK", icon: Volume2, tag: "PORT 9987", desc: "Voice Server & Admin Keys", isProtected: true },
     { href: "/settings", label: "CONFIG", icon: Settings, tag: "DAEMONS", desc: "Supervisor & INI", isProtected: true },
   ];
 
