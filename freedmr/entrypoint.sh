@@ -3,9 +3,8 @@ set -e
 
 echo "=================================================="
 echo "  Starting NinjaRadio FreeDMR Engine              "
-echo "  Port Hotspot MMDVM  : 62031/udp                 "
-echo "  Port Core Bridge    : 62035/udp                 "
-echo "  Port OpenBridge     : 62030/udp                 "
+echo "  Port DMR Master / Hotspot : 62031/udp           "
+echo "  Port OpenBridge Trunk     : 62030/udp           "
 echo "=================================================="
 
 mkdir -p /opt/freedmr/json

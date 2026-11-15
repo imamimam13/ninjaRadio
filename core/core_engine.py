@@ -3094,7 +3094,7 @@ usrpAGC = -20,10,100
         active_keys = set()
 
         if os.getenv("USE_FREEDMR", "false").lower() == "true":
-            freedmr_key = "freedmr:62035"
+            freedmr_key = "freedmr:62031"
             active_keys.add(freedmr_key)
             if freedmr_key not in self.peer_clients:
                 f_name = "FreeDMR-Master"
@@ -3105,7 +3105,7 @@ usrpAGC = -20,10,100
                 f_client = HomeBrewClient(
                     name=f_name,
                     host="freedmr",
-                    port=62035,
+                    port=62031,
                     dmr_id=f_id,
                     callsign=f_call,
                     password=f_pwd,
@@ -3604,7 +3604,7 @@ async def get_serverdmr_status():
         data = engine_mgr.dmr_master_server.get_server_status()
     else:
         use_freedmr = os.getenv("USE_FREEDMR", "false").lower() == "true"
-        freedmr_client = engine_mgr.peer_clients.get("freedmr:62035")
+        freedmr_client = engine_mgr.peer_clients.get("freedmr:62031")
         uptime_sec = int(time.time() - getattr(engine_mgr, "boot_time", time.time()))
         m, s = divmod(uptime_sec, 60)
         h, m = divmod(m, 60)

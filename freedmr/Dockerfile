@@ -24,8 +24,8 @@ RUN git clone --depth 1 https://github.com/francedmr/FreeDMR.git /opt/freedmr \
 # Create alias directory
 RUN mkdir -p /opt/freedmr/json
 
-# Expose DMR Hotspot (62031), OpenBridge (62030), and Core Bridge (62035)
-EXPOSE 62031/udp 62030/udp 62035/udp
+# Expose DMR Hotspot (62031) and OpenBridge (62030)
+EXPOSE 62031/udp 62030/udp
 
 COPY freedmr.cfg /opt/freedmr/freedmr.cfg
 COPY rules.py /opt/freedmr/rules.py
