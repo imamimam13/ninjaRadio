@@ -752,7 +752,7 @@ async def zello_websocket_worker():
                                     record_log(f"Successfully joined Zello Channel: '{bridge_state.channel}'")
 
                                 # Response to our start_stream command
-                                if data.get("command") == "start_stream" or (data.get("success") is True and "stream_id" in data):
+                                if (data.get("command") == "start_stream") or ("stream_id" in data and cmd not in ("on_stream_start", "on_stream_stop") and data.get("success") is not False):
                                     bridge_state.dmr_stream_id = data.get("stream_id")
                                     record_log(f"Zello granted outbound TX stream ID: {bridge_state.dmr_stream_id}")
 
