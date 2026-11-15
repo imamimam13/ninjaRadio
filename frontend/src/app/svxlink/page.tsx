@@ -461,7 +461,7 @@ export default function SvxLinkPage() {
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-slate-500">Callsign Carry-Over:</span>
-                  <span className="text-purple-400 font-bold">Tcl Event Hook -> Callbook DB Lookup</span>
+                  <span className="text-purple-400 font-bold">Tcl Event Hook → Callbook DB Lookup</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-slate-500">Internal DMR RX Port:</span>
@@ -895,7 +895,7 @@ export default function SvxLinkPage() {
                               const b = bots.find(item => item.name.toUpperCase() === node.callsign.toUpperCase());
                               const targetBot: SvxBot = b || {
                                 name: node.callsign,
-                                channel: node.description || node.callsign,
+                                channel: node.bridgeLabel || node.callsign,
                                 tg: node.tg || 0,
                                 slot: 2,
                                 status: node.connected ? "CONNECTED" : "STANDBY"

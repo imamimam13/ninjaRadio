@@ -2194,6 +2194,151 @@ async def save_serverdmr_config(payload: dict):
     }
 
 
+# ----------------- FreeDMR Rules & Talkgroup Matrix Management -----------------
+
+def _get_freedmr_file(filename: str) -> str:
+    candidates = [
+        os.path.join("/app/freedmr", filename),
+        os.path.join(os.getcwd(), "freedmr", filename),
+        os.path.join("/opt/freedmr", filename)
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
+
+def _touch_freedmr_reload():
+    reload_paths = ["/app/data/.freedmr_reload", "data/.freedmr_reload"]
+    for rp in reload_paths:
+        try:
+            os.makedirs(os.path.dirname(rp), exist_ok=True)
+            with open(rp, "w") as f:
+                f.write(str(time.time()))
+            break
+        except Exception:
+            pass
+
+@router.get("/freedmr/rules")
+async def get_freedmr_rules():
+    """Returns FreeDMR rules.py raw content and parsed Talkgroup Matrix bridges."""
+    import ast
+    path = _get_freedmr_file("rules.py")
+    content = ""
+    bridges = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            tree = ast.parse(content)
+            for stmt in tree.body:
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name) and target.id == "BRIDGES":
+                            bridges = ast.literal_eval(stmt.value)
+        except Exception as e:
+            logger.warning(f"Error parsing BRIDGES from rules.py: {e}")
+
+    return {
+        "path": path,
+        "content": content,
+        "bridges": bridges
+    }
+
+@router.post("/freedmr/rules")
+async def save_freedmr_rules(payload: dict):
+    """Saves FreeDMR rules.py from either raw Python code or structured Talkgroup Matrix."""
+    import ast
+    path = _get_freedmr_file("rules.py")
+    raw_content = payload.get("content")
+    bridges_data = payload.get("bridges")
+
+    final_code = ""
+    if raw_content is not None and str(raw_content).strip():
+        # Validate Python syntax before saving
+        try:
+            compile(raw_content, "<rules.py>", "exec")
+        except SyntaxError as e:
+            raise HTTPException(status_code=400, detail=f"Python Syntax Error pada baris {e.lineno}: {e.msg}")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Python code: {e}")
+        final_code = raw_content
+    elif isinstance(bridges_data, dict):
+        # Format structured bridges dictionary into clean Python code
+        lines = [
+            "# FreeDMR Conference Bridge & Rules Configuration",
+            "# Automatically maintained by NinjaRadio Web Admin",
+            "",
+            "BRIDGES = {"
+        ]
+        for tg, systems in bridges_data.items():
+            lines.append(f"    '{tg}': [")
+            for sys in systems:
+                s_name = sys.get("SYSTEM", "HOTSPOT-MASTER")
+                s_ts = sys.get("TS", 2)
+                s_tgid = sys.get("TGID", int(tg) if str(tg).isdigit() else 1025)
+                s_on = sys.get("ON", [s_tgid])
+                s_off = sys.get("OFF", [4000])
+                s_to = sys.get("TO", 60)
+                s_act = sys.get("ACTION", "VOICE")
+                lines.append(f"        {{'SYSTEM': '{s_name}', 'TS': {s_ts}, 'TGID': {s_tgid}, 'ON': {s_on}, 'OFF': {s_off}, 'TO': {s_to}, 'ACTION': '{s_act}'}},")
+            lines.append("    ],")
+        lines.append("}\n")
+        final_code = "\n".join(lines)
+    else:
+        raise HTTPException(status_code=400, detail="Missing 'content' or 'bridges' payload.")
+
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(final_code)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal menulis ke rules.py: {e}")
+
+    # Trigger live reload
+    _touch_freedmr_reload()
+
+    return {
+        "status": "SUCCESS",
+        "message": "rules.py (TG Matrix) berhasil disimpan dan FreeDMR di-reload secara live.",
+        "path": path
+    }
+
+@router.get("/freedmr/config")
+async def get_freedmr_config():
+    """Returns FreeDMR freedmr.cfg raw file content."""
+    path = _get_freedmr_file("freedmr.cfg")
+    content = ""
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Gagal membaca freedmr.cfg: {e}")
+    return {"path": path, "content": content}
+
+@router.post("/freedmr/config")
+async def save_freedmr_config(payload: dict):
+    """Saves FreeDMR freedmr.cfg and triggers reload."""
+    path = _get_freedmr_file("freedmr.cfg")
+    content = payload.get("content")
+    if content is None:
+        raise HTTPException(status_code=400, detail="Missing 'content' in payload.")
+
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(content))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal menulis freedmr.cfg: {e}")
+
+    _touch_freedmr_reload()
+    return {
+        "status": "SUCCESS",
+        "message": "freedmr.cfg berhasil disimpan dan FreeDMR di-reload.",
+        "path": path
+    }
+
+
 # ----------------- SvxLink & SvxReflector Multi-TG Gateway Management -----------------
 
 @router.get("/svxlink/telemetry")
