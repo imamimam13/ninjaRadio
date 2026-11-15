@@ -3309,63 +3309,6 @@ async def admin_suspend_registration(
     raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
 
 
-# ----------------- FreeDMR Configuration Management -----------------
-
-def get_freedmr_cfg_path() -> str:
-    candidates = [
-        "/app/freedmr/freedmr.cfg",
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../freedmr/freedmr.cfg")),
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../freedmr/freedmr.cfg")),
-        "/home/ubuntu/ninjaRadio/freedmr/freedmr.cfg",
-        "./freedmr/freedmr.cfg",
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return c
-    return candidates[0]
-
-
-@router.get("/freedmr/config")
-async def get_freedmr_config():
-    """Returns the content of freedmr.cfg for the admin panel editor."""
-    path = get_freedmr_cfg_path()
-    content = ""
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Gagal membaca freedmr.cfg: {e}")
-    return {"path": path, "content": content}
-
-
-@router.post("/freedmr/config")
-async def save_freedmr_config(payload: dict, _: None = Depends(_require_admin_pin)):
-    """Saves updated content into freedmr.cfg and triggers daemon reload."""
-    path = get_freedmr_cfg_path()
-    content = str(payload.get("content", "")).strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="Konten konfigurasi freedmr.cfg tidak boleh kosong.")
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content + "\n")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal menyimpan freedmr.cfg: {e}")
-
-    # Write reload marker
-    for d in ["/app/data", "./data"]:
-        if os.path.isdir(d):
-            try:
-                with open(os.path.join(d, ".freedmr_reload"), "w", encoding="utf-8") as f:
-                    f.write(str(time.time()))
-            except Exception:
-                pass
-            break
-
-    return {"status": "SUCCESS", "message": "Konfigurasi freedmr.cfg berhasil disimpan."}
-
-
 # ----------------- Callbook Auto-Sync URL Sources -----------------
 
 @router.get("/callbook/sync-sources")
