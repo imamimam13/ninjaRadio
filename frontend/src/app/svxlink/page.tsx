@@ -33,6 +33,7 @@ import {
 
 import { AdminGuard } from "@/components/AdminGuard";
 import { getIsAdminUnlocked, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
+import { generateSvxlinkConf } from "@/lib/svxlinkConfig";
 
 interface SvxChannel {
   id?: string;
@@ -146,88 +147,22 @@ export default function SvxLinkPage() {
   };
 
   const getGeneratedSvxlinkConf = () => {
-    const host = getEffectiveHost();
-    const logicName = genNodeType === "repeater" ? "RepeaterLogic" : "SimplexLogic";
-    const logicType = genNodeType === "repeater" ? "Repeater" : "Simplex";
-    const cleanCall = genCallsign.trim().toUpperCase() || "YB0NINJA";
-    const elModule = genEchoLink ? "MODULES=ModuleEchoLink\n" : "";
-    const elConfig = genEchoLink && genEchoCall.trim() ? `
-[ModuleEchoLink]
-NAME=EchoLink
-ID=2
-TIMEOUT=300
-SERVERS=servers.echolink.org
-CALLSIGN=${genEchoCall.trim().toUpperCase()}
-PASSWORD=${genEchoPass.trim()}
-SYSOPNAME=${cleanCall} Gateway
-LOCATION=NinjaRadio Reflector TG ${genDefaultTg}
-MAX_QSOS=10
-MAX_CONNECTIONS=11
-LINK_IDLE_TIMEOUT=300
-DESCRIPTION="Connected to NinjaRadio Reflector"
-` : "";
+    return generateSvxlinkConf({
+      nodeType: genNodeType,
+      callsign: genCallsign,
+      defaultTg: genDefaultTg,
+      monitoredTgs: genMonitoredTgs,
+      authKey: genAuthKey,
+      host: getEffectiveHost(),
+      echoLink: genEchoLink,
+      echoCall: genEchoCall,
+      echoPass: genEchoPass,
+      timeout: genTimeout
+    });
+  };
 
-    return `###############################################################################
-# SvxLink Node Configuration for NinjaRadio Multi-TG Reflector
-# Logic: ${logicName} <--> ReflectorLogic (Jembatan ReflectorLink)
-# Generated automatically by NinjaRadio NOC System
-###############################################################################
-
-[GLOBAL]
-LOGICS=${logicName},ReflectorLogic
-LINKS=ReflectorLink
-TIMESTAMP_FORMAT="%Y-%m-%d %H:%M:%S"
-CARD_SAMPLE_RATE=16000
-CARD_CHANNELS=1
-
-[${logicName}]
-TYPE=${logicType}
-RX=Rx1
-TX=Tx1
-${elModule}CALLSIGN=${cleanCall}
-SHORT_IDENT_INTERVAL=10
-LONG_IDENT_INTERVAL=60
-IDENT_ONLY_AFTER_TX=4
-DEFAULT_LANG=en_US
-RGR_SOUND_DELAY=250
-REPORT_CTCSS=0
-TX_TIMEOUT=${genTimeout}
-
-[ReflectorLogic]
-TYPE=Reflector
-HOSTS=${host}
-HOST_PORT=5300
-AUTH_KEY="${genAuthKey.trim() || "ninjaradio_svx"}"
-CALLSIGN="${cleanCall}"
-DEFAULT_TG=${genDefaultTg.trim() || "510"}
-MONITOR_TGS=${genMonitoredTgs.trim() || "510"}
-TG_SELECT_TIMEOUT=60
-ANNOUNCE_REMOTE_TALKERS=1
-
-[ReflectorLink]
-CONNECT_LOGICS=${logicName}:999:Reflector,ReflectorLogic
-DEFAULT_ACTIVE=1
-
-[Rx1]
-TYPE=Local
-AUDIO_DEV=alsa:plughw:0
-AUDIO_CHANNEL=0
-SQL_DET=VOX
-SQL_START_DELAY=0
-SQL_DELAY=0
-SQL_HANGTIME=400
-VOX_FILTER_DEPTH=20
-VOX_THRESH=1000
-DEEMPHASIS=0
-
-[Tx1]
-TYPE=Local
-AUDIO_DEV=alsa:plughw:0
-AUDIO_CHANNEL=0
-PTT_TYPE=NONE
-TIMEOUT=${genTimeout}
-PREEMPHASIS=0
-${elConfig}`;
+  const getDeployScript = () => {
+    return "sudo tee /etc/svxlink/svxlink.conf << 'EOF'\n" + getGeneratedSvxlinkConf() + "\nEOF\nsudo systemctl restart svxlink\nsudo systemctl status svxlink";
   };
 
   const fetchAll = async () => {
@@ -1489,11 +1424,7 @@ ${elConfig}`;
                     </button>
                   </div>
                   <pre className="text-emerald-300/90 overflow-x-auto select-all text-[11px] leading-relaxed">
-{`sudo tee /etc/svxlink/svxlink.conf << 'EOF'
-${getGeneratedSvxlinkConf()}
-EOF
-sudo systemctl restart svxlink
-sudo systemctl status svxlink`}
+                    {getDeployScript()}
                   </pre>
                 </div>
 
@@ -1551,7 +1482,7 @@ sudo systemctl status svxlink`}
           </div>
 
             {logs.length > 0 && (
-              <div className="pt-3 border-t border-slate-800">
+              <div className="bg-[#0b121e]/80 border border-cyan-900/30 rounded-2xl p-5 shadow-xl">
                 <span className="text-[11px] font-mono text-slate-400 block mb-2">LIVE SVXLINK BRIDGE LOGS:</span>
                 <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 max-h-48 overflow-y-auto text-[11px] font-mono text-slate-300 space-y-1">
                   {logs.map((line, i) => (
@@ -1562,8 +1493,7 @@ sudo systemctl status svxlink`}
                 </div>
               </div>
             )}
-          </div>
-        </main>
+          </main>
       </AdminGuard>
     </div>
   );
