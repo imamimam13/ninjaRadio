@@ -595,9 +595,10 @@ async def zello_websocket_worker():
                 record_log(f"Connected to Zello WebSocket. Logging in to '{bridge_state.channel}' as '{u_info}'...")
 
                 # 1. Send logon command
+                logon_seq = bridge_state.seq_counter
                 logon_msg = {
                     "command": "logon",
-                    "seq": bridge_state.seq_counter,
+                    "seq": logon_seq,
                     "auth_token": jwt_token,
                     "channel": bridge_state.channel
                 }
@@ -747,9 +748,10 @@ async def zello_websocket_worker():
                                 cmd = data.get("command") or data.get("action") or data.get("event")
 
                                 # Logon response
-                                if cmd == "logon" or data.get("success") is True:
-                                    bridge_state.channel_joined = True
-                                    record_log(f"Successfully joined Zello Channel: '{bridge_state.channel}'")
+                                if (cmd == "logon" or data.get("seq") == logon_seq or (not bridge_state.channel_joined and data.get("success") is True)) and "stream_id" not in data:
+                                    if not bridge_state.channel_joined:
+                                        bridge_state.channel_joined = True
+                                        record_log(f"Successfully joined Zello Channel: '{bridge_state.channel}'")
 
                                 # Response to our start_stream command
                                 if (data.get("command") == "start_stream") or ("stream_id" in data and cmd not in ("on_stream_start", "on_stream_stop") and data.get("success") is not False):
