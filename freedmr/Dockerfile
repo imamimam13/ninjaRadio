@@ -19,7 +19,7 @@ WORKDIR /opt/freedmr
 # Clone battle-tested FreeDMR (HBLink3-based DMR Server)
 RUN git clone --depth 1 https://github.com/francedmr/FreeDMR.git /opt/freedmr \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir dmr_utils3 twisted
+    && pip install --no-cache-dir dmr_utils3 twisted bitstring bitarray mysql-connector-python resettabletimer setproctitle configparser
 
 # Create alias directory
 RUN mkdir -p /opt/freedmr/json
