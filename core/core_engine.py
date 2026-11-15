@@ -1552,27 +1552,23 @@ usrpAGC = -20,10,100
         self.generate_configs()
         self.running = True
 
-        # 0. Start DMR Master Server
-        use_freedmr = os.getenv("USE_FREEDMR", "true").lower() == "true"
-        if not use_freedmr:
-            try:
-                hotspot_port = int(self.config.get("hotspot_port", DMR_MASTER_PORT))
-                hotspot_pass = str(self.config.get("hotspot_password", "ninjaradio_pass"))
-                server_id = int(self.config.get("server_dmr_id", 5109999))
-                server_call = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
-                self.dmr_master_server = HomeBrewMasterServer(
-                    port=hotspot_port,
-                    password=hotspot_pass,
-                    server_dmr_id=server_id,
-                    server_callsign=server_call,
-                    on_traffic=self.handle_dmr_master_traffic
-                )
-                await self.dmr_master_server.start()
-                logger.info(f"✓ Native DMR Master Server running on UDP port {hotspot_port}")
-            except Exception as e:
-                logger.error(f"Failed to start DMR Master Server on UDP {DMR_MASTER_PORT}: {e}")
-        else:
-            logger.info("✓ DMR Master routing active on FreeDMR engine (port 62031)")
+        # 0. Start Native DMR HomeBrew Master Server on UDP 62031
+        try:
+            hotspot_port = int(self.config.get("hotspot_port", DMR_MASTER_PORT))
+            hotspot_pass = str(self.config.get("hotspot_password", "ninjaradio_pass"))
+            server_id = int(self.config.get("server_dmr_id", 5109999))
+            server_call = str(self.config.get("server_callsign", "N1NJA")).strip().upper()
+            self.dmr_master_server = HomeBrewMasterServer(
+                port=hotspot_port,
+                password=hotspot_pass,
+                server_dmr_id=server_id,
+                server_callsign=server_call,
+                on_traffic=self.handle_dmr_master_traffic
+            )
+            await self.dmr_master_server.start()
+            logger.info(f"✓ Native DMR Master Server running on UDP port {hotspot_port}")
+        except Exception as e:
+            logger.error(f"Failed to start DMR Master Server on UDP {DMR_MASTER_PORT}: {e}")
 
         # Initialize Direct Z3DMR Engine
         try:
@@ -3091,36 +3087,6 @@ usrpAGC = -20,10,100
         cfg = self.config
         peers = cfg.get("peering", [])
         active_keys = set()
-
-        if os.getenv("USE_FREEDMR", "true").lower() == "true":
-            freedmr_key = "freedmr:62032"
-            active_keys.add(freedmr_key)
-            if freedmr_key not in self.peer_clients:
-                f_name = "FreeDMR-Master"
-                f_id = int(cfg.get("server_dmr_id", 5109999))
-                f_call = str(cfg.get("server_callsign", "N1NJA")).strip().upper()
-                f_pwd = str(cfg.get("hotspot_password", "ninjaradio_pass")).strip()
-                logger.info(f"[FreeDMR] 🌐 Connecting internal bridge client: {f_name} -> {freedmr_key}")
-                f_client = HomeBrewClient(
-                    name=f_name,
-                    host="freedmr",
-                    port=62032,
-                    dmr_id=f_id,
-                    callsign=f_call,
-                    password=f_pwd,
-                    subscribed_tgs="1025,510,5109,5101,5102,5103,1023,555,9990,91",
-                    rx_freq=str(cfg.get("rx_freq", "438.8000")),
-                    tx_freq=str(cfg.get("tx_freq", "438.8000")),
-                    color_code=int(cfg.get("color_code", 1)),
-                    tx_pwr=int(cfg.get("tx_pwr", 25)),
-                    software_id="NinjaRadio FreeDMR Link",
-                    package_id="N1NJA_Bridge",
-                    url="https://github.com/imamimam13/ninjaRadio",
-                    on_traffic=self.handle_peer_traffic,
-                    on_status_change=self.handle_peer_status_change
-                )
-                self.peer_clients[freedmr_key] = f_client
-                await f_client.start()
 
         for p in peers:
             if p.get("isActive") is True:
