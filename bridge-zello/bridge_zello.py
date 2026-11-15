@@ -639,10 +639,12 @@ async def zello_websocket_worker():
                             # Immediate burst: pre-fill mobile jitter buffer without sleeping
                             next_frame_time = now_m + 0.060
 
-                        # Zello client-to-server audio packet: [0x01][4B stream_id][4B packet_id=0][Opus payload]
-                        hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, 0)
-                        tx_packet_count += 1
+                        # Zello client-to-server audio packet: [0x01][4B stream_id][4B packet_id][Opus payload]
+                        # Sequential packet_id (0, 1, 2...) is required by Zello mobile jitter buffer for real-time live loudspeaker playback
+                        packet_id = bridge_state.dmr_stream_seq
                         bridge_state.dmr_stream_seq += 1
+                        tx_packet_count += 1
+                        hdr = bytes([0x01]) + struct.pack(">II", bridge_state.dmr_stream_id, packet_id)
                         await ws.send(hdr + opus_frame)
 
                         if tx_packet_count == 1:
@@ -703,6 +705,7 @@ async def zello_websocket_worker():
                                         record_log(f"DMR -> Zello TX Ended (stream {bridge_state.dmr_stream_id}, total {tx_packet_count} frames sent)")
                                     bridge_state.dmr_to_zello_streaming = False
                                     bridge_state.dmr_stream_id = None
+                                    bridge_state.dmr_stream_seq = 0
                                     bridge_state.dmr_tx_pcm_buf.clear()
                                     pending_audio.clear()
                                     tx_packet_count = 0
@@ -782,6 +785,7 @@ async def zello_websocket_worker():
                                         record_log(f"DMR -> Zello TX Released (stream {bridge_state.dmr_stream_id}, total {tx_packet_count} frames sent)")
                                 bridge_state.dmr_to_zello_streaming = False
                                 bridge_state.dmr_stream_id = None
+                                bridge_state.dmr_stream_seq = 0
                                 bridge_state.dmr_tx_pcm_buf.clear()
                                 pending_audio.clear()
                                 tx_packet_count = 0
