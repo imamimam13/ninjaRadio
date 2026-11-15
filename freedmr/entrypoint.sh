@@ -80,6 +80,31 @@ if os.path.exists(hb_path):
         print('✓ Integrated dynamic Self-Care DMR password authentication into FreeDMR')
 " 2>/dev/null || true
 
+# Make PEER systems (CORE-BRIDGE -> NinjaRadio core:62035) an always-ACTIVE member of every
+# dynamically created TG bridge, on the same slot the bridge was created on. Without this,
+# FreeDMR creates the PEER entries as ACTIVE=False and hotspot traffic never reaches core/peers.
+python3 - <<'PYEOF' || true
+import os
+bm = '/opt/freedmr/bridge_master.py'
+if os.path.exists(bm):
+    src = open(bm, 'r', encoding='utf-8').read()
+    anchor = "            if _system == _sourcesystem:\n                    if _slot == 1:"
+    if 'NINJA_PEER_ALWAYS_ACTIVE' not in src and anchor in src:
+        inject = (
+            "            if CONFIG['SYSTEMS'][_system]['MODE'] == 'PEER':  # NINJA_PEER_ALWAYS_ACTIVE\n"
+            "                BRIDGES[_tgid_s].append({'SYSTEM': _system, 'TS': 1, 'TGID': _tgid,'ACTIVE': _slot == 1,'TIMEOUT': 0,'TO_TYPE': 'NONE','OFF': [],'ON': [_tgid,],'RESET': [], 'TIMER': time()})\n"
+            "                BRIDGES[_tgid_s].append({'SYSTEM': _system, 'TS': 2, 'TGID': _tgid,'ACTIVE': _slot == 2,'TIMEOUT': 0,'TO_TYPE': 'NONE','OFF': [],'ON': [_tgid,],'RESET': [], 'TIMER': time()})\n"
+            "                continue\n"
+        )
+        src = src.replace(anchor, inject + anchor, 1)
+        open(bm, 'w', encoding='utf-8').write(src)
+        print('✓ Patched FreeDMR: PEER systems always active in TG bridges')
+    elif 'NINJA_PEER_ALWAYS_ACTIVE' in src:
+        print('✓ FreeDMR PEER-always-active patch already present')
+    else:
+        print('⚠ FreeDMR PEER patch anchor not found!')
+PYEOF
+
 # Determine FreeDMR master script
 SCRIPT="bridge_master.py"
 if [ ! -f "/opt/freedmr/$SCRIPT" ]; then
