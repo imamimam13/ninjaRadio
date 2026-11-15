@@ -21,7 +21,13 @@ import {
   Settings,
   Save,
   Sliders,
-  X
+  X,
+  Code,
+  Plus,
+  Trash2,
+  FileCode,
+  Terminal,
+  Info
 } from "lucide-react";
 
 import { AdminGuard } from "@/components/AdminGuard";
@@ -109,11 +115,125 @@ interface DmrConfig {
   max_hotspots?: number;
 }
 
+interface BridgeSystem {
+  SYSTEM: string;
+  TS: number;
+  TGID: number;
+  ON: number[];
+  OFF: number[];
+  TO: number;
+  ACTION: string;
+}
+
+type BridgesMap = Record<string, BridgeSystem[]>;
+
 export default function ServerDmrPage() {
   const { isConnected } = useLiveMonitor();
   const [telemetry, setTelemetry] = useState<ServerDmrTelemetry | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // FreeDMR Rules & Matrix Editor State
+  const [showRulesModal, setShowRulesModal] = useState(false);
+  const [rulesTab, setRulesTab] = useState<"matrix" | "code" | "cfg">("matrix");
+  const [rawRulesCode, setRawRulesCode] = useState("");
+  const [rawCfgCode, setRawCfgCode] = useState("");
+  const [bridgesMap, setBridgesMap] = useState<BridgesMap>({});
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesSaving, setRulesSaving] = useState(false);
+  const [rulesFeedback, setRulesFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // New TG in matrix
+  const [newTg, setNewTg] = useState("");
+  const [newTs, setNewTs] = useState(2);
+  const [newTimeout, setNewTimeout] = useState(60);
+
+  const fetchRules = async () => {
+    setRulesLoading(true);
+    setRulesFeedback(null);
+    try {
+      const resRules = await fetch("/api/freedmr/rules");
+      if (resRules.ok) {
+        const data = await resRules.json();
+        setRawRulesCode(data.content || "");
+        setBridgesMap(data.bridges || {});
+      }
+      const resCfg = await fetch("/api/freedmr/config");
+      if (resCfg.ok) {
+        const dataCfg = await resCfg.json();
+        setRawCfgCode(dataCfg.content || "");
+      }
+    } catch (err: any) {
+      setRulesFeedback({ type: "error", text: "Gagal memuat konfigurasi rules: " + err.message });
+    } finally {
+      setRulesLoading(false);
+    }
+  };
+
+  const handleSaveRules = async () => {
+    setRulesSaving(true);
+    setRulesFeedback(null);
+    try {
+      if (rulesTab === "matrix") {
+        const res = await fetch("/api/freedmr/rules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bridges: bridgesMap })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Gagal menyimpan matrix");
+        setRulesFeedback({ type: "success", text: "✓ Matriks Talkgroup berhasil disimpan dan FreeDMR di-reload!" });
+        fetchRules();
+      } else if (rulesTab === "code") {
+        const res = await fetch("/api/freedmr/rules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: rawRulesCode })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Gagal menyimpan rules.py");
+        setRulesFeedback({ type: "success", text: "✓ rules.py berhasil disimpan dan FreeDMR di-reload!" });
+        fetchRules();
+      } else if (rulesTab === "cfg") {
+        const res = await fetch("/api/freedmr/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: rawCfgCode })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Gagal menyimpan freedmr.cfg");
+        setRulesFeedback({ type: "success", text: "✓ freedmr.cfg berhasil disimpan dan FreeDMR di-reload!" });
+      }
+    } catch (err: any) {
+      setRulesFeedback({ type: "error", text: err.message });
+    } finally {
+      setRulesSaving(false);
+    }
+  };
+
+  const handleAddTgToMatrix = () => {
+    const tgClean = newTg.trim();
+    if (!tgClean || !/^\d+$/.test(tgClean)) {
+      setRulesFeedback({ type: "error", text: "Nomor Talkgroup harus angka valid (contoh: 510, 1025)" });
+      return;
+    }
+    const tgid = parseInt(tgClean, 10);
+    const updated = { ...bridgesMap };
+    updated[tgClean] = [
+      { SYSTEM: "HOTSPOT-MASTER", TS: newTs, TGID: tgid, ON: [tgid], OFF: [4000], TO: newTimeout, ACTION: "VOICE" },
+      { SYSTEM: "CORE-BRIDGE", TS: newTs, TGID: tgid, ON: [tgid], OFF: [4000], TO: newTimeout, ACTION: "VOICE" }
+    ];
+    setBridgesMap(updated);
+    setNewTg("");
+    setRulesFeedback({ type: "success", text: `TG ${tgClean} ditambahkan ke Matriks. Klik 'Simpan & Terapkan' untuk mengaktifkannya di FreeDMR.` });
+  };
+
+  const handleDeleteTgFromMatrix = (tgKey: string) => {
+    const updated = { ...bridgesMap };
+    delete updated[tgKey];
+    setBridgesMap(updated);
+    setRulesFeedback({ type: "success", text: `TG ${tgKey} dihapus dari Matriks. Klik 'Simpan & Terapkan' untuk memutakhirkan FreeDMR.` });
+  };
 
   const fetchTelemetry = async () => {
     try {
@@ -212,6 +332,18 @@ export default function ServerDmrPage() {
               <Settings className="w-3.5 h-3.5 text-purple-400" />
               <span>PENGATURAN DMR (PIN)</span>
             </a>
+
+            <button
+              onClick={() => {
+                setShowRulesModal(true);
+                fetchRules();
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-950 to-blue-950 hover:from-cyan-900 hover:to-blue-900 text-cyan-300 border border-cyan-600/60 text-xs font-mono font-bold transition-all shadow-md hover:scale-[1.02]"
+              title="Buka Editor Matriks Talkgroup & Rules FreeDMR"
+            >
+              <Layers className="w-3.5 h-3.5 text-cyan-400" />
+              <span>🎛️ TG MATRIX & RULES</span>
+            </button>
 
             <button
               onClick={handleManualRefresh}
@@ -530,6 +662,279 @@ export default function ServerDmrPage() {
             </table>
           </div>
         </div>
+
+        {/* FreeDMR TG Matrix & Rules Editor Modal */}
+        {showRulesModal && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
+            <div className="bg-[#0b121e] border border-cyan-800/60 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-[0_0_50px_rgba(6,182,212,0.15)] overflow-hidden">
+              {/* Modal Header */}
+              <div className="p-4 sm:p-5 border-b border-cyan-950/80 bg-slate-950/60 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-800 flex items-center justify-center">
+                    <Layers className="w-5 h-5 text-cyan-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-base sm:text-lg font-black font-heading text-white tracking-wide flex items-center gap-2">
+                      <span>TALKGROUP MATRIX & RULES</span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">
+                        FreeDMR Engine
+                      </span>
+                    </h2>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">
+                      Atur routing conference bridge MMDVM Hotspot ↔ Web PTT & Analog USRP
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setShowRulesModal(false)}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800/60 rounded-xl transition-all"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Navigation Tabs */}
+              <div className="flex items-center gap-1 px-4 sm:px-6 pt-3 border-b border-slate-800 bg-slate-950/40 text-xs font-mono">
+                <button
+                  onClick={() => setRulesTab("matrix")}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg font-bold transition-all border-b-2 ${
+                    rulesTab === "matrix"
+                      ? "text-cyan-400 border-cyan-400 bg-slate-900/60"
+                      : "text-slate-400 border-transparent hover:text-slate-200"
+                  }`}
+                >
+                  <Layers className="w-4 h-4" />
+                  <span>🎛️ TG MATRIX (VISUAL)</span>
+                </button>
+
+                <button
+                  onClick={() => setRulesTab("code")}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg font-bold transition-all border-b-2 ${
+                    rulesTab === "code"
+                      ? "text-cyan-400 border-cyan-400 bg-slate-900/60"
+                      : "text-slate-400 border-transparent hover:text-slate-200"
+                  }`}
+                >
+                  <FileCode className="w-4 h-4" />
+                  <span>📜 rules.py (RAW CODE)</span>
+                </button>
+
+                <button
+                  onClick={() => setRulesTab("cfg")}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg font-bold transition-all border-b-2 ${
+                    rulesTab === "cfg"
+                      ? "text-cyan-400 border-cyan-400 bg-slate-900/60"
+                      : "text-slate-400 border-transparent hover:text-slate-200"
+                  }`}
+                >
+                  <Terminal className="w-4 h-4" />
+                  <span>⚙️ freedmr.cfg (SERVER)</span>
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+                {rulesLoading ? (
+                  <div className="py-16 text-center text-slate-400 font-mono text-sm">
+                    <RefreshCw className="w-8 h-8 mx-auto mb-3 animate-spin text-cyan-400" />
+                    <div>Memuat konfigurasi FreeDMR...</div>
+                  </div>
+                ) : rulesTab === "matrix" ? (
+                  <div className="space-y-4">
+                    <div className="p-3 bg-cyan-950/30 border border-cyan-800/40 rounded-xl text-xs text-cyan-300 font-mono flex items-start gap-2.5">
+                      <Info className="w-4 h-4 text-cyan-400 mt-0.5 shrink-0" />
+                      <div>
+                        <strong>Matriks Talkgroup (Conference Bridges):</strong> Setiap Talkgroup dihubungkan secara simetris antara 
+                        <span className="text-white font-bold"> HOTSPOT-MASTER</span> (port 62031) dan 
+                        <span className="text-white font-bold"> CORE-BRIDGE</span> (Web Audio / USRP port 62032). Perubahan langsung aktif setelah disimpan.
+                      </div>
+                    </div>
+
+                    {/* Table of Active TG Bridges */}
+                    <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/70">
+                      <table className="w-full text-left border-collapse text-xs font-mono">
+                        <thead>
+                          <tr className="bg-slate-900/80 text-slate-400 border-b border-slate-800">
+                            <th className="p-3 font-bold">TALKGROUP</th>
+                            <th className="p-3 font-bold">SLOT (TS)</th>
+                            <th className="p-3 font-bold">BRIDGED SYSTEMS</th>
+                            <th className="p-3 font-bold">TIMEOUT</th>
+                            <th className="p-3 font-bold">MODE</th>
+                            <th className="p-3 font-bold text-center">AKSI</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60">
+                          {Object.keys(bridgesMap).length > 0 ? (
+                            Object.entries(bridgesMap).map(([tg, systems]) => {
+                              const ts = systems[0]?.TS || 2;
+                              const timeout = systems[0]?.TO || 60;
+                              const act = systems[0]?.ACTION || "VOICE";
+                              return (
+                                <tr key={tg} className="hover:bg-slate-800/40 transition-colors">
+                                  <td className="p-3">
+                                    <span className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800 text-cyan-300 font-bold">
+                                      TG {tg}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-slate-300 font-bold">
+                                    <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300">
+                                      TS {ts}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-slate-400">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {systems.map((s, idx) => (
+                                        <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-slate-900 text-slate-300 rounded border border-slate-800">
+                                          {s.SYSTEM}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                  <td className="p-3 text-slate-400">{timeout}s</td>
+                                  <td className="p-3 text-emerald-400 font-bold">{act}</td>
+                                  <td className="p-3 text-center">
+                                    <button
+                                      onClick={() => handleDeleteTgFromMatrix(tg)}
+                                      className="p-1.5 text-rose-400 hover:text-rose-200 hover:bg-rose-950/60 rounded-lg transition-all"
+                                      title={`Hapus TG ${tg} dari Matriks`}
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          ) : (
+                            <tr>
+                              <td colSpan={6} className="p-6 text-center text-slate-500">
+                                Belum ada Talkgroup yang terdaftar di Matriks.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Add TG Form */}
+                    <div className="p-4 bg-slate-900/50 border border-slate-800 rounded-xl space-y-3">
+                      <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                        <Plus className="w-4 h-4 text-cyan-400" />
+                        <span>TAMBAH TALKGROUP KE MATRIKS</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-mono text-slate-400 mb-1">Nomor TG</label>
+                          <input
+                            type="text"
+                            placeholder="Contoh: 5104"
+                            value={newTg}
+                            onChange={(e) => setNewTg(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-lg px-3 py-1.5 text-xs font-mono text-white outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-mono text-slate-400 mb-1">Timeslot (TS)</label>
+                          <select
+                            value={newTs}
+                            onChange={(e) => setNewTs(parseInt(e.target.value, 10))}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-lg px-3 py-1.5 text-xs font-mono text-white outline-none"
+                          >
+                            <option value={2}>Timeslot 2 (TS2 - Standar)</option>
+                            <option value={1}>Timeslot 1 (TS1)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-mono text-slate-400 mb-1">Timeout (detik)</label>
+                          <input
+                            type="number"
+                            value={newTimeout}
+                            onChange={(e) => setNewTimeout(parseInt(e.target.value, 10) || 60)}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-lg px-3 py-1.5 text-xs font-mono text-white outline-none"
+                          />
+                        </div>
+                        <div className="flex items-end">
+                          <button
+                            onClick={handleAddTgToMatrix}
+                            className="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold px-3 py-1.5 rounded-lg text-xs font-mono transition-all flex items-center justify-center gap-1.5"
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>TAMBAHKAN</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : rulesTab === "code" ? (
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-400 font-mono flex items-center justify-between">
+                      <span>Python Code Editor: <code>rules.py</code></span>
+                      <span className="text-[11px] text-cyan-400">Sintaks Python divalidasi otomatis sebelum disimpan</span>
+                    </div>
+                    <textarea
+                      value={rawRulesCode}
+                      onChange={(e) => setRawRulesCode(e.target.value)}
+                      spellCheck={false}
+                      rows={16}
+                      className="w-full font-mono text-xs bg-slate-950 text-emerald-400 p-4 rounded-xl border border-slate-800 focus:border-cyan-500 outline-none resize-y leading-relaxed shadow-inner"
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-400 font-mono flex items-center justify-between">
+                      <span>Configuration File: <code>freedmr.cfg</code></span>
+                      <span className="text-[11px] text-slate-400">Port MMDVM 62031, Core Bridge 62032, OpenBridge 62030</span>
+                    </div>
+                    <textarea
+                      value={rawCfgCode}
+                      onChange={(e) => setRawCfgCode(e.target.value)}
+                      spellCheck={false}
+                      rows={16}
+                      className="w-full font-mono text-xs bg-slate-950 text-cyan-300 p-4 rounded-xl border border-slate-800 focus:border-cyan-500 outline-none resize-y leading-relaxed shadow-inner"
+                    />
+                  </div>
+                )}
+
+                {/* Feedback Alert */}
+                {rulesFeedback && (
+                  <div
+                    className={`p-3 rounded-xl text-xs font-mono flex items-center gap-2 ${
+                      rulesFeedback.type === "success"
+                        ? "bg-emerald-950/80 text-emerald-300 border border-emerald-800"
+                        : "bg-rose-950/80 text-rose-300 border border-rose-800"
+                    }`}
+                  >
+                    {rulesFeedback.type === "success" ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    )}
+                    <span>{rulesFeedback.text}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 sm:p-5 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between gap-3">
+                <button
+                  onClick={() => setShowRulesModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-mono font-bold transition-all"
+                >
+                  TUTUP
+                </button>
+
+                <button
+                  onClick={handleSaveRules}
+                  disabled={rulesSaving}
+                  className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-400 hover:from-cyan-400 hover:to-emerald-300 text-slate-950 text-xs font-mono font-black tracking-wider transition-all shadow-[0_0_20px_rgba(6,182,212,0.3)] disabled:opacity-50"
+                >
+                  <Save className={`w-4 h-4 ${rulesSaving ? "animate-spin" : ""}`} />
+                  <span>{rulesSaving ? "MENYIMPAN & MERE-LOAD..." : "SIMPAN & TERAPKAN (LIVE RELOAD)"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
       </AdminGuard>
     </div>

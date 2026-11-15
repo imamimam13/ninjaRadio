@@ -1340,6 +1340,25 @@ export default function SettingsPage() {
                   <p className="text-[11px] text-slate-500 mt-1">Jeda waktu sebelum master memutar kembali rekaman suara pengguna.</p>
                 </div>
               </div>
+
+              {/* FreeDMR Talkgroup Matrix Shortcut */}
+              <div className="p-4 bg-gradient-to-r from-cyan-950/60 via-slate-900 to-blue-950/60 border border-cyan-800/60 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mt-2">
+                <div>
+                  <div className="text-white font-bold text-xs flex items-center gap-1.5 font-mono">
+                    <Layers className="w-4 h-4 text-cyan-400" />
+                    <span>FREEDMR TALKGROUP MATRIX & RULES (rules.py)</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                    Atur matriks bridging Talkgroup (Slot 1 / Slot 2), timeout, dan kode rules.py FreeDMR langsung di Server DMR.
+                  </div>
+                </div>
+                <a
+                  href="/serverdmr"
+                  className="px-3.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-black transition-all shrink-0 shadow-md"
+                >
+                  BUKA TG MATRIX →
+                </a>
+              </div>
             </div>
           )}
 

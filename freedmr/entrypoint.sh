@@ -87,4 +87,34 @@ if os.path.exists(path):
 " 2>/dev/null || true
 
 cd /opt/freedmr
-exec python3 freedmr.py
+
+# Run FreeDMR with automatic live-reload watcher
+echo "✓ FreeDMR Engine ready. Watching for rules/config updates..."
+while true; do
+    echo "[FreeDMR] Starting DMR Master routing daemon..."
+    python3 freedmr.py &
+    FREEDMR_PID=$!
+    
+    # Background watcher for reload trigger
+    (
+        LAST_TOUCH=""
+        while kill -0 $FREEDMR_PID 2>/dev/null; do
+            if [ -f "/app/data/.freedmr_reload" ]; then
+                TOUCH_TIME=$(stat -c %Y /app/data/.freedmr_reload 2>/dev/null || stat -f %m /app/data/.freedmr_reload 2>/dev/null)
+                if [ "$TOUCH_TIME" != "$LAST_TOUCH" ] && [ -n "$LAST_TOUCH" ]; then
+                    echo "[FreeDMR] Reload triggered via .freedmr_reload! Restarting FreeDMR..."
+                    kill -TERM $FREEDMR_PID 2>/dev/null || true
+                    break
+                fi
+                LAST_TOUCH=$TOUCH_TIME
+            fi
+            sleep 2
+        done
+    ) &
+    WATCHER_PID=$!
+
+    wait $FREEDMR_PID || true
+    kill -9 $WATCHER_PID 2>/dev/null || true
+    echo "[FreeDMR] Process terminated, restarting in 1 second..."
+    sleep 1
+done

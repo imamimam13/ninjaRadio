@@ -294,9 +294,12 @@ export default function RadioPocketMode() {
                 const scProf: UserProfile = {
                   id: `sc_${u.id}`,
                   callsign: u.callsign,
-                  name: u.name,
+                  displayName: u.name || u.callsign,
                   dmrId: u.dmr_id,
                   category: (u.organization || "Amatir") as any,
+                  allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 1025, 9990, 91],
+                  badgeColor: "bg-cyan-900 text-cyan-300",
+                  networkTag: "Akun Terverifikasi",
                   isMonitorOnly: false,
                   defaultTg: 510,
                 };
@@ -2948,9 +2951,12 @@ export default function RadioPocketMode() {
                       const scProf: UserProfile = {
                         id: `sc_${data.user.id}`,
                         callsign: data.user.callsign,
-                        name: data.user.name,
+                        displayName: data.user.name || data.user.callsign,
                         dmrId: data.user.dmr_id,
                         category: (data.user.organization || "Amatir") as any,
+                        allowedTalkgroups: [510, 5101, 5102, 5103, 5109, 5108, 1025, 9990, 91],
+                        badgeColor: "bg-cyan-900 text-cyan-300",
+                        networkTag: "Akun Terverifikasi",
                         isMonitorOnly: false,
                         defaultTg: 510,
                       };
