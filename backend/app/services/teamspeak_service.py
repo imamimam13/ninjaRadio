@@ -130,7 +130,7 @@ async def get_teamspeak_telemetry(force: bool = False) -> Dict[str, Any]:
     if not force and (now - _ts3_cache["last_check"] < 3.0):
         return _ts3_cache["data"]
 
-    resp_channels = await send_ts3_command("channellist")
+    resp_channels = await send_ts3_command("channellist -topic")
     if resp_channels is None:
         _ts3_cache["last_check"] = now
         _ts3_cache["data"]["online"] = False
@@ -224,7 +224,7 @@ async def notify_ts3_talker_change(tg: int, callsign: str):
         _last_ts3_talker_update[tg_val] = clean_call
 
         if clean_call:
-            esc_topic = ts_escape(f"🎙️ ACTIVE TALKER: {clean_call} (DMR TG {tg_val})")
+            esc_topic = ts_escape(f"[TALK] {clean_call} (DMR TG {tg_val})")
             cmd = f"channeledit cid={cid} channel_topic={esc_topic}"
         else:
             esc_topic = ts_escape(f"DMR TG {tg_val} (Standby)")
