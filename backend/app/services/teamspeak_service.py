@@ -62,7 +62,7 @@ def parse_ts3_response(raw_text: str) -> List[Dict[str, str]]:
     items = []
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     for line in lines:
-        if line.startswith("error id=") or "TS3" in line or "Welcome" in line:
+        if line.startswith("error id=") or line == "TS3" or "Welcome" in line:
             continue
         entries = line.split("|")
         for entry in entries:

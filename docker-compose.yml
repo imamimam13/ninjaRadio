@@ -198,6 +198,20 @@ services:
           - zello-bridge
           - bridge-zello
 
+  # 3e. TeamSpeak 3 Headless Audio Bot Bridge (Anti Phone-Home)
+  teamspeak-bridge:
+    build:
+      context: ./bridge-teamspeak
+      dockerfile: Dockerfile
+    container_name: ninjaradio_ts3_bridge
+    restart: always
+    network_mode: host
+    volumes:
+      - ./bridge-teamspeak/data:/app/data
+      - ninjaradio_data:/app/ninja_data:ro
+    depends_on:
+      - teamspeak-server
+
   # 4. Backend API & Live WebSocket Hub (FastAPI)
   backend:
     build:
