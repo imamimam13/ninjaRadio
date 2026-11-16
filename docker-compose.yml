@@ -88,6 +88,7 @@ services:
     network_mode: host
     volumes:
       - ts3_data:/app/logs
+      - ts3_data:/app/data
       - ts3_files:/app/files
 
   # 3. Mumble VoIP <--> DMR USRP Audio Bridge Bot
