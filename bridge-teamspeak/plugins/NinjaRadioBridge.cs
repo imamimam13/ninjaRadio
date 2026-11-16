@@ -19,17 +19,14 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     private static readonly NLog.Logger Log = NLog.LogManager.GetCurrentClassLogger();
 
     // Port definitions
-    private const int TeamspeakBridgePort = 12352;
     private const int CoreIngressPort = 32100;
     private static readonly string CoreHost = Environment.GetEnvironmentVariable("CORE_HOST") ?? "172.18.0.8";
 
-    // Shared UDP Socket for incoming audio from Core Engine (DMR -> TS3)
-    private static Socket rxSocket;
-    private static Thread rxThread;
-    private static volatile bool rxRunning = false;
-    private static readonly ConcurrentDictionary<int, NinjaRadioBridge> instancesByTg = new ConcurrentDictionary<int, NinjaRadioBridge>();
-    private static int instanceCount = 0;
-    private static readonly object lockObj = new object();
+    // Dedicated UDP Socket for incoming audio from Core Engine (DMR -> TS3)
+    private Socket rxSocket;
+    private Thread rxThread;
+    private volatile bool rxRunning = false;
+    private int rxPort = 12352;
 
     // Bot specific properties
     private readonly TsFullClient fullClient;
@@ -110,18 +107,23 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         hangoverTimer = new Timer(OnHangoverTick, null, 100, 100);
 
         fullClient.OutStream = this;
-        instancesByTg[targetTg] = this;
 
-        lock (lockObj)
+        rxPort = GetRxPortForTg(targetTg);
+        StartRxListener();
+
+        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}");
+    }
+
+    private int GetRxPortForTg(int tg)
+    {
+        switch (tg)
         {
-            instanceCount++;
-            if (rxSocket == null)
-            {
-                StartSharedRxListener();
-            }
+            case 1025: return 12352;
+            case 510990: return 12353;
+            case 510: return 12354;
+            case 5109: return 12355;
+            default: return 12352;
         }
-
-        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{botName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}");
     }
 
     private void ResolveBotTarget(string name)
@@ -149,25 +151,25 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
     }
 
-    private static void StartSharedRxListener()
+    private void StartRxListener()
     {
         try
         {
             rxSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             rxSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            rxSocket.Bind(new IPEndPoint(IPAddress.Any, TeamspeakBridgePort));
+            rxSocket.Bind(new IPEndPoint(IPAddress.Any, rxPort));
             rxRunning = true;
-            rxThread = new Thread(RxListenerLoop) { IsBackground = true, Name = "TS3Bridge-RxListener" };
+            rxThread = new Thread(RxListenerLoop) { IsBackground = true, Name = $"TS3Bridge-Rx-{targetTg}" };
             rxThread.Start();
-            Console.WriteLine($"[NinjaRadioBridge] ✓ Shared DMR RX Listener active on UDP port {TeamspeakBridgePort}");
+            Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' (TG {targetTg}) listening on UDP port {rxPort}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[NinjaRadioBridge] ❌ Failed to bind RX port {TeamspeakBridgePort}: {ex.Message}");
+            Console.WriteLine($"[NinjaRadioBridge] ❌ Failed to bind RX port {rxPort} for TG {targetTg}: {ex.Message}");
         }
     }
 
-    private static void RxListenerLoop()
+    private void RxListenerLoop()
     {
         byte[] buffer = new byte[2048];
         while (rxRunning)
@@ -201,13 +203,10 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                     byte[] pcmPayload = new byte[payloadLen];
                     Array.Copy(buffer, pcmOffset, pcmPayload, 0, payloadLen);
 
-                    if (instancesByTg.TryGetValue((int)tg, out var botInstance))
-                    {
-                        botInstance.PlayRxAudio(pcmPayload, keyFlag == 1, (int)dmrId, callerCall);
-                    }
+                    PlayRxAudio(pcmPayload, keyFlag == 1, (int)dmrId, callerCall);
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 if (!rxRunning) break;
                 Thread.Sleep(10);
@@ -478,24 +477,15 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         encoder?.Dispose();
         txSocket?.Dispose();
 
-        instancesByTg.TryRemove(targetTg, out _);
+        rxRunning = false;
+        try { rxSocket?.Close(); } catch { }
+        rxSocket = null;
 
         if (currentMorphedCall != null)
         {
             try { _ = ts3Client.ChangeName(defaultBotName); } catch { }
         }
 
-        lock (lockObj)
-        {
-            instanceCount--;
-            if (instanceCount <= 0)
-            {
-                rxRunning = false;
-                try { rxSocket?.Close(); } catch { }
-                rxSocket = null;
-            }
-        }
-
-        Console.WriteLine($"[NinjaRadioBridge] Bot '{botName}' disposed.");
+        Console.WriteLine($"[NinjaRadioBridge] Bot '{defaultBotName}' disposed.");
     }
 }
