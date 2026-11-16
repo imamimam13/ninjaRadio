@@ -724,6 +724,10 @@ PREEMPHASIS=0
             if tg and tg > 0:
                 self.select_talkgroup(tg)
 
+            tx_call = getattr(self, "current_tx_call", None)
+            if tx_call:
+                self._notify_reflector_talker(tx_call, tg or self.tg, sync=False)
+
             self.last_dmr_rx_play = time.time()
             self._set_squelch(True)
 
@@ -750,6 +754,8 @@ PREEMPHASIS=0
             # 1. Close Rx1 squelch 250ms after DMR RX stops (a553e82)
             if self.squelch_is_open and (now - self.last_dmr_rx_play > 0.25):
                 self._set_squelch(False)
+                if getattr(self, "_last_delegated_call", ""):
+                    self._notify_reflector_talker("", self.tg, sync=False)
 
             # 2. Release Direct DMR PTT 450ms after SvxLink Tx1 audio stops
             if self.is_transmitting_to_dmr and (now - self.last_svx_audio_rx > 0.45):
@@ -967,10 +973,7 @@ PREEMPHASIS=0
                                 return False
                             now_ts = time.time()
                             for bot in list(GATEWAY_POOL.values()) + [self]:
-                                if (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0)) and c_up in {
-                                    bot._last_delegated_call.upper(),
-                                    (getattr(bot, "current_tx_call", None) or "").upper(),
-                                }:
+                                if bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0):
                                     return True
                             return False
 
@@ -1010,7 +1013,6 @@ PREEMPHASIS=0
                             now_ts = time.time()
                             is_delegated_echo = any(
                                 (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0))
-                                and c_up in {bot._last_delegated_call.upper(), (getattr(bot, "current_tx_call", None) or "").upper()}
                                 for bot in list(GATEWAY_POOL.values()) + [self]
                             )
                             if not is_delegated_echo and t_call.upper() != self.bot_user.upper() and t_call.upper() not in internal_bot_names and not t_call.upper().startswith("SVX-"):
@@ -1207,10 +1209,10 @@ class SvxBridgeApiHandler(BaseHTTPRequestHandler):
                     "tg": bot.tg,
                     "slot": bot.slot,
                     "connected": bot.connected,
-                    "active_talker": bot.active_talker_call or (
+                    "active_talker": (
                         getattr(bot, "current_tx_call", None)
                         if (time.time() - getattr(bot, "last_dmr_rx_play", 0) < 1.8) and getattr(bot, "current_tx_call", None)
-                        else None
+                        else bot.active_talker_call
                     ),
                     "status": "CONNECTED" if bot.connected else "CONNECTING"
                 }
@@ -1244,7 +1246,11 @@ class SvxBridgeApiHandler(BaseHTTPRequestHandler):
                     "tg": bot.tg,
                     "slot": bot.slot,
                     "connected": bot.connected,
-                    "active_talker": bot.active_talker_call
+                    "active_talker": (
+                        getattr(bot, "current_tx_call", None)
+                        if (time.time() - getattr(bot, "last_dmr_rx_play", 0) < 1.8) and getattr(bot, "current_tx_call", None)
+                        else bot.active_talker_call
+                    )
                 }
                 for bot in GATEWAY_POOL.values()
             ]
