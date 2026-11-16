@@ -27,6 +27,22 @@ MUMBLE_BRIDGE_PORT = 12346
 SVXLINK_BRIDGE_PORT = 12348
 ZELLO_BRIDGE_PORT = 12351
 TEAMSPEAK_BRIDGE_PORT = 12352
+
+def get_ts3_bridge_port(tg: int) -> int:
+    try:
+        t = int(tg or 0)
+    except Exception:
+        t = 0
+    if t == 1025:
+        return 12352
+    elif t == 510990:
+        return 12353
+    elif t == 510:
+        return 12354
+    elif t == 5109:
+        return 12355
+    return 12352
+
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 WEB_PTT_PORT = int(os.getenv("WEB_PTT_PORT", 32100))
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
@@ -2196,7 +2212,7 @@ usrpAGC = -20,10,100
                                 pass
                             try:
                                 ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
-                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(active_tg)))
                             except Exception:
                                 pass
                             # Forward unkey frame to DVSwitch Mobile clients
@@ -2309,7 +2325,7 @@ usrpAGC = -20,10,100
                         try:
                             call_b = (target_call or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                             ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, target_tg, target_dmr_id, target_slot, 0, call_b) + chunk_pcm
-                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(target_tg)))
                         except Exception:
                             pass
 
@@ -2521,7 +2537,7 @@ usrpAGC = -20,10,100
                                         try:
                                             call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                                             ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
-                                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(tg)))
                                         except Exception:
                                             pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -2572,7 +2588,7 @@ usrpAGC = -20,10,100
                             if not is_ts3:
                                 try:
                                     ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 16) + (b"\x00" * 320)
-                                    self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                    self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(tg)))
                                 except Exception:
                                     pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -3138,7 +3154,7 @@ usrpAGC = -20,10,100
                             try:
                                 call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                                 ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
-                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                             except Exception:
                                 pass
                 elif data_type == 2:
@@ -3162,7 +3178,7 @@ usrpAGC = -20,10,100
                         pass
                     try:
                         ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
-                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
@@ -3429,7 +3445,7 @@ usrpAGC = -20,10,100
                             try:
                                 call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
                                 ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
-                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                             except Exception:
                                 pass
                 elif data_type == 2:
@@ -3453,7 +3469,7 @@ usrpAGC = -20,10,100
                         pass
                     try:
                         ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
-                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
