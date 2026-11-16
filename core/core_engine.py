@@ -26,6 +26,7 @@ BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "http://backend:8000/api/inte
 MUMBLE_BRIDGE_PORT = 12346
 SVXLINK_BRIDGE_PORT = 12348
 ZELLO_BRIDGE_PORT = 12351
+TEAMSPEAK_BRIDGE_PORT = 12352
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 WEB_PTT_PORT = int(os.getenv("WEB_PTT_PORT", 32100))
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
@@ -2193,6 +2194,10 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
                             except Exception:
                                 pass
+                            try:
+                                self.bridge_sock.sendto(unkey_mumble, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                            except Exception:
+                                pass
                             # Forward unkey frame to DVSwitch Mobile clients
                             try:
                                 unkey_mobile = build_usrp_frame(seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
@@ -2300,6 +2305,10 @@ usrpAGC = -20,10,100
                             self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                         except Exception:
                             pass
+                        try:
+                            self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                        except Exception:
+                            pass
 
                         # Encode directly into DMR frames via Direct Z3DMR Vocoder (Zero Analog_Bridge collision)
                         if self.direct_dmr:
@@ -2388,12 +2397,13 @@ usrpAGC = -20,10,100
         while self.running:
             try:
                 data, addr = await loop.sock_recvfrom(self.web_ptt_sock, 4096)
-                if len(data) >= 37 and data[:4] in (b"NWEB", b"NMUM", b"NSVX", b"NZEL", b"NPTT"):
+                if len(data) >= 37 and data[:4] in (b"NWEB", b"NMUM", b"NSVX", b"NZEL", b"NPTT", b"NTS3"):
                     magic = data[:4]
                     is_svx = (magic == b"NSVX")
                     is_mumble = (magic == b"NMUM")
                     is_zello = (magic == b"NZEL")
-                    is_webrtc = (magic == b"NWEB") or (magic == b"NPTT" and not is_svx and not is_mumble and not is_zello)
+                    is_ts3 = (magic == b"NTS3")
+                    is_webrtc = (magic == b"NWEB") or (magic == b"NPTT" and not is_svx and not is_mumble and not is_zello and not is_ts3)
                     dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
@@ -2405,6 +2415,8 @@ usrpAGC = -20,10,100
                         net_label = "Direct DMR (Mumble)"
                     elif is_zello:
                         net_label = "Direct DMR (Zello)"
+                    elif is_ts3:
+                        net_label = "Direct DMR (TeamSpeak 3)"
                     else:
                         net_label = "Direct DMR (WebRTC)"
                     if is_tx:
@@ -2502,6 +2514,11 @@ usrpAGC = -20,10,100
                                             self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                                         except Exception:
                                             pass
+                                    if not is_ts3:
+                                        try:
+                                            self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                        except Exception:
+                                            pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": net_label,
                                 "host": f"{addr[0]}:32100",
@@ -2545,6 +2562,11 @@ usrpAGC = -20,10,100
                             if not is_zello:
                                 try:
                                     self.bridge_sock.sendto(mumble_unkey, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                                except Exception:
+                                    pass
+                            if not is_ts3:
+                                try:
+                                    self.bridge_sock.sendto(mumble_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                                 except Exception:
                                     pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -3107,6 +3129,10 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                             except Exception:
                                 pass
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                            except Exception:
+                                pass
                 elif data_type == 2:
                     # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
@@ -3124,6 +3150,10 @@ usrpAGC = -20,10,100
                         pass
                     try:
                         self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                    except Exception:
+                        pass
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
@@ -3387,6 +3417,10 @@ usrpAGC = -20,10,100
                                 self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                             except Exception:
                                 pass
+                            try:
+                                self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                            except Exception:
+                                pass
                 elif data_type == 2:
                     # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
@@ -3404,6 +3438,10 @@ usrpAGC = -20,10,100
                         pass
                     try:
                         self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
+                    except Exception:
+                        pass
+                    try:
+                        self.bridge_sock.sendto(unkey_mumble, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
