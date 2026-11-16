@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger("teamspeak-service")
 
-TS3_HOST = os.getenv("TS3_HOST", "teamspeak-server")
+TS3_HOST = os.getenv("TS3_HOST", "172.18.0.1")
 TS3_QUERY_PORT = int(os.getenv("TS3_QUERY_PORT", "10011"))
 TS3_VOICE_PORT = int(os.getenv("TS3_VOICE_PORT", "9987"))
 TS3_USER = os.getenv("TS3_QUERY_USER", "serveradmin")
