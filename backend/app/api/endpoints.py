@@ -2789,6 +2789,21 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
             ext_ip = os.getenv("EXTERNAL_IP", "43.173.13.117")
             tot_clients = ts3_telemetry.get("total_clients", 0)
             channels_cnt = len(ts3_telemetry.get("channels", []))
+            
+            # Check if any monitored TG in TS3 is currently transmitting
+            ts_monitored_tgs = [1025, 510990, 510, 5109]
+            active_ts_stream = None
+            active_ts_tg = 0
+            for t in ts_monitored_tgs:
+                if t in active_streams_by_tg:
+                    active_ts_stream = active_streams_by_tg[t]
+                    active_ts_tg = t
+                    break
+
+            is_ts_talking = bool(active_ts_stream)
+            ts_talker = active_ts_stream.get("callsign", "") if active_ts_stream else ""
+            ts_dur = active_ts_stream.get("duration_sec", 2) if active_ts_stream else 0
+
             unified_nodes.append({
                 "id": "ts3_server",
                 "callsign": "NINJA-TS3",
@@ -2796,14 +2811,14 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
                 "sourceType": "Network",
                 "bridgeLabel": f"TeamSpeak 3 Server ({channels_cnt} Rooms)",
                 "hostLabel": f"{ext_ip}:9987",
-                "routeFrom": "TS3 Voice Rooms",
-                "routeTo": "DMR TG 1025 TS2",
-                "tg": 1025,
+                "routeFrom": "TS3 Multi-Room",
+                "routeTo": f"DMR TG {active_ts_tg} (Active)" if is_ts_talking else "DMR Multi-TG Independent",
+                "tg": active_ts_tg if active_ts_tg > 0 else 1025,
                 "slot": 2,
-                "monitoredTGs": [1025, 510990, 510, 5109],
-                "isTalking": False,
-                "talkerCallsign": "",
-                "talkingDurationSec": 0,
+                "monitoredTGs": ts_monitored_tgs,
+                "isTalking": is_ts_talking,
+                "talkerCallsign": ts_talker,
+                "talkingDurationSec": ts_dur,
                 "connected": True,
                 "sysop": f"TEAMSPEAK 3 · {tot_clients} Users Online",
                 "sw": "TeamSpeak 3 (Anti Phone-Home)"
