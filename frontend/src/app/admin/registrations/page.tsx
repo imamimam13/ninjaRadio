@@ -27,15 +27,18 @@ interface AdminUserItem {
   req_mumble: boolean;
   req_dvswitch: boolean;
   req_zello: boolean;
+  req_teamspeak: boolean;
   allow_web: boolean;
   allow_dmr: boolean;
   allow_svxlink: boolean;
   allow_mumble: boolean;
   allow_dvswitch: boolean;
   allow_zello: boolean;
+  allow_teamspeak: boolean;
   dmr_password: string;
   svxlink_password: string;
   mumble_password: string;
+  teamspeak_password: string;
   zello_username: string;
   dvswitch_allowed_ip: string;
   prefix_valid: boolean;
@@ -55,6 +58,7 @@ export default function AdminRegistrationsPage() {
   const [allowDmr, setAllowDmr] = useState(false);
   const [allowSvx, setAllowSvx] = useState(false);
   const [allowMumble, setAllowMumble] = useState(false);
+  const [allowTeamspeak, setAllowTeamspeak] = useState(false);
   const [allowDvs, setAllowDvs] = useState(false);
   const [allowZello, setAllowZello] = useState(false);
   const [zelloUsername, setZelloUsername] = useState("");
@@ -92,6 +96,7 @@ export default function AdminRegistrationsPage() {
     setAllowDmr(item.status === "APPROVED" ? item.allow_dmr : item.req_dmr);
     setAllowSvx(item.status === "APPROVED" ? item.allow_svxlink : item.req_svxlink);
     setAllowMumble(item.status === "APPROVED" ? item.allow_mumble : item.req_mumble);
+    setAllowTeamspeak(item.status === "APPROVED" ? item.allow_teamspeak : item.req_teamspeak);
     setAllowDvs(item.status === "APPROVED" ? item.allow_dvswitch : item.req_dvswitch);
     setAllowZello(item.status === "APPROVED" ? item.allow_zello : item.req_zello);
     setZelloUsername(item.zello_username || "");
@@ -110,6 +115,7 @@ export default function AdminRegistrationsPage() {
           allow_dmr: allowDmr,
           allow_svxlink: allowSvx,
           allow_mumble: allowMumble,
+          allow_teamspeak: allowTeamspeak,
           allow_dvswitch: allowDvs,
           allow_zello: allowZello,
           zello_username: zelloUsername.trim(),
@@ -241,6 +247,7 @@ export default function AdminRegistrationsPage() {
                         { name: "DMR", req: item.req_dmr, allow: item.allow_dmr },
                         { name: "SvxLink", req: item.req_svxlink, allow: item.allow_svxlink },
                         { name: "Mumble", req: item.req_mumble, allow: item.allow_mumble },
+                        { name: "TS3", req: item.req_teamspeak, allow: item.allow_teamspeak },
                         { name: "DVSwitch", req: item.req_dvswitch, allow: item.allow_dvswitch },
                         { name: `Zello${item.zello_username ? ` (${item.zello_username})` : ""}`, req: item.req_zello, allow: item.allow_zello },
                       ].map((svc) => (
@@ -262,8 +269,8 @@ export default function AdminRegistrationsPage() {
                     {item.status === "APPROVED" && (
                       <div className="text-[11px] font-mono text-slate-400 pt-1">
                         Pwd — DMR: <span className="text-cyan-300">{item.dmr_password || "-"}</span> | SvxLink:{" "}
-                        <span className="text-cyan-300">{item.svxlink_password || "-"}</span> | Mumble:{" "}
-                        <span className="text-cyan-300">{item.mumble_password || "-"}</span>
+                        <span className="text-cyan-300">{item.svxlink_password || "-"}</span> | TS3:{" "}
+                        <span className="text-cyan-300">{item.teamspeak_password || "-"}</span>
                       </div>
                     )}
                   </div>
@@ -313,6 +320,7 @@ export default function AdminRegistrationsPage() {
                     { label: "DMR Hotspot (62031)", val: allowDmr, set: setAllowDmr, req: editing.req_dmr },
                     { label: "SvxLink / SvxReflector (5300)", val: allowSvx, set: setAllowSvx, req: editing.req_svxlink },
                     { label: "Mumble / Mumla (64738)", val: allowMumble, set: setAllowMumble, req: editing.req_mumble },
+                    { label: "TeamSpeak 3 (9987)", val: allowTeamspeak, set: setAllowTeamspeak, req: editing.req_teamspeak },
                     { label: "DVSwitch Mobile (32345)", val: allowDvs, set: setAllowDvs, req: editing.req_dvswitch },
                     { label: "Zello Channels Bridge", val: allowZello, set: setAllowZello, req: editing.req_zello },
                   ].map((opt) => (

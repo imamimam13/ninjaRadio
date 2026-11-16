@@ -25,15 +25,18 @@ interface UserAccount {
   req_mumble: boolean;
   req_dvswitch: boolean;
   req_zello: boolean;
+  req_teamspeak: boolean;
   allow_web: boolean;
   allow_dmr: boolean;
   allow_svxlink: boolean;
   allow_mumble: boolean;
   allow_dvswitch: boolean;
   allow_zello: boolean;
+  allow_teamspeak: boolean;
   dmr_password: string;
   svxlink_password: string;
   mumble_password: string;
+  teamspeak_password: string;
   zello_username: string;
   dvswitch_allowed_ip: string;
 }
@@ -56,6 +59,7 @@ export default function AccountPage() {
   const [reqMumble, setReqMumble] = useState(false);
   const [reqDvs, setReqDvs] = useState(false);
   const [reqZello, setReqZello] = useState(false);
+  const [reqTeamspeak, setReqTeamspeak] = useState(false);
 
   const fetchProfile = async (tok: string) => {
     setLoading(true);
@@ -72,6 +76,7 @@ export default function AccountPage() {
         setReqMumble(data.req_mumble);
         setReqDvs(data.req_dvswitch);
         setReqZello(data.req_zello);
+        setReqTeamspeak(data.req_teamspeak);
       } else {
         localStorage.removeItem("ninjaradio_selfcare_token");
         setToken("");
@@ -116,6 +121,7 @@ export default function AccountPage() {
         setReqMumble(data.user.req_mumble);
         setReqDvs(data.user.req_dvswitch);
         setReqZello(data.user.req_zello);
+        setReqTeamspeak(data.user.req_teamspeak);
       }
     } catch (err: any) {
       setLoginError(err.message);
@@ -199,6 +205,7 @@ export default function AccountPage() {
         req_mumble: reqMumble,
         req_dvswitch: reqDvs,
         req_zello: reqZello,
+        req_teamspeak: reqTeamspeak,
         zello_username: zelloInput.trim(),
       }),
     });
@@ -211,6 +218,7 @@ export default function AccountPage() {
       setReqMumble(updated.req_mumble);
       setReqDvs(updated.req_dvswitch);
       setReqZello(updated.req_zello);
+      setReqTeamspeak(updated.req_teamspeak);
       setActionMsg(
         updated.status === "APPROVED"
           ? "✓ Izin layanan dan kredensial protokol berhasil diperbarui."
@@ -375,6 +383,17 @@ export default function AccountPage() {
                     userLabel: `Username: ${user.callsign}`,
                     pwd: "BEBAS / KOSONGKAN",
                     isMumble: true,
+                    isTeamSpeak: false,
+                  },
+                  {
+                    key: "teamspeak",
+                    title: "TeamSpeak 3 Server",
+                    allowed: user.allow_teamspeak,
+                    port: "UDP 9987",
+                    userLabel: `Nickname: ${user.callsign}`,
+                    pwd: user.teamspeak_password || "BEBAS / KOSONGKAN",
+                    isMumble: false,
+                    isTeamSpeak: true,
                   },
                 ].map((proto) => (
                   <div key={proto.key} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
@@ -401,6 +420,26 @@ export default function AccountPage() {
                             <p className="text-[11px] text-slate-400 leading-relaxed">
                               Di aplikasi Mumla / Mumble, cukup masukkan <b>Username: {user.callsign}</b> dan biarkan kolom password kosong. Sistem server memverifikasi izin TX otomatis.
                             </p>
+                          </div>
+                        ) : proto.isTeamSpeak ? (
+                          <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-xs text-cyan-300 font-bold">
+                                Server: 43.173.13.117:9987
+                              </span>
+                              <span className="font-mono text-xs text-slate-300">
+                                Nick: <b>{user.callsign}</b>
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 leading-relaxed">
+                              Gunakan aplikasi TeamSpeak 3 Client di PC atau smartphone. Masukkan Server <b>43.173.13.117:9987</b> dan Nickname <b>{user.callsign}</b>. Callsign carry-over aktif di topik room.
+                            </p>
+                            <a
+                              href={`ts3server://43.173.13.117?port=9987&nickname=${encodeURIComponent(user.callsign)}`}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs transition"
+                            >
+                              🚀 Buka Langsung di TeamSpeak 3
+                            </a>
                           </div>
                         ) : (
                           <>
@@ -483,6 +522,7 @@ export default function AccountPage() {
                   { label: "DMR Hotspot", checked: reqDmr, set: setReqDmr },
                   { label: "SvxLink", checked: reqSvx, set: setReqSvx },
                   { label: "Mumble", checked: reqMumble, set: setReqMumble },
+                  { label: "TeamSpeak 3", checked: reqTeamspeak, set: setReqTeamspeak },
                   { label: "DVSwitch", checked: reqDvs, set: setReqDvs },
                   { label: "Zello Bridge", checked: reqZello, set: setReqZello },
                 ].map((item) => (

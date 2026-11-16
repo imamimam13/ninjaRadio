@@ -38,6 +38,13 @@ START_TIME = time.time()
 def get_current_iso_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+def _trigger_ts3_talker(tg: int, callsign: Optional[str]):
+    try:
+        from backend.app.services.teamspeak_service import notify_ts3_talker_change
+        asyncio.create_task(notify_ts3_talker_change(tg, callsign))
+    except Exception:
+        pass
+
 # ----------------- Dashboard & Status -----------------
 
 @router.get("/status", response_model=ServerStatus)
@@ -1039,10 +1046,12 @@ async def web_ptt_transmit(
         }
         ACTIVE_STREAMS[stream_key] = tx_data
         await manager.update_stream(stream_key, tx_data)
+        _trigger_ts3_talker(tg, callsign)
         return {"status": "TX_STARTED", "data": tx_data}
     else:
         ACTIVE_STREAMS.pop(stream_key, None)
         await manager.update_stream(stream_key, None)
+        _trigger_ts3_talker(tg, None)
         lh_item = {
             "id": f"tx_web_{stream_key}_{int(datetime.utcnow().timestamp())}",
             "timestamp": get_current_iso_utc(),
@@ -1091,6 +1100,7 @@ async def run_stream_watchdog():
             for stream_key, info in stale_keys:
                 ACTIVE_STREAMS.pop(stream_key, None)
                 await manager.update_stream(stream_key, None)
+                _trigger_ts3_talker(int(info.get("talkgroup", 0)), None)
 
                 start_ts = info.get("start_time", now - 3.0)
                 dur = round(max(0.5, now - start_ts), 1)
@@ -1225,6 +1235,8 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         if is_new_stream or (now - last_broadcast > 0.5):
             tx_data["last_broadcast"] = now
             await manager.update_stream(stream_key, tx_data)
+            if is_new_stream:
+                _trigger_ts3_talker(dst_tg, callsign)
 
         # Broadcast live audio chunk to web clients if payload present
         payload_b64 = event.get("payload_b64")
@@ -1252,6 +1264,7 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     elif data_type == 2:
         cached = ACTIVE_STREAMS.pop(stream_key, None)
         await manager.update_stream(stream_key, None)
+        _trigger_ts3_talker(dst_tg, None)
         now = time.time()
         start_ts = cached.get("start_time", now - 3.5) if cached else (now - 3.5)
         dur = round(max(0.5, now - start_ts), 1)
@@ -3408,7 +3421,7 @@ async def selfcare_request_services(
     user: UserAccount = Depends(_get_current_selfcare_user),
     session: AsyncSession = Depends(get_db)
 ):
-    for field in ["req_web", "req_dmr", "req_svxlink", "req_mumble", "req_dvswitch", "req_zello"]:
+    for field in ["req_web", "req_dmr", "req_svxlink", "req_mumble", "req_dvswitch", "req_zello", "req_teamspeak"]:
         val = getattr(payload, field)
         if val is not None:
             setattr(user, field, bool(val))
@@ -3417,10 +3430,10 @@ async def selfcare_request_services(
 
     # If the user is already APPROVED, automatically sync their allowed services and generate missing credentials
     if user.status == "APPROVED":
-        for svc in ["dmr", "svxlink", "mumble", "dvswitch", "zello"]:
+        for svc in ["dmr", "svxlink", "mumble", "dvswitch", "zello", "teamspeak"]:
             req_val = getattr(user, f"req_{svc}")
             setattr(user, f"allow_{svc}", req_val)
-            if svc in ["dmr", "svxlink", "mumble"] and req_val and not getattr(user, f"{svc}_password"):
+            if svc in ["dmr", "svxlink", "mumble", "teamspeak"] and req_val and not getattr(user, f"{svc}_password"):
                 setattr(user, f"{svc}_password", generate_protocol_password(6))
         await SelfCareService._sync_callbook_entry(session, user)
         trigger_protocol_reload()
@@ -3471,6 +3484,8 @@ async def selfcare_rotate_password(
         user.svxlink_password = new_pwd
     elif proto == "mumble" and user.allow_mumble:
         user.mumble_password = new_pwd
+    elif proto == "teamspeak" and user.allow_teamspeak:
+        user.teamspeak_password = new_pwd
     else:
         raise HTTPException(status_code=400, detail="Protokol tidak valid atau belum disetujui untuk akun Anda.")
 

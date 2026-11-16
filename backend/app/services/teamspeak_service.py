@@ -111,7 +111,7 @@ async def send_ts3_command(cmd: str, timeout: float = 2.0) -> Optional[str]:
                 break
             line_str = line_bytes.decode("utf-8", errors="ignore")
             response_lines.append(line_str)
-            if line_str.startswith("error id="):
+            if line_str.strip().startswith("error id="):
                 break
 
         writer.write(b"quit\n")
@@ -185,6 +185,55 @@ async def get_teamspeak_telemetry(force: bool = False) -> Dict[str, Any]:
     _ts3_cache["last_check"] = now
     _ts3_cache["data"] = data
     return data
+
+
+# Channel to TG mapping cache
+_tg_to_cid: Dict[int, int] = {
+    1025: 2,
+    510990: 3,
+    510: 4,
+    5109: 5
+}
+_last_ts3_talker_update: Dict[int, str] = {}
+
+
+async def notify_ts3_talker_change(tg: int, callsign: str):
+    """
+    Callsign Carry-Over: dynamically updates the TeamSpeak 3 channel topic
+    when someone speaks on DMR/SvxLink/Web, and clears on unkey.
+    """
+    try:
+        clean_call = re.sub(r"[^A-Za-z0-9\-/]", "", (callsign or "").strip().upper())[:15]
+        tg_val = int(tg or 0)
+        if tg_val not in _tg_to_cid:
+            # Check if we can find cid dynamically
+            telemetry = await get_teamspeak_telemetry()
+            for ch in telemetry.get("channels", []):
+                cname = ch.get("name", "")
+                if f"TG {tg_val}" in cname or f"TG{tg_val}" in cname:
+                    _tg_to_cid[tg_val] = ch.get("cid")
+                    break
+
+        cid = _tg_to_cid.get(tg_val)
+        if not cid:
+            return
+
+        prev = _last_ts3_talker_update.get(tg_val, "")
+        if clean_call == prev:
+            return
+        _last_ts3_talker_update[tg_val] = clean_call
+
+        if clean_call:
+            esc_topic = ts_escape(f"🎙️ ACTIVE TALKER: {clean_call} (DMR TG {tg_val})")
+            cmd = f"channeledit cid={cid} channel_topic={esc_topic}"
+        else:
+            esc_topic = ts_escape(f"DMR TG {tg_val} (Standby)")
+            cmd = f"channeledit cid={cid} channel_topic={esc_topic}"
+
+        await send_ts3_command(cmd)
+        logger.info(f"[TS3-CarryOver] Updated TS3 Channel (CID {cid}) for TG {tg_val} -> {clean_call or 'STANDBY'}")
+    except Exception as e:
+        logger.debug(f"[TS3-CarryOver] Failed to update TS3 channel topic: {e}")
 
 
 async def ensure_default_channels():
