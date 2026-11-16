@@ -2755,7 +2755,7 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
 
     # 8. Connected TeamSpeak 3 Voice Server
     try:
-        from app.services.teamspeak_service import get_teamspeak_telemetry
+        from backend.app.services.teamspeak_service import get_teamspeak_telemetry
         ts3_telemetry = await get_teamspeak_telemetry()
         if ts3_telemetry.get("online"):
             ext_ip = os.getenv("EXTERNAL_IP", "43.173.13.117")
@@ -3647,7 +3647,7 @@ async def run_callbook_sync_source_now(
 async def get_teamspeak_telemetry_endpoint():
     """Returns live TeamSpeak 3 channels, online clients, and server status via ServerQuery."""
     try:
-        from app.services.teamspeak_service import get_teamspeak_telemetry
+        from backend.app.services.teamspeak_service import get_teamspeak_telemetry
         return await get_teamspeak_telemetry()
     except Exception as e:
         return {"online": False, "error": str(e), "channels": [], "clients": []}
