@@ -702,13 +702,13 @@ class BiquadFilter:
         self.z2 = 0.0
 
 
-# 300Hz High-pass filter (2nd order Butterworth, fs=8000Hz) - eliminates room rumble, plosives & boomy mud
-HPF_300HZ_B = [0.846458104, -1.692916208, 0.846458104]
-HPF_300HZ_A = [1.0, -1.669200875, 0.716631541]
+# 160Hz High-pass filter (2nd order Butterworth, fs=8000Hz) - eliminates DC offset & sub-audible rumble while preserving natural voice bass & warmth
+HPF_160HZ_B = [0.914969144, -1.829938288, 0.914969144]
+HPF_160HZ_A = [1.0, -1.822694925, 0.837181651]
 
-# 3200Hz Low-pass filter (2nd order Butterworth, fs=8000Hz) - eliminates harsh high-freq aliasing & sibilance
-LPF_3200HZ_B = [0.638943726, 1.277887452, 0.638943726]
-LPF_3200HZ_A = [1.0, 1.142977284, 0.412797620]
+# 3650Hz Low-pass filter (2nd order Butterworth, fs=8000Hz) - preserves crisp vocal presence and sibilance for AMBE vocoder without harsh aliasing
+LPF_3650HZ_B = [0.823220777, 1.646441554, 0.823220777]
+LPF_3650HZ_A = [1.0, 1.614942614, 0.677940493]
 
 # 2350Hz Low-pass filter (2nd order Butterworth, fs=8000Hz) - cuts off vocoder hash, hiss, and high-frequency screech
 LPF_2350HZ_B = [0.378279113, 0.756558225, 0.378279113]
@@ -766,10 +766,10 @@ class DirectDmrEngine:
         except Exception as e:
             logger.warning(f"AmbeAudioConditioner fallback to hardware/biquad: {e}")
             self.tx_conditioner = None
-        self.hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
-        self.lpf = BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
-        self.rx_hpf = BiquadFilter(HPF_300HZ_B, HPF_300HZ_A)
-        self.rx_lpf = BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A)
+        self.hpf = BiquadFilter(HPF_160HZ_B, HPF_160HZ_A)
+        self.lpf = BiquadFilter(LPF_3650HZ_B, LPF_3650HZ_A)
+        self.rx_hpf = BiquadFilter(HPF_160HZ_B, HPF_160HZ_A)
+        self.rx_lpf = BiquadFilter(LPF_3650HZ_B, LPF_3650HZ_A)
 
         # TX State Tracking
         self.in_tx = False
@@ -1007,8 +1007,8 @@ class DirectDmrEngine:
             self._rx_filters = {}
         if stream_key not in self._rx_filters:
             self._rx_filters[stream_key] = (
-                BiquadFilter(HPF_300HZ_B, HPF_300HZ_A),
-                BiquadFilter(LPF_3200HZ_B, LPF_3200HZ_A),
+                BiquadFilter(HPF_160HZ_B, HPF_160HZ_A),
+                BiquadFilter(LPF_3650HZ_B, LPF_3650HZ_A),
                 DeemphasisFilter(alpha=0.60)
             )
         hpf, lpf, deemph = self._rx_filters[stream_key]
