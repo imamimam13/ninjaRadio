@@ -858,16 +858,16 @@ PREEMPHASIS=0
                     self._tx_agc_gain = 1.5
                     logger.info(f"[{self.bot_user}] 🔴 SVXLINK->DMR TX from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {tx_tg} Slot {tx_slot}")
 
-                # Downsample 16kHz -> 8kHz (clean 2:1 decimation from a553e82 - Zero robot sound)
+                # Downsample 16kHz -> 8kHz preserving full treble bandwidth (0 - 4000Hz)
                 n_8k = len(pcm_16k) // 2
                 if n_8k > 0:
-                    pcm_8k_arr = pcm_16k[:n_8k * 2].astype(np.float32).reshape(-1, 2).mean(axis=1)
+                    pcm_8k_arr = pcm_16k[:n_8k * 2:2].astype(np.float32)
                     # Smooth TX AGC for SvxLink audio so AMBE vocoder receives nominal speech dynamics
                     if not hasattr(self, "_tx_agc_gain"):
                         self._tx_agc_gain = 1.5
                     rms_8k = float(np.sqrt(np.mean(pcm_8k_arr ** 2))) if len(pcm_8k_arr) > 0 else 0.0
                     if rms_8k >= 40.0:
-                        desired_gain = min(4.5, max(1.0, 4500.0 / rms_8k))
+                        desired_gain = min(4.5, max(1.2, 4800.0 / rms_8k))
                         alpha = 0.25 if desired_gain < self._tx_agc_gain else 0.08
                         self._tx_agc_gain = (1.0 - alpha) * self._tx_agc_gain + alpha * desired_gain
                         pcm_8k_arr = pcm_8k_arr * self._tx_agc_gain
