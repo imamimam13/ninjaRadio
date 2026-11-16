@@ -69,6 +69,7 @@ def patch_cpp():
       stop_call = it_stop->second;
     }
     m_active_talker_call.erase(old_talker->callsign());
+    m_talker_override.erase(old_talker->callsign());
     cout << stop_call << ": Talker stop on TG #" << tg << endl;
     old_talker->updateIsTalker();
     broadcastMsg(MsgTalkerStop(tg, stop_call),

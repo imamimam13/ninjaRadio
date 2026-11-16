@@ -2947,14 +2947,26 @@ async def get_svxlink_bots():
         except Exception:
             pass
 
+    active_streams_by_tg = {}
+    for _, sinfo in list(ACTIVE_STREAMS.items()):
+        stg = int(sinfo.get("talkgroup") or 0)
+        if stg > 0:
+            active_streams_by_tg[stg] = sinfo.get("callsign", "")
+    if manager.current_tx:
+        ctg = int(manager.current_tx.get("talkgroup") or 0)
+        if ctg > 0 and ctg not in active_streams_by_tg:
+            active_streams_by_tg[ctg] = manager.current_tx.get("callsign", "")
+
     enriched = []
     for b in bots:
         b_copy = dict(b)
         b_up = str(b_copy.get("name", "")).upper()
-        if b_up in live_map:
-            b_copy["connected"] = live_map[b_up].get("connected", False)
-            b_copy["active_talker"] = live_map[b_up].get("active_talker")
-            b_copy["status"] = "CONNECTED" if b_copy["connected"] else "CONNECTING"
+        b_tg = int(b_copy.get("tg", 0))
+        live_info = live_map.get(b_up, {})
+        b_copy["connected"] = live_info.get("connected", False) if b_up in live_map else False
+        live_stream_call = active_streams_by_tg.get(b_tg)
+        b_copy["active_talker"] = live_stream_call or live_info.get("active_talker")
+        b_copy["status"] = "CONNECTED" if b_copy["connected"] else "CONNECTING"
         enriched.append(b_copy)
 
     return {"bots": enriched}
