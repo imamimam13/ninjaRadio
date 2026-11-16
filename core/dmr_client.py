@@ -140,6 +140,7 @@ class HomeBrewClient:
         self.last_ping_rx = 0
         self.packets_rx = 0
         self.packets_tx = 0
+        self.active_rx_tgs: Dict[int, dict] = {}  # tg -> {slot, src_id, stream_id, data_type, time, ended}
 
     def get_status_info(self) -> Dict:
         return {
@@ -429,6 +430,17 @@ class HomeBrewClient:
                 sequence = dtype_vseq
             stream_id = int.from_bytes(data[16:20], "big")
             payload = data[20:]
+            now = time.time()
+
+            # Track active incoming RX stream for Anti-Collision Guard
+            self.active_rx_tgs[dst_id] = {
+                "slot": slot,
+                "src_id": src_id,
+                "stream_id": stream_id,
+                "data_type": data_type,
+                "time": now,
+                "ended": (data_type == 2)
+            }
 
             if self.on_traffic:
                 self.on_traffic({
@@ -443,8 +455,27 @@ class HomeBrewClient:
                     "stream_id": stream_id,
                     "payload": payload,
                     "raw_packet": data,
-                    "timestamp": time.time()
+                    "timestamp": now
                 })
+
+    def is_tg_busy(self, tg: int, slot: Optional[int] = None, hangtime: float = 1.8) -> bool:
+        """
+        Anti-Collision Guard: Returns True if this peer is actively transmitting to us on tg/slot
+        (or still within the DMR Call Hang Time window after unkey).
+        Prevents local MMDVM/VoIP streams from trampling over an ongoing QSO on the remote peer.
+        """
+        info = self.active_rx_tgs.get(tg)
+        if not info:
+            return False
+        if slot is not None and info.get("slot") != slot:
+            return False
+        now = time.time()
+        elapsed = now - info.get("time", 0.0)
+        # If transmission ended with terminator, hold channel busy for hang time (1.8s)
+        if info.get("ended", False):
+            return elapsed < hangtime
+        # While active voice stream is in progress, hold busy up to 2.0s between bursts
+        return elapsed < 2.0
 
     def get_preferred_slot(self, dst_tg: int, default_slot: int = 2) -> int:
         """Returns the configured timeslot (1 or 2) for dst_tg on this peer if explicitly assigned."""
@@ -515,6 +546,11 @@ class HomeBrewClient:
                 orig_slot = 2 if (orig_bits & 0x80) else 1
                 is_unit = bool(orig_bits & 0x40)
                 target_slot = orig_slot if is_unit else self.get_preferred_slot(dst_tg, orig_slot)
+
+                # Anti-Collision Guard: If peer is actively transmitting to us on this TG/slot, DO NOT send uplink!
+                if self.is_tg_busy(dst_tg, target_slot):
+                    return False
+
                 slot_bit = 0x80 if target_slot == 2 else 0x00
                 new_bits = (orig_bits & 0x7F) | slot_bit
                 # Stamp the authenticated client repeater ID (bytes 11..14) and adapted slot bit (byte 15)

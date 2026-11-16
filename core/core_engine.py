@@ -2655,6 +2655,12 @@ usrpAGC = -20,10,100
                                 logger.info(f"🚀 [DIRECT-DMR-PEER] Ingress TG {p_dst}->TG {r_tg} (TS{r_slot}) forwarded to FreeDMR Core Master (Src: {p_src})")
                             break
 
+                        # Anti-Collision Guard: Suppress uplink to peer if peer is actively transmitting on this TG/slot!
+                        if client.is_tg_busy(r_tg, r_slot):
+                            if p_dtype == 0x21:
+                                logger.warning(f"🚫 [COLLISION-GUARD] Suppressed Web/VoIP uplink to peer '{client.name}' on TG {r_tg} (TS{r_slot}) — peer is busy transmitting/hangtime!")
+                            continue
+
                         if sub_tgs:
                             if r_tg in sub_tgs and is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):
                                 client.send_raw_dmrd(r_pkt)
@@ -2989,6 +2995,12 @@ usrpAGC = -20,10,100
                                 )
                                 if has_remapped_rule:
                                     continue
+
+                            # Anti-Collision Guard: Suppress uplink to peer if peer is actively transmitting on this TG/slot!
+                            if client.is_tg_busy(r_tg, r_slot):
+                                if traffic.get("data_type") == 0:
+                                    logger.warning(f"🚫 [COLLISION-GUARD] Suppressed MMDVM uplink to peer '{client.name}' on TG {r_tg} (TS{r_slot}) — peer is busy transmitting/hangtime!")
+                                continue
 
                             if sub_tgs:
                                 if r_tg in sub_tgs and is_tg_bridged_to_peer(r_tg, client.name, sub_tgs):

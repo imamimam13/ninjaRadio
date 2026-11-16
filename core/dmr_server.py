@@ -234,7 +234,7 @@ class HomeBrewMasterServer:
             # If this stream was already rejected because TG is busy with another stream,
             # drop packet to prevent mid-sentence collision
             rej_ts = self._rejected_stream_ids.get(stream_id)
-            if rej_ts is not None and (now - rej_ts) < 1.0:
+            if rej_ts is not None and (now - rej_ts) < 15.0:
                 if data_type == 2:
                     self._rejected_stream_ids.pop(stream_id, None)
                 return False
@@ -253,12 +253,15 @@ class HomeBrewMasterServer:
                 return False
 
         # Lock acquired or refreshed
+        # Active voice stream: 1.5s tolerance against network jitter
+        # Call Terminator: 1.8s standard DMR Call Hang Time
+        lock_duration = 1.8 if data_type == 2 else 1.5
         self.tg_locks[dst_tg] = {
             "stream_id": stream_id,
             "src_id": src_id,
             "addr": origin_addr,
             "ended": (data_type == 2),
-            "until": now + (0.10 if data_type == 2 else 0.40),
+            "until": now + lock_duration,
         }
         if data_type == 2:
             self._rejected_stream_ids.pop(stream_id, None)
