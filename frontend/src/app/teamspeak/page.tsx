@@ -19,7 +19,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   Info,
-  Users
+  Users,
+  Bot,
+  Settings
 } from "lucide-react";
 
 interface TSChannel {
@@ -30,10 +32,19 @@ interface TSChannel {
   clients: string[];
 }
 
+interface TSBot {
+  name: string;
+  channel: string;
+  tg: number;
+  slot: number;
+  status: string;
+}
+
 export default function TeamSpeakPage() {
   const { isConnected } = useLiveMonitor();
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [telemetry, setTelemetry] = useState<any>(null);
+  const [bots, setBots] = useState<TSBot[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   const serverHost = typeof window !== "undefined" ? window.location.hostname : "43.173.13.117";
@@ -59,8 +70,26 @@ export default function TeamSpeakPage() {
       }
     };
 
+    const fetchBots = async () => {
+      try {
+        const res = await fetch("/api/teamspeak/bots");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.bots)) {
+            setBots(data.bots);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch TS3 bots:", err);
+      }
+    };
+
     fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 3500);
+    fetchBots();
+    const interval = setInterval(() => {
+      fetchTelemetry();
+      fetchBots();
+    }, 3500);
     return () => clearInterval(interval);
   }, []);
 
@@ -281,6 +310,112 @@ export default function TeamSpeakPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* DMR Audio Bridge Bot & Stationed Bots Table */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Left 1-col: Bridge Status Card */}
+            <div className="bg-[#0b121e]/80 border border-cyan-900/30 rounded-2xl p-5 shadow-xl space-y-4 flex flex-col justify-between">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-5 h-5 text-cyan-400" />
+                    <h2 className="font-heading font-black text-white text-base">TS3 AUDIO BRIDGE BOT</h2>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                    ACTIVE
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 font-mono">
+                  Gateway otomatis audio dua arah antara TeamSpeak 3 Voice Rooms dan jaringan DMR Core.
+                </p>
+                <div className="space-y-2 text-xs font-mono pt-2 border-t border-slate-900">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Gateway Bot:</span>
+                    <span className="text-cyan-300 font-bold">NINJA-TS3-BRIDGE</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Transcoding:</span>
+                    <span className="text-emerald-400 font-bold">PCM 8kHz (DMR) &lt;-&gt; Opus (TS3)</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Anti-Collision:</span>
+                    <span className="text-purple-400 font-bold">Mutual Exclusion TG Lock</span>
+                  </div>
+                </div>
+              </div>
+              <a
+                href="/settings"
+                className="w-full py-2 px-3 rounded-xl bg-cyan-950/70 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-800 text-xs font-mono font-bold flex items-center justify-center gap-2 transition shadow-md"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>KELOLA BOT DI PENGATURAN</span>
+              </a>
+            </div>
+
+            {/* Right 2-col: Table of Stationed User Bots */}
+            <div className="lg:col-span-2 bg-[#0b121e]/80 rounded-2xl border border-cyan-900/30 overflow-hidden shadow-xl flex flex-col justify-between">
+              <div>
+                <div className="p-4 border-b border-cyan-900/30 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Bot className="w-5 h-5 text-purple-400" />
+                    <div>
+                      <h2 className="font-heading font-bold text-sm sm:text-base text-white">
+                        USER BOT TEAMSPEAK 3 (DYNAMIC BOT ROUTER)
+                      </h2>
+                      <p className="text-[11px] text-slate-400 font-mono">
+                        Daftar virtual client bot yang disiagakan di channel TS3 untuk menjembatani Talkgroup DMR.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs font-mono">
+                    <thead>
+                      <tr className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                        <th className="p-3 font-bold">NAMA USER BOT</th>
+                        <th className="p-3 font-bold">CHANNEL STANDBY</th>
+                        <th className="p-3 font-bold">TARGET DMR TG</th>
+                        <th className="p-3 font-bold">TIMESLOT</th>
+                        <th className="p-3 font-bold text-center">STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {bots && bots.length > 0 ? (
+                        bots.map((bot, idx) => (
+                          <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                            <td className="p-3 font-bold text-white flex items-center gap-2">
+                              <Bot className="w-4 h-4 text-purple-400" />
+                              <span className="text-cyan-300 font-black">{bot.name}</span>
+                            </td>
+                            <td className="p-3">
+                              <span className="px-2.5 py-1 rounded-lg bg-blue-950/60 text-blue-300 border border-blue-800/70 font-bold inline-flex items-center gap-1.5">
+                                <Volume2 className="w-3 h-3 text-cyan-400" />
+                                {bot.channel}
+                              </span>
+                            </td>
+                            <td className="p-3 font-bold text-emerald-400">TG {bot.tg}</td>
+                            <td className="p-3 text-slate-300">Slot {bot.slot}</td>
+                            <td className="p-3 text-center">
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                                {bot.status || "STATIONED"}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="p-6 text-center text-slate-500">
+                            Belum ada bot terdaftar. Tambahkan bot di menu Pengaturan.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
 
