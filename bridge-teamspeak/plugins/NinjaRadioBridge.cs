@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using TS3AudioBot;
 using TS3AudioBot.Plugins;
 using TSLib;
