@@ -2211,7 +2211,7 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
                             try:
-                                ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                                ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                                 self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(active_tg)))
                             except Exception:
                                 pass
@@ -2323,8 +2323,9 @@ usrpAGC = -20,10,100
                         except Exception:
                             pass
                         try:
-                            call_b = (target_call or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                            ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, target_tg, target_dmr_id, target_slot, 0, call_b) + chunk_pcm
+                            disp_name = lookup_callbook_callsign(target_dmr_id, include_name=True) or target_call or f"ID-{target_dmr_id}"
+                            call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                            ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, target_tg, target_dmr_id, target_slot, 0, call_b) + chunk_pcm
                             self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(target_tg)))
                         except Exception:
                             pass
@@ -2535,8 +2536,9 @@ usrpAGC = -20,10,100
                                             pass
                                     if not is_ts3:
                                         try:
-                                            call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                                            ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
+                                            disp_name = lookup_callbook_callsign(dmr_id, include_name=True) or callsign or f"ID-{dmr_id}"
+                                            call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                                            ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
                                             self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(tg)))
                                         except Exception:
                                             pass
@@ -2587,7 +2589,7 @@ usrpAGC = -20,10,100
                                     pass
                             if not is_ts3:
                                 try:
-                                    ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                                    ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                                     self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(tg)))
                                 except Exception:
                                     pass
@@ -3152,8 +3154,9 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
                             try:
-                                call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                                ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
+                                disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
+                                call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                                ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
                                 self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                             except Exception:
                                 pass
@@ -3177,7 +3180,7 @@ usrpAGC = -20,10,100
                     except Exception:
                         pass
                     try:
-                        ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                        ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                         self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                     except Exception:
                         pass
@@ -3443,8 +3446,9 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
                             try:
-                                call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                                ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
+                                disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
+                                call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                                ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
                                 self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                             except Exception:
                                 pass
@@ -3468,7 +3472,7 @@ usrpAGC = -20,10,100
                     except Exception:
                         pass
                     try:
-                        ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                        ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                         self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
                     except Exception:
                         pass
