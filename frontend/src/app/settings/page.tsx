@@ -891,6 +891,18 @@ export default function SettingsPage() {
   const [newTs3BotChannel, setNewTs3BotChannel] = useState("");
   const [newTs3BotTg, setNewTs3BotTg] = useState(1025);
   const [newTs3BotSlot, setNewTs3BotSlot] = useState(2);
+  const [newTs3BotSvx, setNewTs3BotSvx] = useState("");
+  const [availableSvxBots, setAvailableSvxBots] = useState<any[]>([]);
+
+  const fetchAvailableSvxBots = async () => {
+    try {
+      const res = await fetch("/api/svxlink/bots");
+      if (res.ok) {
+        const d = await res.json();
+        if (Array.isArray(d.bots)) setAvailableSvxBots(d.bots);
+      }
+    } catch {}
+  };
 
   const fetchTs3Rooms = async () => {
     setIsLoadingTs3(true);
@@ -907,6 +919,7 @@ export default function SettingsPage() {
 
   const fetchTs3Bots = async () => {
     try {
+      fetchAvailableSvxBots();
       const res = await fetch("/api/teamspeak/bots");
       if (res.ok) {
         const d = await res.json();
@@ -958,7 +971,8 @@ export default function SettingsPage() {
           name: newTs3BotName,
           channel: newTs3BotChannel,
           tg: newTs3BotTg,
-          slot: newTs3BotSlot
+          slot: newTs3BotSlot,
+          svx_bot: newTs3BotSvx
         }),
       });
       if (res.ok) {
@@ -2273,6 +2287,8 @@ export default function SettingsPage() {
                         setNewTs3BotChannel(ts3Rooms[0]?.name || "TG 1025 - BRIDISV");
                         setNewTs3BotTg(1025);
                         setNewTs3BotSlot(2);
+                        setNewTs3BotSvx("");
+                        fetchAvailableSvxBots();
                         setShowAddTs3BotModal(true);
                       }}
                       className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white font-mono font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-purple-500/20"
@@ -2293,8 +2309,13 @@ export default function SettingsPage() {
                           <span className="w-2 h-2 rounded-full bg-purple-400" />
                           <span className="font-bold text-xs text-white font-mono">{b.name}</span>
                         </div>
-                        <div className="text-[10px] font-mono text-slate-400">
-                          {b.channel} • <span className="text-cyan-400 font-bold">TG {b.tg}</span> (Slot {b.slot})
+                        <div className="text-[10px] font-mono text-slate-400 flex flex-wrap items-center gap-1.5">
+                          <span>{b.channel} • <span className="text-cyan-400 font-bold">TG {b.tg}</span> (Slot {b.slot})</span>
+                          {b.svx_bot && (
+                            <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800 text-[9px] font-mono flex items-center gap-1 font-semibold">
+                              <Radio className="w-2.5 h-2.5 text-cyan-400" /> Paired: {b.svx_bot}
+                            </span>
+                          )}
                         </div>
                       </div>
                       {isAdminUnlocked && (
@@ -3819,6 +3840,41 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-cyan-400 font-bold">
+                    <Radio className="w-3.5 h-3.5" /> Pasangkan ke Bot SvxLink
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-normal">Sinkronisasi TG Otomatis</span>
+                </label>
+                <select
+                  value={newTs3BotSvx}
+                  onChange={(e) => {
+                    const selBot = e.target.value;
+                    setNewTs3BotSvx(selBot);
+                    const b = availableSvxBots.find((x) => x.name === selBot);
+                    if (b) {
+                      setNewTs3BotTg(b.tg || 1025);
+                      setNewTs3BotSlot(b.slot || 2);
+                      if (!newTs3BotName || newTs3BotName.startsWith("TS3-GW-")) {
+                        setNewTs3BotName(`TS3-GW-${b.name.replace("SVX-GW-", "").replace("SVX-", "")}`);
+                      }
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-cyan-800/80 focus:border-cyan-400 rounded-xl text-cyan-300 font-bold outline-none"
+                >
+                  <option value="">-- Manual (Tanpa Pairing Otomatis) --</option>
+                  {availableSvxBots.map((sb, i) => (
+                    <option key={i} value={sb.name}>
+                      📡 {sb.name} (TG {sb.tg} · Slot {sb.slot} · Reflector: {sb.channel})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Pilih bot SvxLink yang ingin dipasangkan dengan room TS3 ini. Target TG &amp; Slot akan terisi otomatis.
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

@@ -1333,9 +1333,9 @@ DEFAULT_TEAMSPEAK_ROOMS = [
 ]
 
 DEFAULT_TEAMSPEAK_BOTS = [
-    {"name": "TS3-GW-BRIDISV", "channel": "TG 1025 - BRIDISV", "tg": 1025, "slot": 2, "status": "STATIONED"},
-    {"name": "TS3-GW-NINJA", "channel": "TG 510990 - Ninja", "tg": 510990, "slot": 2, "status": "STATIONED"},
-    {"name": "TS3-GW-NASIONAL", "channel": "TG 510 - Nasional", "tg": 510, "slot": 1, "status": "STATIONED"}
+    {"name": "TS3-GW-BRIDISV", "channel": "TG 1025 - BRIDISV", "tg": 1025, "slot": 2, "svx_bot": "SVX-GWBRIDI", "status": "STATIONED"},
+    {"name": "TS3-GW-NINJA", "channel": "TG 510990 - Ninja", "tg": 510990, "slot": 2, "svx_bot": "SVX-GW-NINJA", "status": "STATIONED"},
+    {"name": "TS3-GW-NASIONAL", "channel": "TG 510 - Nasional", "tg": 510, "slot": 1, "svx_bot": "SVX-GW-NASIONAL", "status": "STATIONED"}
 ]
 
 def read_config_file() -> dict:
@@ -3816,11 +3816,12 @@ async def save_teamspeak_bot_endpoint(payload: dict):
     channel = (payload.get("channel") or "").strip()
     tg = int(payload.get("tg") or 510)
     slot = int(payload.get("slot") or 2)
+    svx_bot = (payload.get("svx_bot") or "").strip()
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Nama bot dan channel harus diisi.")
 
     bots = [b for b in bots if b.get("name") != name]
-    bots.append({"name": name, "channel": channel, "tg": tg, "slot": slot, "status": "STATIONED"})
+    bots.append({"name": name, "channel": channel, "tg": tg, "slot": slot, "svx_bot": svx_bot, "status": "STATIONED"})
     cfg["teamspeak_bots"] = bots
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:

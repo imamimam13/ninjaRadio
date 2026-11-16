@@ -37,6 +37,7 @@ interface TSBot {
   channel: string;
   tg: number;
   slot: number;
+  svx_bot?: string;
   status: string;
 }
 
@@ -377,6 +378,7 @@ export default function TeamSpeakPage() {
                       <tr className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
                         <th className="p-3 font-bold">NAMA USER BOT</th>
                         <th className="p-3 font-bold">CHANNEL STANDBY</th>
+                        <th className="p-3 font-bold">PAIRED SVXLINK BOT</th>
                         <th className="p-3 font-bold">TARGET DMR TG</th>
                         <th className="p-3 font-bold">TIMESLOT</th>
                         <th className="p-3 font-bold text-center">STATUS</th>
@@ -396,6 +398,16 @@ export default function TeamSpeakPage() {
                                 {bot.channel}
                               </span>
                             </td>
+                            <td className="p-3">
+                              {bot.svx_bot ? (
+                                <span className="px-2.5 py-1 rounded-lg bg-cyan-950/80 text-cyan-300 border border-cyan-800 text-[11px] font-bold inline-flex items-center gap-1.5">
+                                  <Radio className="w-3 h-3 text-cyan-400" />
+                                  {bot.svx_bot}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 text-[11px] font-mono">Direct TG</span>
+                              )}
+                            </td>
                             <td className="p-3 font-bold text-emerald-400">TG {bot.tg}</td>
                             <td className="p-3 text-slate-300">Slot {bot.slot}</td>
                             <td className="p-3 text-center">
@@ -407,7 +419,7 @@ export default function TeamSpeakPage() {
                         ))
                       ) : (
                         <tr>
-                          <td colSpan={5} className="p-6 text-center text-slate-500">
+                          <td colSpan={6} className="p-6 text-center text-slate-500">
                             Belum ada bot terdaftar. Tambahkan bot di menu Pengaturan.
                           </td>
                         </tr>
