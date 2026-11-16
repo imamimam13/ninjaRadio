@@ -2408,10 +2408,21 @@ usrpAGC = -20,10,100
                     else:
                         net_label = "Direct DMR (WebRTC)"
                     if is_tx:
-                        if session_key not in active_tx_sessions and self.dmr_master_server and self.dmr_master_server.is_tg_busy(tg, dmr_id):
+                        # Anti-Collision Guard: If MMDVM or Remote Peer is actively transmitting on this TG, DROP Gateway/SvxLink!
+                        is_rx_busy = (
+                            self.current_rx_active 
+                            and getattr(self, "current_rx_tg", 0) == tg 
+                            and (now - getattr(self, "current_rx_time", 0)) < 1.8
+                        )
+                        is_master_busy = (
+                            self.dmr_master_server and self.dmr_master_server.is_tg_busy(tg, dmr_id)
+                        )
+                        if is_rx_busy or is_master_busy:
+                            if session_key in active_tx_sessions:
+                                active_tx_sessions.discard(session_key)
                             if now - getattr(self, "_last_web_busy_alert", 0) > 2.0:
                                 self._last_web_busy_alert = now
-                                logger.warning(f"🚫 [TG-LOCK] Blocked Web/Gateway PTT from {addr} ({callsign} - {dmr_id}) on busy TG {tg}")
+                                logger.warning(f"🚫 [COLLISION-GUARD] Blocked Web/Gateway PTT from {addr} ({callsign} - {dmr_id}) on busy TG {tg}")
                             continue
                         is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx, is_gateway=(is_svx or is_mumble or is_zello or is_webrtc))
                         if not is_allowed:
@@ -2433,6 +2444,12 @@ usrpAGC = -20,10,100
                             active_tx_sessions.add(session_key)
                             self.current_tx_start_time = now
                             pkt_count = 0
+                            if self.dmr_master_server:
+                                gw_stream_id = int(now * 1000) & 0xFFFFFFFF
+                                if not hasattr(self, "_gw_stream_ids"):
+                                    self._gw_stream_ids = {}
+                                self._gw_stream_ids[session_key] = gw_stream_id
+                                self.dmr_master_server.acquire_or_check_tg_lock(tg, gw_stream_id, dmr_id, 1, origin_addr=addr)
                             logger.info(f"🎙️ [WebPTT-Ingress] 🔴 Keyed up from {addr} [{net_label}]: ID {dmr_id} ({callsign}) -> TG {tg} (TS{slot}, pcm={len(pcm_chunk)}B)")
                             # Broadcast caller info to DVSwitch Mobile clients
                             try:
@@ -2508,6 +2525,9 @@ usrpAGC = -20,10,100
                             self.current_tx_tg = 0
                             self.current_tx_slot = 0
                             self.current_tx_dmr_id = 0
+                            if self.dmr_master_server and hasattr(self, "_gw_stream_ids") and session_key in self._gw_stream_ids:
+                                gw_stream_id = self._gw_stream_ids.pop(session_key, 0)
+                                self.dmr_master_server.acquire_or_check_tg_lock(tg, gw_stream_id, dmr_id, 2, origin_addr=addr)
                             logger.info(f"🎙️ [WebPTT-Ingress] ⏹️ Unkeyed from {addr} [{net_label}]: ID {dmr_id} ({callsign}) -> TG {tg} (total frames: {pkt_count})")
                             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                             unkey_usrp = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
@@ -2930,6 +2950,16 @@ usrpAGC = -20,10,100
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
             is_local_origin = is_local_mmdvm or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id))
+
+            # Anti-Collision Guard: If Gateway (SvxLink/Mumble/Zello/Web) is currently transmitting on this TG, DROP MMDVM!
+            if self.is_transmitting and getattr(self, "current_tx_tg", 0) == dst_tg:
+                if (now - getattr(self, "last_audio_tx_time", 0)) < 1.8:
+                    if traffic.get("data_type") == 0:
+                        logger.warning(
+                            f"🚫 [COLLISION-GUARD] Suppressed MMDVM uplink from {callsign} ({src_id}) on TG {dst_tg} "
+                            f"— Gateway/SvxLink is actively transmitting on this TG!"
+                        )
+                    return
 
             self.current_rx_src = src_id
             self.current_rx_tg = dst_tg

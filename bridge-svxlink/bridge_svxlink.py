@@ -716,8 +716,8 @@ PREEMPHASIS=0
         """
         if not self.running or len(pcm_8k) == 0:
             return
-        # Echo suppression: do not feed DMR audio back if SvxLink is currently talking into DMR
-        if self.is_transmitting_to_dmr or (time.time() - self.last_svx_audio_rx < 0.35):
+        # Echo suppression: do not feed DMR audio back if SvxLink is currently talking into DMR (1.0s holdoff)
+        if self.is_transmitting_to_dmr or (time.time() - self.last_svx_audio_rx < 1.0):
             return
 
         try:
@@ -798,8 +798,8 @@ PREEMPHASIS=0
                 if not data or len(data) < 4:
                     continue
 
-                # Ignore loopback if DMR RX is currently playing into this bot
-                if self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 0.45):
+                # Ignore loopback if DMR RX is currently playing into this bot (1.5s hang time)
+                if self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 1.5):
                     continue
 
                 # Only filter out audio originating from our own internal gateway bot
