@@ -85,25 +85,10 @@ services:
       dockerfile: Dockerfile
     container_name: ninjaradio_ts3
     restart: unless-stopped
-    ports:
-      - "9987:9987/udp"    # TS3 Voice Audio
-      - "10011:10011/tcp"  # ServerQuery
-      - "30033:30033/tcp"  # File Transfer
-    extra_hosts:
-      - "accounting.teamspeak.com:127.0.0.1"
-      - "backupaccounting.teamspeak.com:127.0.0.1"
-      - "blacklist.teamspeak.com:127.0.0.1"
-      - "blacklist2.teamspeak.com:127.0.0.1"
-      - "weblist.teamspeak.com:127.0.0.1"
-      - "weblist2.teamspeak.com:127.0.0.1"
+    network_mode: host
     volumes:
       - ts3_data:/app/logs
       - ts3_files:/app/files
-    networks:
-      ninjaradio_net:
-        aliases:
-          - ts3-server
-          - teamspeak-server
 
   # 3. Mumble VoIP <--> DMR USRP Audio Bridge Bot
   mumble-bridge:
@@ -229,6 +214,11 @@ services:
       - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
       - ADMIN_PIN=${ADMIN_PIN:-1234}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/ninjaradio.db
+      - TS3_HOST=${TS3_HOST:-172.18.0.1}
+      - TS3_QUERY_PORT=${TS3_QUERY_PORT:-10011}
+      - TS3_VOICE_PORT=${TS3_VOICE_PORT:-9987}
+      - TS3_QUERY_USER=${TS3_QUERY_USER:-serveradmin}
+      - TS3_QUERY_PASS=${TS3_QUERY_PASS:-Eao7tfYU}
     volumes:
       - ./backend:/app/backend
       - ./freedmr:/app/freedmr
