@@ -185,7 +185,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
                     string callerCall = "";
                     int pcmOffset = 32;
-                    if (len >= 48)
+                    if (len >= 368)
                     {
                         callerCall = Encoding.ASCII.GetString(buffer, 32, 16).TrimEnd('\0').Trim();
                         pcmOffset = 48;
@@ -195,8 +195,11 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                         callerCall = $"ID-{dmrId}";
                     }
 
-                    byte[] pcmPayload = new byte[len - pcmOffset];
-                    Array.Copy(buffer, pcmOffset, pcmPayload, 0, len - pcmOffset);
+                    int payloadLen = len - pcmOffset;
+                    if (payloadLen <= 0) continue;
+
+                    byte[] pcmPayload = new byte[payloadLen];
+                    Array.Copy(buffer, pcmOffset, pcmPayload, 0, payloadLen);
 
                     if (instancesByTg.TryGetValue((int)tg, out var botInstance))
                     {
@@ -244,15 +247,21 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                     }
                 }
 
-                if (pcm8k.Length >= 320)
+                if (pcm8k.Length > 0)
                 {
                     if ((DateTime.UtcNow - lastRxLogTime).TotalSeconds > 3.0)
                     {
                         lastRxLogTime = DateTime.UtcNow;
                         Console.WriteLine($"[NinjaRadioBridge] 🔊 Playing DMR RX on TG {targetTg} from {callsign} ({srcDmrId}) into TS3");
                     }
+                    byte[] pcmToEncode = pcm8k;
+                    if (pcmToEncode.Length < 320)
+                    {
+                        pcmToEncode = new byte[320];
+                        Array.Copy(pcm8k, 0, pcmToEncode, 0, pcm8k.Length);
+                    }
                     Span<byte> opusOut = stackalloc byte[500];
-                    var encoded = encoder.Encode(pcm8k, pcm8k.Length, opusOut);
+                    var encoded = encoder.Encode(pcmToEncode, 320, opusOut);
                     if (encoded.Length > 0)
                     {
                         fullClient.SendAudio(encoded, Codec.OpusVoice);
