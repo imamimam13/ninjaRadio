@@ -33,10 +33,17 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
     // Bot specific properties
     private readonly TsFullClient fullClient;
+    private readonly Ts3Client ts3Client;
     private readonly Bot bot;
     private int targetTg = 1025;
     private int targetSlot = 2;
     private string botName = "";
+    private string defaultBotName = "TS3-GW-BRIDISV";
+
+    // Callsign Carry-Over & Nickname Morphing State
+    private string currentMorphedCall = null;
+    private DateTime lastRxAudioTime = DateTime.MinValue;
+    private DateTime lastRxLogTime = DateTime.MinValue;
 
     // Opus Decoder & Encoder
     private OpusDecoder decoder;
@@ -59,9 +66,10 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
     public bool Active => true;
 
-    public NinjaRadioBridge(TsFullClient fullClient, Bot bot)
+    public NinjaRadioBridge(TsFullClient fullClient, Ts3Client ts3Client, Bot bot)
     {
         this.fullClient = fullClient;
+        this.ts3Client = ts3Client;
         this.bot = bot;
     }
 
@@ -69,6 +77,15 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     {
         botName = bot.Name ?? bot.Id.ToString();
         ResolveBotTarget(botName);
+
+        if (targetTg == 1025) defaultBotName = "TS3-GW-BRIDISV";
+        else if (targetTg == 510990) defaultBotName = "TS3-GW-NINJA";
+        else if (targetTg == 510) defaultBotName = "TS3-GW-NASIONAL";
+        else if (targetTg == 5109) defaultBotName = "TS3-GW-NUSANTARA";
+        else defaultBotName = (bot.Name ?? bot.Id.ToString()).ToUpper();
+
+        // Ensure bot is set to clean default name initially
+        try { _ = ts3Client.ChangeName(defaultBotName); } catch { }
 
         decoder = OpusDecoder.Create(8000, 1);
         encoder = OpusEncoder.Create(8000, 1, Application.Voip);
@@ -166,12 +183,24 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                     uint dmrId = BinaryPrimitives.ReadUInt32BigEndian(new ReadOnlySpan<byte>(buffer, 20, 4));
                     uint slot = BinaryPrimitives.ReadUInt32BigEndian(new ReadOnlySpan<byte>(buffer, 24, 4));
 
-                    byte[] pcmPayload = new byte[len - 32];
-                    Array.Copy(buffer, 32, pcmPayload, 0, len - 32);
+                    string callerCall = "";
+                    int pcmOffset = 32;
+                    if (len >= 48)
+                    {
+                        callerCall = Encoding.ASCII.GetString(buffer, 32, 16).TrimEnd('\0').Trim();
+                        pcmOffset = 48;
+                    }
+                    if (string.IsNullOrEmpty(callerCall) && dmrId > 0)
+                    {
+                        callerCall = $"ID-{dmrId}";
+                    }
+
+                    byte[] pcmPayload = new byte[len - pcmOffset];
+                    Array.Copy(buffer, pcmOffset, pcmPayload, 0, len - pcmOffset);
 
                     if (instancesByTg.TryGetValue((int)tg, out var botInstance))
                     {
-                        botInstance.PlayRxAudio(pcmPayload, keyFlag == 1, (int)dmrId);
+                        botInstance.PlayRxAudio(pcmPayload, keyFlag == 1, (int)dmrId, callerCall);
                     }
                 }
             }
@@ -183,25 +212,74 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
     }
 
-    private DateTime lastRxLogTime = DateTime.MinValue;
-
-    public void PlayRxAudio(byte[] pcm8k, bool isKeyed, int srcDmrId)
+    public void PlayRxAudio(byte[] pcm8k, bool isKeyed, int srcDmrId, string callsign)
     {
         if (fullClient == null) return;
         try
         {
-            if (isKeyed && pcm8k.Length >= 320)
+            if (isKeyed)
             {
-                if ((DateTime.UtcNow - lastRxLogTime).TotalSeconds > 3.0)
+                lastRxAudioTime = DateTime.UtcNow;
+
+                // Callsign Carry-Over: dynamically morph bot nickname to active caller
+                if (!string.IsNullOrEmpty(callsign) && currentMorphedCall != callsign)
                 {
-                    lastRxLogTime = DateTime.UtcNow;
-                    Console.WriteLine($"[NinjaRadioBridge] 🔊 Playing DMR RX on TG {targetTg} from DMR ID {srcDmrId} into TS3 channel");
+                    currentMorphedCall = callsign;
+                    string newName = $"[DMR] {callsign}";
+                    if (newName.Length > 25) newName = newName.Substring(0, 25);
+                    try
+                    {
+                        _ = ts3Client.ChangeName(newName).ContinueWith(t =>
+                        {
+                            if (t.IsFaulted)
+                            {
+                                Console.WriteLine($"[NinjaRadioBridge] ⚠️ ChangeName to '{newName}' failed: {t.Exception?.GetBaseException().Message}");
+                            }
+                        });
+                        Console.WriteLine($"[NinjaRadioBridge] 🏷️ Bot '{defaultBotName}' morphed to '{newName}'");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[NinjaRadioBridge] ⚠️ Error morphing name: {ex.Message}");
+                    }
                 }
-                Span<byte> opusOut = stackalloc byte[500];
-                var encoded = encoder.Encode(pcm8k, pcm8k.Length, opusOut);
-                if (encoded.Length > 0)
+
+                if (pcm8k.Length >= 320)
                 {
-                    fullClient.SendAudio(encoded, Codec.OpusVoice);
+                    if ((DateTime.UtcNow - lastRxLogTime).TotalSeconds > 3.0)
+                    {
+                        lastRxLogTime = DateTime.UtcNow;
+                        Console.WriteLine($"[NinjaRadioBridge] 🔊 Playing DMR RX on TG {targetTg} from {callsign} ({srcDmrId}) into TS3");
+                    }
+                    Span<byte> opusOut = stackalloc byte[500];
+                    var encoded = encoder.Encode(pcm8k, pcm8k.Length, opusOut);
+                    if (encoded.Length > 0)
+                    {
+                        fullClient.SendAudio(encoded, Codec.OpusVoice);
+                    }
+                }
+            }
+            else
+            {
+                // Unkey: Revert bot nickname back to standard gateway identity
+                if (currentMorphedCall != null)
+                {
+                    currentMorphedCall = null;
+                    try
+                    {
+                        _ = ts3Client.ChangeName(defaultBotName).ContinueWith(t =>
+                        {
+                            if (t.IsFaulted)
+                            {
+                                Console.WriteLine($"[NinjaRadioBridge] ⚠️ Revert to '{defaultBotName}' failed: {t.Exception?.GetBaseException().Message}");
+                            }
+                        });
+                        Console.WriteLine($"[NinjaRadioBridge] 🏷️ Bot reverted to '{defaultBotName}'");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[NinjaRadioBridge] ⚠️ Error reverting name: {ex.Message}");
+                    }
                 }
             }
         }
@@ -295,16 +373,33 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
     private void OnHangoverTick(object state)
     {
-        if (!isVoiceActive) return;
-
         DateTime now = DateTime.UtcNow;
-        // Hangover Timer: 450ms silence threshold before unkeying
-        if ((now - lastVoiceTime).TotalMilliseconds >= 450)
+
+        // 1. Hangover Timer: 450ms silence threshold before unkeying
+        if (isVoiceActive && (now - lastVoiceTime).TotalMilliseconds >= 450)
         {
             isVoiceActive = false;
             pcmBufferOffset = 0;
             Console.WriteLine($"[NinjaRadioBridge] ⏹️ TX Unkey: {currentTalkerCall} ({currentTalkerDmrId}) -> TG {targetTg}");
             SendCorePacket(false, Array.Empty<byte>());
+        }
+
+        // 2. RX Callsign Carry-Over Watchdog: Revert nickname if no RX packet received for 1200ms
+        if (currentMorphedCall != null && (now - lastRxAudioTime).TotalMilliseconds >= 1200)
+        {
+            currentMorphedCall = null;
+            try
+            {
+                _ = ts3Client.ChangeName(defaultBotName).ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        Console.WriteLine($"[NinjaRadioBridge] ⚠️ Watchdog revert to '{defaultBotName}' failed: {t.Exception?.GetBaseException().Message}");
+                    }
+                });
+            }
+            catch { }
+            Console.WriteLine($"[NinjaRadioBridge] ⏱️ RX timeout: reverted to '{defaultBotName}'");
         }
     }
 
@@ -375,6 +470,11 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         txSocket?.Dispose();
 
         instancesByTg.TryRemove(targetTg, out _);
+
+        if (currentMorphedCall != null)
+        {
+            try { _ = ts3Client.ChangeName(defaultBotName); } catch { }
+        }
 
         lock (lockObj)
         {

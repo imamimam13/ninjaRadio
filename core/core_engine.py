@@ -2195,7 +2195,8 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
                             try:
-                                self.bridge_sock.sendto(unkey_mumble, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                             except Exception:
                                 pass
                             # Forward unkey frame to DVSwitch Mobile clients
@@ -2306,7 +2307,9 @@ usrpAGC = -20,10,100
                         except Exception:
                             pass
                         try:
-                            self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                            call_b = (target_call or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                            ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, target_tg, target_dmr_id, target_slot, 0, call_b) + chunk_pcm
+                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                         except Exception:
                             pass
 
@@ -2516,7 +2519,9 @@ usrpAGC = -20,10,100
                                             pass
                                     if not is_ts3:
                                         try:
-                                            self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                            call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                            ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
+                                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                                         except Exception:
                                             pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -2566,7 +2571,8 @@ usrpAGC = -20,10,100
                                     pass
                             if not is_ts3:
                                 try:
-                                    self.bridge_sock.sendto(mumble_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                    ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                                    self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                                 except Exception:
                                     pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -3130,7 +3136,9 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
                             try:
-                                self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
+                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                             except Exception:
                                 pass
                 elif data_type == 2:
@@ -3153,7 +3161,8 @@ usrpAGC = -20,10,100
                     except Exception:
                         pass
                     try:
-                        self.bridge_sock.sendto(unkey_mumble, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                        ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
@@ -3418,7 +3427,9 @@ usrpAGC = -20,10,100
                             except Exception:
                                 pass
                             try:
-                                self.bridge_sock.sendto(mumble_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                                call_b = (callsign or "").encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                ts3_pkt = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
+                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                             except Exception:
                                 pass
                 elif data_type == 2:
@@ -3441,7 +3452,8 @@ usrpAGC = -20,10,100
                     except Exception:
                         pass
                     try:
-                        self.bridge_sock.sendto(unkey_mumble, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
+                        ts3_unkey = struct.pack(">4sIIIIIII16s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 16) + (b"\x00" * 320)
+                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", TEAMSPEAK_BRIDGE_PORT))
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
