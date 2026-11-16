@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import { AdminGuard } from "@/components/AdminGuard";
@@ -18,12 +18,23 @@ import {
   Headphones,
   CheckCircle2,
   AlertTriangle,
-  Info
+  Info,
+  Users
 } from "lucide-react";
+
+interface TSChannel {
+  cid: number;
+  name: string;
+  topic: string;
+  total_clients: number;
+  clients: string[];
+}
 
 export default function TeamSpeakPage() {
   const { isConnected } = useLiveMonitor();
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [telemetry, setTelemetry] = useState<any>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   const serverHost = typeof window !== "undefined" ? window.location.hostname : "43.173.13.117";
   const voicePort = 9987;
@@ -32,6 +43,26 @@ export default function TeamSpeakPage() {
   const adminToken = "nROmoSRen56eICbHWRtGvjpZx5fexEoVcuoTdDvS";
   const queryUser = "serveradmin";
   const queryPass = "Eao7tfYU";
+
+  useEffect(() => {
+    const fetchTelemetry = async () => {
+      try {
+        const res = await fetch("/api/teamspeak/telemetry");
+        if (res.ok) {
+          const data = await res.json();
+          setTelemetry(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch TS3 telemetry:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTelemetry();
+    const interval = setInterval(fetchTelemetry, 3500);
+    return () => clearInterval(interval);
+  }, []);
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -171,6 +202,85 @@ export default function TeamSpeakPage() {
               <div className="text-[11px] text-slate-400 font-mono">
                 Digunakan untuk bot otomatisasi & telnet remote control via TCP port 10011.
               </div>
+            </div>
+          </div>
+
+          {/* Live Channels & Rooms Matrix */}
+          <div className="bg-[#0b121e]/80 border border-cyan-900/30 rounded-2xl p-5 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-cyan-400" />
+                <h2 className="font-heading font-bold text-sm sm:text-base text-white">
+                  LIVE TEAMSPEAK 3 ROOMS & CHANNELS
+                </h2>
+              </div>
+              <div className="flex items-center gap-3 text-xs font-mono">
+                <span className="text-slate-400">
+                  Total Users: <strong className="text-cyan-300">{telemetry?.total_clients ?? 0}</strong> / {telemetry?.max_clients ?? 512}
+                </span>
+                <span className="text-slate-600">•</span>
+                <span className="text-slate-400">
+                  Rooms: <strong className="text-emerald-400">{telemetry?.channels?.length ?? 0}</strong> Active
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {(telemetry?.channels || []).map((ch: TSChannel) => (
+                <div
+                  key={ch.cid}
+                  className="bg-slate-950/80 border border-slate-800/90 rounded-xl p-3.5 space-y-2.5 flex flex-col justify-between hover:border-cyan-700/50 transition-colors"
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-1.5">
+                      <div className="font-bold text-white text-xs truncate" title={ch.name}>
+                        {ch.name}
+                      </div>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/80 shrink-0">
+                        CID {ch.cid}
+                      </span>
+                    </div>
+                    {ch.topic && (
+                      <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate" title={ch.topic}>
+                        {ch.topic}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-900 space-y-2">
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span className="text-slate-400 flex items-center gap-1">
+                        <Users className="w-3.5 h-3.5 text-slate-400" />
+                        Online:
+                      </span>
+                      <span className={`font-bold ${ch.total_clients > 0 ? "text-emerald-400" : "text-slate-500"}`}>
+                        {ch.total_clients} Users
+                      </span>
+                    </div>
+
+                    {ch.clients && ch.clients.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {ch.clients.map((u, i) => (
+                          <span
+                            key={i}
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/50"
+                          >
+                            {u}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    <a
+                      href={`ts3server://${serverHost}?port=${voicePort}&channel=${encodeURIComponent(ch.name)}`}
+                      className="inline-flex items-center justify-center gap-1.5 w-full py-1.5 px-2 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-800/70 text-[11px] font-mono font-bold transition-all shadow-sm"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Join Room</span>
+                    </a>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 

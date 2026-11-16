@@ -2753,6 +2753,36 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
             "sw": "Zello Channel API"
         })
 
+    # 8. Connected TeamSpeak 3 Voice Server
+    try:
+        from app.services.teamspeak_service import get_teamspeak_telemetry
+        ts3_telemetry = await get_teamspeak_telemetry()
+        if ts3_telemetry.get("online"):
+            ext_ip = os.getenv("EXTERNAL_IP", "43.173.13.117")
+            tot_clients = ts3_telemetry.get("total_clients", 0)
+            channels_cnt = len(ts3_telemetry.get("channels", []))
+            unified_nodes.append({
+                "id": "ts3_server",
+                "callsign": "NINJA-TS3",
+                "category": "TeamSpeak",
+                "sourceType": "Network",
+                "bridgeLabel": f"TeamSpeak 3 Server ({channels_cnt} Rooms)",
+                "hostLabel": f"{ext_ip}:9987",
+                "routeFrom": "TS3 Voice Rooms",
+                "routeTo": "DMR TG 1025 TS2",
+                "tg": 1025,
+                "slot": 2,
+                "monitoredTGs": [1025, 510990, 510, 5109],
+                "isTalking": False,
+                "talkerCallsign": "",
+                "talkingDurationSec": 0,
+                "connected": True,
+                "sysop": f"TEAMSPEAK 3 · {tot_clients} Users Online",
+                "sw": "TeamSpeak 3 (Anti Phone-Home)"
+            })
+    except Exception as e:
+        logger.debug(f"Note loading TS3 telemetry: {e}")
+
     mappings = DEFAULT_SVXLINK_ROOMS
     config_path = "/app/data/config.json"
     if os.path.exists(config_path):
@@ -3611,6 +3641,16 @@ async def run_callbook_sync_source_now(
         "last_status": src.last_status,
         "imported_count": result.get("imported_count", 0),
     }
+
+
+@router.get("/teamspeak/telemetry")
+async def get_teamspeak_telemetry_endpoint():
+    """Returns live TeamSpeak 3 channels, online clients, and server status via ServerQuery."""
+    try:
+        from app.services.teamspeak_service import get_teamspeak_telemetry
+        return await get_teamspeak_telemetry()
+    except Exception as e:
+        return {"online": False, "error": str(e), "channels": [], "clients": []}
 
 
 async def run_callbook_autosync_loop():
