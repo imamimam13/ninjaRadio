@@ -32,6 +32,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     private readonly TsFullClient fullClient;
     private readonly Ts3Client ts3Client;
     private readonly Bot bot;
+    private TaskScheduler botScheduler;
     private int targetTg = 1025;
     private int targetSlot = 2;
     private string botName = "";
@@ -75,6 +76,19 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         botName = bot.Name ?? bot.Id.ToString();
         ResolveBotTarget(botName);
 
+        // Resolve DedicatedTaskScheduler for cross-thread calls to TSLib
+        try
+        {
+            var prop = typeof(Bot).GetProperty("Scheduler");
+            if (prop != null) botScheduler = prop.GetValue(bot) as TaskScheduler;
+            if (botScheduler == null)
+            {
+                var field = typeof(Bot).GetField("<Scheduler>k__BackingField", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                botScheduler = field?.GetValue(bot) as TaskScheduler;
+            }
+        }
+        catch { }
+
         if (targetTg == 1025) defaultBotName = "TS3-GW-BRIDISV";
         else if (targetTg == 510990) defaultBotName = "TS3-GW-NINJA";
         else if (targetTg == 510) defaultBotName = "TS3-GW-NASIONAL";
@@ -82,7 +96,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         else defaultBotName = (bot.Name ?? bot.Id.ToString()).ToUpper();
 
         // Ensure bot is set to clean default name initially
-        try { _ = ts3Client.ChangeName(defaultBotName); } catch { }
+        SafeChangeNickname(defaultBotName);
 
         decoder = OpusDecoder.Create(8000, 1);
         encoder = OpusEncoder.Create(8000, 1, Application.Voip);
@@ -214,6 +228,35 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
     }
 
+    private void SafeChangeNickname(string newName)
+    {
+        try
+        {
+            if (botScheduler != null)
+            {
+                System.Threading.Tasks.Task.Factory.StartNew(() =>
+                {
+                    try
+                    {
+                        _ = ts3Client.ChangeName(newName);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[NinjaRadioBridge] ⚠️ ChangeName to '{newName}' failed: {ex.Message}");
+                    }
+                }, CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.None, botScheduler);
+            }
+            else
+            {
+                _ = ts3Client.ChangeName(newName);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[NinjaRadioBridge] ⚠️ SafeChangeNickname error: {ex.Message}");
+        }
+    }
+
     public void PlayRxAudio(byte[] pcm8k, bool isKeyed, int srcDmrId, string callsign)
     {
         if (fullClient == null) return;
@@ -229,21 +272,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                     currentMorphedCall = callsign;
                     string newName = $"[DMR] {callsign}";
                     if (newName.Length > 25) newName = newName.Substring(0, 25);
-                    try
-                    {
-                        _ = ts3Client.ChangeName(newName).ContinueWith(t =>
-                        {
-                            if (t.IsFaulted)
-                            {
-                                Console.WriteLine($"[NinjaRadioBridge] ⚠️ ChangeName to '{newName}' failed: {t.Exception?.GetBaseException().Message}");
-                            }
-                        });
-                        Console.WriteLine($"[NinjaRadioBridge] 🏷️ Bot '{defaultBotName}' morphed to '{newName}'");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[NinjaRadioBridge] ⚠️ Error morphing name: {ex.Message}");
-                    }
+                    SafeChangeNickname(newName);
+                    Console.WriteLine($"[NinjaRadioBridge] 🏷️ Bot '{defaultBotName}' morphed to '{newName}'");
                 }
 
                 if (pcm8k.Length > 0)
@@ -273,21 +303,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                 if (currentMorphedCall != null)
                 {
                     currentMorphedCall = null;
-                    try
-                    {
-                        _ = ts3Client.ChangeName(defaultBotName).ContinueWith(t =>
-                        {
-                            if (t.IsFaulted)
-                            {
-                                Console.WriteLine($"[NinjaRadioBridge] ⚠️ Revert to '{defaultBotName}' failed: {t.Exception?.GetBaseException().Message}");
-                            }
-                        });
-                        Console.WriteLine($"[NinjaRadioBridge] 🏷️ Bot reverted to '{defaultBotName}'");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[NinjaRadioBridge] ⚠️ Error reverting name: {ex.Message}");
-                    }
+                    SafeChangeNickname(defaultBotName);
+                    Console.WriteLine($"[NinjaRadioBridge] 🏷️ Bot reverted to '{defaultBotName}'");
                 }
             }
         }
@@ -396,17 +413,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         if (currentMorphedCall != null && (now - lastRxAudioTime).TotalMilliseconds >= 1200)
         {
             currentMorphedCall = null;
-            try
-            {
-                _ = ts3Client.ChangeName(defaultBotName).ContinueWith(t =>
-                {
-                    if (t.IsFaulted)
-                    {
-                        Console.WriteLine($"[NinjaRadioBridge] ⚠️ Watchdog revert to '{defaultBotName}' failed: {t.Exception?.GetBaseException().Message}");
-                    }
-                });
-            }
-            catch { }
+            SafeChangeNickname(defaultBotName);
             Console.WriteLine($"[NinjaRadioBridge] ⏱️ RX timeout: reverted to '{defaultBotName}'");
         }
     }
@@ -483,7 +490,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
         if (currentMorphedCall != null)
         {
-            try { _ = ts3Client.ChangeName(defaultBotName); } catch { }
+            SafeChangeNickname(defaultBotName);
         }
 
         Console.WriteLine($"[NinjaRadioBridge] Bot '{defaultBotName}' disposed.");
