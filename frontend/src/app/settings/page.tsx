@@ -35,13 +35,14 @@ import {
   Bot,
   ArrowRightLeft,
   RefreshCw,
-  Smartphone
+  Smartphone,
+  Headphones
 } from "lucide-react";
 
 export default function SettingsPage() {
   const { isConnected } = useLiveMonitor();
   const { pttKey, saveCustomKey } = usePhysicalPTT();
-  const [activeTab, setActiveTab] = useState<"general" | "hotspot" | "peering" | "crossmode" | "mumble" | "zello" | "qlink" | "hardware">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "hotspot" | "peering" | "crossmode" | "mumble" | "teamspeak" | "zello" | "qlink" | "hardware">("general");
   const [isListeningKey, setIsListeningKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -264,6 +265,12 @@ export default function SettingsPage() {
         }
         if (Array.isArray(data.mumble_bots)) {
           setMumbleBots(data.mumble_bots);
+        }
+        if (Array.isArray(data.teamspeak_rooms)) {
+          setTs3Rooms(data.teamspeak_rooms);
+        }
+        if (Array.isArray(data.teamspeak_bots)) {
+          setTs3Bots(data.teamspeak_bots);
         }
         if (Array.isArray(data.peering) && data.peering.length > 0) {
           setPeerList(data.peering);
@@ -546,6 +553,8 @@ export default function SettingsPage() {
     }
     fetchMumbleRooms();
     fetchMumbleBots();
+    fetchTs3Rooms();
+    fetchTs3Bots();
   }, []);
 
   const [mumbleBots, setMumbleBots] = useState<Array<{
@@ -843,6 +852,134 @@ export default function SettingsPage() {
     }
   };
 
+  // 5b. TeamSpeak 3 Server & Multi-Room / Bot Bridge State
+  interface TeamSpeakRoomBridge {
+    cid: number;
+    id: string;
+    name: string;
+    channel?: string;
+    targetTg: number;
+    tg?: number;
+    slot: number;
+    description: string;
+    topic?: string;
+    total_clients?: number;
+    clients?: string[];
+    isActive: boolean;
+  }
+
+  interface TeamSpeakBotBridge {
+    name: string;
+    channel: string;
+    tg: number;
+    slot: number;
+    status: string;
+  }
+
+  const [ts3Rooms, setTs3Rooms] = useState<TeamSpeakRoomBridge[]>([]);
+  const [ts3Bots, setTs3Bots] = useState<TeamSpeakBotBridge[]>([]);
+  const [isLoadingTs3, setIsLoadingTs3] = useState(false);
+  const [showAddTs3RoomModal, setShowAddTs3RoomModal] = useState(false);
+  const [editingTs3Cid, setEditingTs3Cid] = useState<number | null>(null);
+  const [ts3RoomName, setTs3RoomName] = useState("");
+  const [ts3RoomTg, setTs3RoomTg] = useState(1025);
+  const [ts3RoomSlot, setTs3RoomSlot] = useState(2);
+  const [ts3RoomTopic, setTs3RoomTopic] = useState("");
+
+  const [showAddTs3BotModal, setShowAddTs3BotModal] = useState(false);
+  const [newTs3BotName, setNewTs3BotName] = useState("");
+  const [newTs3BotChannel, setNewTs3BotChannel] = useState("");
+  const [newTs3BotTg, setNewTs3BotTg] = useState(1025);
+  const [newTs3BotSlot, setNewTs3BotSlot] = useState(2);
+
+  const fetchTs3Rooms = async () => {
+    setIsLoadingTs3(true);
+    try {
+      const res = await fetch("/api/teamspeak/rooms");
+      if (res.ok) {
+        const d = await res.json();
+        if (Array.isArray(d.rooms)) setTs3Rooms(d.rooms);
+      }
+    } catch {} finally {
+      setIsLoadingTs3(false);
+    }
+  };
+
+  const fetchTs3Bots = async () => {
+    try {
+      const res = await fetch("/api/teamspeak/bots");
+      if (res.ok) {
+        const d = await res.json();
+        if (Array.isArray(d.bots)) setTs3Bots(d.bots);
+      }
+    } catch {}
+  };
+
+  const handleSaveTs3Room = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch("/api/teamspeak/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cid: editingTs3Cid,
+          name: ts3RoomName,
+          targetTg: ts3RoomTg,
+          slot: ts3RoomSlot,
+          topic: ts3RoomTopic
+        }),
+      });
+      if (res.ok) {
+        setShowAddTs3RoomModal(false);
+        fetchTs3Rooms();
+        beepPlayer?.playTalkGrant();
+      }
+    } catch {}
+  };
+
+  const handleDeleteTs3Room = async (cid: number) => {
+    if (!window.confirm("Yakin ingin menghapus channel TS3 ini?")) return;
+    try {
+      const res = await fetch(`/api/teamspeak/rooms/${cid}`, { method: "DELETE" });
+      if (res.ok) {
+        fetchTs3Rooms();
+        beepPlayer?.playRogerBeep();
+      }
+    } catch {}
+  };
+
+  const handleAddTs3Bot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch("/api/teamspeak/bots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newTs3BotName,
+          channel: newTs3BotChannel,
+          tg: newTs3BotTg,
+          slot: newTs3BotSlot
+        }),
+      });
+      if (res.ok) {
+        setShowAddTs3BotModal(false);
+        fetchTs3Bots();
+        beepPlayer?.playTalkGrant();
+      }
+    } catch {}
+  };
+
+  const handleDeleteTs3Bot = async (botName: string) => {
+    if (!window.confirm(`Hapus bot audio ${botName}?`)) return;
+    try {
+      const res = await fetch(`/api/teamspeak/bots/${encodeURIComponent(botName)}`, { method: "DELETE" });
+      if (res.ok) {
+        fetchTs3Bots();
+        beepPlayer?.playRogerBeep();
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     if (!isListeningKey) return;
 
@@ -1081,6 +1218,7 @@ export default function SettingsPage() {
             { id: "peering", label: "🌐 Peering FreeDMR / BM", icon: Globe },
             { id: "crossmode", label: "🔀 DVSwitch & Cross-Mode", icon: Layers },
             { id: "mumble", label: "🎙️ Mumble VoIP Server", icon: Radio },
+            { id: "teamspeak", label: "🎧 TeamSpeak 3 Server", icon: Headphones },
             { id: "zello", label: "📱 Zello PTT Bridge", icon: Smartphone },
             { id: "qlink", label: "📡 QRadioLink & SvxLink SDR", icon: Radio },
             { id: "hardware", label: "🎛️ Tombol PTT & Audio", icon: Key },
@@ -1950,6 +2088,232 @@ export default function SettingsPage() {
           )}
 
           
+          {/* TAB: TEAMSPEAK 3 SERVER */}
+          {activeTab === "teamspeak" && (
+            <div className="bg-[#0b121e] border border-cyan-900/40 rounded-2xl p-5 space-y-5 shadow-xl">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cyan-900/30 pb-3">
+                <div>
+                  <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                    <Headphones className="w-4 h-4 text-cyan-400" />
+                    TeamSpeak 3 Server & Multi-Room Matrix ({ts3Rooms.length} Channel)
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                    Kelola room & channel TeamSpeak 3. Setiap channel terhubung ke Talkgroup DMR dan mendukung Callsign Carry-Over otomatis.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isLoadingTs3}
+                    onClick={() => { fetchTs3Rooms(); fetchTs3Bots(); beepPlayer?.playTalkGrant(); }}
+                    title="Sinkronisasi Ulang Room dari Server TS3"
+                    className="px-2.5 py-1.5 bg-[#05080f] hover:bg-[#131f33] text-cyan-400 border border-cyan-800/60 font-mono text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTs3 ? "animate-spin" : ""}`} /> Sync TS3
+                  </button>
+                  {!isAdminUnlocked ? (
+                    <span className="text-[11px] text-amber-400 font-mono flex items-center gap-1">
+                      <Lock className="w-3 h-3" /> Pengaturan Terkunci
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingTs3Cid(null);
+                        setTs3RoomName("");
+                        setTs3RoomTg(1025);
+                        setTs3RoomSlot(2);
+                        setTs3RoomTopic("");
+                        setShowAddTs3RoomModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-mono font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-cyan-500/20"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Tambah Channel TS3
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* TS3 Server Parameters */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-mono bg-[#05080f]/60 p-3.5 rounded-xl border border-slate-800">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">TS3 Hostname / Server IP</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value="43.173.13.117"
+                    className="w-full px-3 py-2 rounded-xl text-white font-mono text-xs bg-[#080d17] border border-slate-800 cursor-default"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">Alamat IP Server TeamSpeak 3 publik.</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Voice Port (UDP)</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value="9987"
+                    className="w-full px-3 py-2 rounded-xl text-cyan-400 font-mono text-xs font-bold bg-[#080d17] border border-slate-800 cursor-default"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">Port standar koneksi suara klien TS3.</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">ServerQuery Port (TCP)</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value="10011"
+                    className="w-full px-3 py-2 rounded-xl text-emerald-400 font-mono text-xs font-bold bg-[#080d17] border border-slate-800 cursor-default"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">Port otomatisasi Carry-Over & Telemetri.</p>
+                </div>
+              </div>
+
+              {/* Channels List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-mono text-slate-300">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <span>🎧</span> Daftar Channel TS3 & Bridging DMR Talkgroup:
+                  </span>
+                  <span className="text-[11px] text-cyan-400">
+                    🟢 {ts3Rooms.length} Channel Terdaftar
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {ts3Rooms.map((room) => (
+                    <div
+                      key={room.cid || room.id}
+                      className="bg-[#05080f] border border-slate-800 hover:border-cyan-500/50 rounded-xl p-3.5 space-y-2.5 transition-all"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          <h4 className="font-heading font-black text-xs text-white">
+                            {room.name}
+                          </h4>
+                          <span className="px-1.5 py-0.5 bg-slate-800 text-[10px] text-slate-400 font-mono rounded">
+                            CID {room.cid}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={`ts3server://43.173.13.117?port=9987&channel=${encodeURIComponent(room.name)}`}
+                            className="px-2 py-1 rounded-lg bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30 text-[10px] font-semibold flex items-center gap-1"
+                          >
+                            Join
+                          </a>
+                          {isAdminUnlocked && room.cid > 1 && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingTs3Cid(room.cid);
+                                  setTs3RoomName(room.name);
+                                  setTs3RoomTg(room.targetTg || room.tg || 510);
+                                  setTs3RoomSlot(room.slot || 2);
+                                  setTs3RoomTopic(room.topic || room.description || "");
+                                  setShowAddTs3RoomModal(true);
+                                }}
+                                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400"
+                                title="Edit Channel"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteTs3Room(room.cid)}
+                                className="p-1 rounded bg-slate-800 hover:bg-rose-900/50 text-rose-400"
+                                title="Hapus Channel"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
+                        <div>
+                          Target TG: <span className="text-cyan-300 font-bold">TG {room.targetTg || room.tg}</span>
+                        </div>
+                        <div>
+                          Timeslot: <span className="text-amber-300 font-bold">Slot {room.slot || 2}</span>
+                        </div>
+                      </div>
+
+                      {room.topic && (
+                        <p className="text-[10px] font-mono text-slate-400 truncate bg-[#080d17] px-2 py-1 rounded border border-slate-800/50">
+                          {room.topic}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Bot Audio Bridge Section */}
+              <div className="pt-4 border-t border-cyan-900/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-heading font-black text-xs text-white flex items-center gap-2">
+                      <Bot className="w-4 h-4 text-purple-400" />
+                      Stationed Bot Audio Bridge TeamSpeak 3 &lt;-&gt; DMR
+                    </h4>
+                    <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                      Bot Virtual Client yang disiagakan di tiap channel untuk menjembatani audio dua arah secara otomatis.
+                    </p>
+                  </div>
+                  {isAdminUnlocked && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewTs3BotName("");
+                        setNewTs3BotChannel(ts3Rooms[0]?.name || "TG 1025 - BRIDISV");
+                        setNewTs3BotTg(1025);
+                        setNewTs3BotSlot(2);
+                        setShowAddTs3BotModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white font-mono font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-purple-500/20"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Tambah Bot TS3
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {ts3Bots.map((b, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-[#05080f] border border-slate-800 rounded-xl p-3 flex items-center justify-between"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-purple-400" />
+                          <span className="font-bold text-xs text-white font-mono">{b.name}</span>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400">
+                          {b.channel} • <span className="text-cyan-400 font-bold">TG {b.tg}</span> (Slot {b.slot})
+                        </div>
+                      </div>
+                      {isAdminUnlocked && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTs3Bot(b.name)}
+                          className="p-1 rounded bg-slate-800 hover:bg-rose-900/50 text-rose-400"
+                          title="Hapus Bot"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TAB 5C: ZELLO CHANNELS API PTT BRIDGE */}
           {activeTab === "zello" && (
             <div className="space-y-4">
@@ -3311,6 +3675,189 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   className="flex-1 py-2 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 font-heading font-black rounded-xl shadow-lg shadow-amber-500/25 transition-all"
                 >
                   {isChangingPin ? "Menyimpan..." : "Simpan PIN Baru"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* ADD/EDIT TS3 ROOM MODAL */}
+      {showAddTs3RoomModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b121e] border-2 border-cyan-500/50 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-cyan-900/30 pb-3">
+              <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                <Headphones className="w-4 h-4 text-cyan-400" />
+                {editingTs3Cid ? `Edit Channel TS3 (CID ${editingTs3Cid})` : "Tambah Channel TS3 Baru"}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddTs3RoomModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTs3Room} className="space-y-3 text-xs font-mono">
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Nama Channel</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: TG 1025 - BRIDISV"
+                  value={ts3RoomName}
+                  onChange={(e) => setTs3RoomName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Target Talkgroup (TG)</label>
+                  <input
+                    type="number"
+                    required
+                    value={ts3RoomTg}
+                    onChange={(e) => setTs3RoomTg(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-cyan-300 font-bold outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Timeslot DMR</label>
+                  <select
+                    value={ts3RoomSlot}
+                    onChange={(e) => setTs3RoomSlot(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-amber-300 font-bold outline-none"
+                  >
+                    <option value={1}>Slot 1</option>
+                    <option value={2}>Slot 2</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Topik Standby Channel</label>
+                <input
+                  type="text"
+                  placeholder="DMR TG 1025 Slot 2"
+                  value={ts3RoomTopic}
+                  onChange={(e) => setTs3RoomTopic(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowAddTs3RoomModal(false)}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-heading font-black rounded-xl shadow-lg shadow-cyan-500/25 transition-all"
+                >
+                  Simpan Channel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ADD TS3 BOT MODAL */}
+      {showAddTs3BotModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b121e] border-2 border-purple-500/50 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-purple-900/30 pb-3">
+              <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
+                <Bot className="w-4 h-4 text-purple-400" />
+                Tambah Bot Stationed TeamSpeak 3
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddTs3BotModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddTs3Bot} className="space-y-3 text-xs font-mono">
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Nama Bot TS3</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: TS3-GW-BRIDISV"
+                  value={newTs3BotName}
+                  onChange={(e) => setNewTs3BotName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Channel Standby</label>
+                <select
+                  value={newTs3BotChannel}
+                  onChange={(e) => {
+                    const sel = e.target.value;
+                    setNewTs3BotChannel(sel);
+                    const r = ts3Rooms.find((x) => x.name === sel);
+                    if (r) {
+                      setNewTs3BotTg(r.targetTg || r.tg || 510);
+                      setNewTs3BotSlot(r.slot || 2);
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                >
+                  {ts3Rooms.map((r, i) => (
+                    <option key={i} value={r.name}>
+                      {r.name} (TG {r.targetTg || r.tg})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Target Talkgroup (TG)</label>
+                  <input
+                    type="number"
+                    required
+                    value={newTs3BotTg}
+                    onChange={(e) => setNewTs3BotTg(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Timeslot DMR</label>
+                  <select
+                    value={newTs3BotSlot}
+                    onChange={(e) => setNewTs3BotSlot(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-amber-300 font-bold outline-none"
+                  >
+                    <option value={1}>Slot 1</option>
+                    <option value={2}>Slot 2</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowAddTs3BotModal(false)}
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-purple-500 hover:bg-purple-400 text-white font-heading font-black rounded-xl shadow-lg shadow-purple-500/25 transition-all"
+                >
+                  Simpan Bot
                 </button>
               </div>
             </form>

@@ -244,7 +244,7 @@ async def ensure_default_channels():
         ("TG 510 - Nasional", "DMR TG 510 Slot 1"),
         ("TG 5109 - Nusantara", "DMR TG 5109 Slot 2")
     ]
-    resp = await send_ts3_command("channellist")
+    resp = await send_ts3_command("channellist -topic")
     if not resp:
         return
     existing = parse_ts3_response(resp)
@@ -257,3 +257,40 @@ async def ensure_default_channels():
             cmd = f"channelcreate channel_name={esc_name} channel_topic={esc_topic} channel_flag_permanent=1 channel_codec=4 channel_codec_quality=7"
             await send_ts3_command(cmd)
             logger.info(f"✓ Created TeamSpeak 3 channel '{name}'")
+
+
+async def create_ts3_channel(name: str, topic: str = "", target_tg: int = 510, slot: int = 2) -> Optional[int]:
+    """Creates a permanent Opus Voice channel in TeamSpeak 3 and registers its TG mapping."""
+    esc_name = ts_escape(name.strip())
+    esc_topic = ts_escape(topic.strip() or f"DMR TG {target_tg} Slot {slot}")
+    cmd = f"channelcreate channel_name={esc_name} channel_topic={esc_topic} channel_flag_permanent=1 channel_codec=4 channel_codec_quality=7"
+    resp = await send_ts3_command(cmd)
+    if not resp:
+        return None
+    parsed = parse_ts3_response(resp)
+    new_cid = int(parsed[0].get("cid", 0)) if parsed else 0
+    if new_cid > 0:
+        _tg_to_cid[int(target_tg)] = new_cid
+        logger.info(f"✓ Created TeamSpeak 3 channel '{name}' (CID {new_cid}) for TG {target_tg}")
+    return new_cid if new_cid > 0 else None
+
+
+async def edit_ts3_channel(cid: int, name: str, topic: str = "", target_tg: int = 510, slot: int = 2) -> bool:
+    """Edits channel name and topic in TeamSpeak 3."""
+    esc_name = ts_escape(name.strip())
+    esc_topic = ts_escape(topic.strip() or f"DMR TG {target_tg} Slot {slot}")
+    cmd = f"channeledit cid={cid} channel_name={esc_name} channel_topic={esc_topic}"
+    resp = await send_ts3_command(cmd)
+    if resp and "error id=0" in resp:
+        _tg_to_cid[int(target_tg)] = cid
+        return True
+    return False
+
+
+async def delete_ts3_channel(cid: int) -> bool:
+    """Deletes a channel in TeamSpeak 3 (except default channel 1)."""
+    if cid <= 1:
+        return False
+    cmd = f"channeldelete cid={cid} force=1"
+    resp = await send_ts3_command(cmd)
+    return bool(resp and "error id=0" in resp)
