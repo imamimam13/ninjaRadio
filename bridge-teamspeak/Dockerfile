@@ -5,6 +5,7 @@ RUN apk add --no-cache python3 bash su-exec
 
 WORKDIR /app
 COPY sync_bots.py /app/sync_bots.py
+COPY plugins/ /app/plugins/
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

@@ -66,6 +66,7 @@ caddy_config/
 mumble_data/
 ninjaradio_data/
 bridge-teamspeak/data/
+core/DVSwitch.ini
 
 # OS metadata
 .DS_Store
