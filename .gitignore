@@ -65,6 +65,7 @@ caddy_data/
 caddy_config/
 mumble_data/
 ninjaradio_data/
+bridge-teamspeak/data/
 
 # OS metadata
 .DS_Store
