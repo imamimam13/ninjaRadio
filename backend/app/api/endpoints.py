@@ -1325,6 +1325,19 @@ DEFAULT_SVXLINK_BOTS = [
     {"name": "SVX-GATEWAY", "channel": "Direct Any-TG", "tg": 0, "slot": 2, "status": "ONLINE"}
 ]
 
+DEFAULT_TEAMSPEAK_ROOMS = [
+    {"cid": 2, "id": "ts3_1025", "name": "TG 1025 - BRIDISV", "channel": "TG 1025 - BRIDISV", "targetTg": 1025, "tg": 1025, "slot": 2, "description": "DMR TG 1025 Slot 2", "isActive": True},
+    {"cid": 3, "id": "ts3_510990", "name": "TG 510990 - Ninja", "channel": "TG 510990 - Ninja", "targetTg": 510990, "tg": 510990, "slot": 2, "description": "DMR TG 510990 Slot 2", "isActive": True},
+    {"cid": 4, "id": "ts3_510", "name": "TG 510 - Nasional", "channel": "TG 510 - Nasional", "targetTg": 510, "tg": 510, "slot": 1, "description": "DMR TG 510 Slot 1", "isActive": True},
+    {"cid": 5, "id": "ts3_5109", "name": "TG 5109 - Nusantara", "channel": "TG 5109 - Nusantara", "targetTg": 5109, "tg": 5109, "slot": 2, "description": "DMR TG 5109 Slot 2", "isActive": True}
+]
+
+DEFAULT_TEAMSPEAK_BOTS = [
+    {"name": "TS3-GW-BRIDISV", "channel": "TG 1025 - BRIDISV", "tg": 1025, "slot": 2, "status": "STATIONED"},
+    {"name": "TS3-GW-NINJA", "channel": "TG 510990 - Ninja", "tg": 510990, "slot": 2, "status": "STATIONED"},
+    {"name": "TS3-GW-NASIONAL", "channel": "TG 510 - Nasional", "tg": 510, "slot": 1, "status": "STATIONED"}
+]
+
 def read_config_file() -> dict:
     import json
     import os
@@ -1357,6 +1370,8 @@ def read_config_file() -> dict:
         "mumble_bots": DEFAULT_MUMBLE_BOTS,
         "svxlink_rooms": DEFAULT_SVXLINK_ROOMS,
         "svxlink_bots": DEFAULT_SVXLINK_BOTS,
+        "teamspeak_rooms": DEFAULT_TEAMSPEAK_ROOMS,
+        "teamspeak_bots": DEFAULT_TEAMSPEAK_BOTS,
         "zello_config": {
             "enabled": True,
             "channel": "NINJARADIOZL",
@@ -1395,7 +1410,7 @@ async def save_system_config(config: dict):
     import json
     import os
     existing = read_config_file()
-    for k in ["mumble_rooms", "mumble_bots", "svxlink_rooms", "svxlink_bots", "zello_config", "parrot_tgs", "parrot_delay"]:
+    for k in ["mumble_rooms", "mumble_bots", "svxlink_rooms", "svxlink_bots", "teamspeak_rooms", "teamspeak_bots", "zello_config", "parrot_tgs", "parrot_delay"]:
         if (k not in config or not config[k]) and k in existing and existing[k]:
             config[k] = existing[k]
     if "peering" not in config and "peering" in existing:
@@ -3666,6 +3681,153 @@ async def get_teamspeak_telemetry_endpoint():
         return await get_teamspeak_telemetry()
     except Exception as e:
         return {"online": False, "error": str(e), "channels": [], "clients": []}
+
+
+@router.get("/teamspeak/rooms")
+async def get_teamspeak_rooms_endpoint():
+    """Returns configured TS3 rooms merged with live ServerQuery telemetry."""
+    cfg = read_config_file()
+    saved_rooms = cfg.get("teamspeak_rooms", DEFAULT_TEAMSPEAK_ROOMS)
+    try:
+        from backend.app.services.teamspeak_service import get_teamspeak_telemetry
+        telem = await get_teamspeak_telemetry()
+        live_chs = {ch.get("cid"): ch for ch in telem.get("channels", [])}
+        enriched = []
+        for r in saved_rooms:
+            r_copy = dict(r)
+            cid = r.get("cid")
+            if cid in live_chs:
+                l_info = live_chs[cid]
+                r_copy["topic"] = l_info.get("topic", r_copy.get("description", ""))
+                r_copy["total_clients"] = l_info.get("total_clients", 0)
+                r_copy["clients"] = l_info.get("clients", [])
+            enriched.append(r_copy)
+        return {"status": "SUCCESS", "rooms": enriched}
+    except Exception:
+        return {"status": "SUCCESS", "rooms": saved_rooms}
+
+
+@router.post("/teamspeak/rooms")
+async def save_teamspeak_room_endpoint(payload: dict):
+    """Creates or updates a TeamSpeak 3 channel and saves mapping to config."""
+    import json
+    from backend.app.services.teamspeak_service import create_ts3_channel, edit_ts3_channel
+    cfg = read_config_file()
+    rooms = list(cfg.get("teamspeak_rooms", DEFAULT_TEAMSPEAK_ROOMS))
+    cid = payload.get("cid")
+    name = (payload.get("name") or payload.get("channel") or "").strip()
+    target_tg = int(payload.get("targetTg") or payload.get("tg") or 510)
+    slot = int(payload.get("slot") or 2)
+    topic = (payload.get("topic") or payload.get("description") or f"DMR TG {target_tg} Slot {slot}").strip()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Nama channel tidak boleh kosong.")
+
+    if cid and int(cid) > 0:
+        cid_val = int(cid)
+        await edit_ts3_channel(cid_val, name, topic, target_tg, slot)
+        updated = False
+        for r in rooms:
+            if r.get("cid") == cid_val:
+                r["name"] = name
+                r["channel"] = name
+                r["targetTg"] = target_tg
+                r["tg"] = target_tg
+                r["slot"] = slot
+                r["description"] = topic
+                r["topic"] = topic
+                updated = True
+                break
+        if not updated:
+            rooms.append({"cid": cid_val, "id": f"ts3_{target_tg}", "name": name, "channel": name, "targetTg": target_tg, "tg": target_tg, "slot": slot, "description": topic, "isActive": True})
+    else:
+        new_cid = await create_ts3_channel(name, topic, target_tg, slot)
+        rooms.append({
+            "cid": new_cid or (len(rooms) + 10),
+            "id": f"ts3_{target_tg}_{int(time.time())}",
+            "name": name,
+            "channel": name,
+            "targetTg": target_tg,
+            "tg": target_tg,
+            "slot": slot,
+            "description": topic,
+            "isActive": True
+        })
+
+    cfg["teamspeak_rooms"] = rooms
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save config.json: {e}")
+
+    return {"status": "SUCCESS", "rooms": rooms}
+
+
+@router.delete("/teamspeak/rooms/{cid}")
+async def delete_teamspeak_room_endpoint(cid: int):
+    """Deletes a TS3 channel from ServerQuery and removes from config."""
+    import json
+    from backend.app.services.teamspeak_service import delete_ts3_channel
+    if cid <= 1:
+        raise HTTPException(status_code=400, detail="Default channel tidak boleh dihapus.")
+    await delete_ts3_channel(cid)
+    cfg = read_config_file()
+    rooms = [r for r in cfg.get("teamspeak_rooms", DEFAULT_TEAMSPEAK_ROOMS) if r.get("cid") != cid]
+    cfg["teamspeak_rooms"] = rooms
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to update config.json: {e}")
+    return {"status": "SUCCESS", "rooms": rooms}
+
+
+@router.get("/teamspeak/bots")
+async def get_teamspeak_bots_endpoint():
+    """Returns configured TS3 audio bots."""
+    cfg = read_config_file()
+    bots = cfg.get("teamspeak_bots", DEFAULT_TEAMSPEAK_BOTS)
+    return {"status": "SUCCESS", "bots": bots}
+
+
+@router.post("/teamspeak/bots")
+async def save_teamspeak_bot_endpoint(payload: dict):
+    """Adds a new stationed bot to TeamSpeak 3."""
+    import json
+    cfg = read_config_file()
+    bots = list(cfg.get("teamspeak_bots", DEFAULT_TEAMSPEAK_BOTS))
+    name = (payload.get("name") or "").strip().upper()
+    channel = (payload.get("channel") or "").strip()
+    tg = int(payload.get("tg") or 510)
+    slot = int(payload.get("slot") or 2)
+    if not name or not channel:
+        raise HTTPException(status_code=400, detail="Nama bot dan channel harus diisi.")
+
+    bots = [b for b in bots if b.get("name") != name]
+    bots.append({"name": name, "channel": channel, "tg": tg, "slot": slot, "status": "STATIONED"})
+    cfg["teamspeak_bots"] = bots
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to update config.json: {e}")
+    return {"status": "SUCCESS", "bots": bots}
+
+
+@router.delete("/teamspeak/bots/{bot_name}")
+async def delete_teamspeak_bot_endpoint(bot_name: str):
+    """Deletes a stationed bot from TeamSpeak 3."""
+    import json
+    cfg = read_config_file()
+    bots = [b for b in cfg.get("teamspeak_bots", DEFAULT_TEAMSPEAK_BOTS) if b.get("name") != bot_name.strip().upper()]
+    cfg["teamspeak_bots"] = bots
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to update config.json: {e}")
+    return {"status": "SUCCESS", "bots": bots}
 
 
 async def run_callbook_autosync_loop():
