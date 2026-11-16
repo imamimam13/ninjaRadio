@@ -202,7 +202,12 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
                     string callerCall = "";
                     int pcmOffset = 32;
-                    if (len >= 368)
+                    if (len >= 376)
+                    {
+                        callerCall = Encoding.ASCII.GetString(buffer, 32, 24).TrimEnd('\0').Trim();
+                        pcmOffset = 56;
+                    }
+                    else if (len >= 368)
                     {
                         callerCall = Encoding.ASCII.GetString(buffer, 32, 16).TrimEnd('\0').Trim();
                         pcmOffset = 48;
@@ -272,7 +277,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                 {
                     currentMorphedCall = callsign;
                     string newName = $"[DMR] {callsign}";
-                    if (newName.Length > 25) newName = newName.Substring(0, 25);
+                    if (newName.Length > 28) newName = newName.Substring(0, 28);
                     SafeChangeNickname(newName);
                     Console.WriteLine($"[NinjaRadioBridge] 🏷️ Bot '{defaultBotName}' morphed to '{newName}'");
                 }
