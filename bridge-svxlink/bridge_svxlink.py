@@ -699,7 +699,7 @@ PREEMPHASIS=0
                 requests.get(
                     f"http://{SVX_HOST}:{SVX_HTTP_PORT}/set_talker",
                     params={"node": self.bot_user, "call": clean_call, "tg": target_tg},
-                    timeout=0.15 if sync else 0.35,
+                    timeout=0.08 if sync else 0.25,
                 )
             except Exception:
                 pass
@@ -716,8 +716,8 @@ PREEMPHASIS=0
         """
         if not self.running or len(pcm_8k) == 0:
             return
-        # Echo suppression: do not feed DMR audio back if SvxLink is currently talking into DMR (1.0s holdoff)
-        if self.is_transmitting_to_dmr or (time.time() - self.last_svx_audio_rx < 1.0):
+        # Echo suppression: do not feed DMR audio back if SvxLink is currently talking into DMR (0.8s holdoff)
+        if self.is_transmitting_to_dmr or (time.time() - self.last_svx_audio_rx < 0.8):
             return
 
         try:
@@ -725,7 +725,10 @@ PREEMPHASIS=0
                 self.select_talkgroup(tg)
 
             tx_call = getattr(self, "current_tx_call", None)
-            if tx_call:
+            if tx_call and not self.squelch_is_open:
+                # Pre-notify SvxReflector synchronously before squelch opens so override is active for burst #1
+                self._notify_reflector_talker(tx_call, tg or self.tg, sync=True)
+            elif tx_call:
                 self._notify_reflector_talker(tx_call, tg or self.tg, sync=False)
 
             self.last_dmr_rx_play = time.time()
@@ -756,6 +759,7 @@ PREEMPHASIS=0
                 self._set_squelch(False)
                 if getattr(self, "_last_delegated_call", ""):
                     self._notify_reflector_talker("", self.tg, sync=False)
+                self.current_tx_call = None
 
             # 2. Release Direct DMR PTT 450ms after SvxLink Tx1 audio stops
             if self.is_transmitting_to_dmr and (now - self.last_svx_audio_rx > 0.45):
@@ -781,6 +785,8 @@ PREEMPHASIS=0
         self.tx_pcm_buffer.clear()
         self._tx_agc_gain = 1.5
         self.active_talker_tg = None
+        self.active_talker_call = None
+        self.active_talker_dmr_id = 0
 
     def _audio_tx_from_svx_loop(self):
         """
@@ -975,6 +981,8 @@ PREEMPHASIS=0
                             for bot in list(GATEWAY_POOL.values()) + [self]:
                                 if bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0):
                                     return True
+                                if getattr(bot, "current_tx_call", "") and getattr(bot, "current_tx_call", "").upper() == c_up:
+                                    return True
                             return False
 
                         if ev_type in ("TALKER_START", "ECHOLINK_START"):
@@ -997,6 +1005,7 @@ PREEMPHASIS=0
                                 logger.info(f"[{self.bot_user}] ⏹️ SvxReflector Talker Stopped: {ev_call} on TG {cur_active_tg}")
                                 self._release_dmr_tx()
                                 self.active_talker_call = None
+                                self.active_talker_dmr_id = 0
 
                     # Also fallback-parse standard SvxLink log lines ("ReflectorLogic: Talker start on TG #510: YB0ABC")
                     elif "Talker start on TG #" in sline:
@@ -1012,7 +1021,7 @@ PREEMPHASIS=0
                             c_up = t_call.upper()
                             now_ts = time.time()
                             is_delegated_echo = any(
-                                (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0))
+                                (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0) or (getattr(bot, "current_tx_call", "") and getattr(bot, "current_tx_call", "").upper() == c_up))
                                 for bot in list(GATEWAY_POOL.values()) + [self]
                             )
                             if not is_delegated_echo and t_call.upper() != self.bot_user.upper() and t_call.upper() not in internal_bot_names and not t_call.upper().startswith("SVX-"):
@@ -1026,6 +1035,7 @@ PREEMPHASIS=0
                             if t_call.upper() != self.bot_user.upper():
                                 self._release_dmr_tx()
                                 self.active_talker_call = None
+                                self.active_talker_dmr_id = 0
 
                 if self.proc:
                     self.proc.wait()
@@ -1104,14 +1114,26 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     bot_names = ", ".join([f"{b.bot_user} ('{b.room_name}')" for b in target_bots])
                     logger.info(f"[SvxLink-Bridge] 🔊 Routing DMR RX (TG {talkgroup} from {caller_call or dmr_id}) -> {bot_names}")
 
-                # Self-Echo Guard: Drop incoming DMR audio if it matches an active talker on SvxLink or if bot is currently transmitting
-                c_up = (caller_call or "").strip().upper()
-                active_talkers = {b.active_talker_call.upper() for b in gateway_pool.values() if b.active_talker_call}
-                active_ids = {b.active_talker_dmr_id for b in gateway_pool.values() if b.active_talker_dmr_id}
-                internal_bot_users = {b.bot_user.upper() for b in gateway_pool.values()}
-                if (c_up and c_up in active_talkers) or (dmr_id and dmr_id in active_ids) or (c_up and c_up in internal_bot_users):
+                # Self-Echo Guard: Only drop if this bot is currently actively transmitting SvxLink audio TO DMR
+                now_ts = time.time()
+                is_transmitting_to_dmr = any(
+                    b.is_transmitting_to_dmr and (now_ts - b.last_svx_audio_rx < 0.6)
+                    for b in target_bots
+                )
+                if is_transmitting_to_dmr:
                     continue
-                if any(b.is_transmitting_to_dmr for b in target_bots):
+
+                # Clear any lingering active_talker cached on SvxLink for this user since they are actively talking on DMR
+                c_up = (caller_call or "").strip().upper()
+                for b in target_bots:
+                    if b.active_talker_call and b.active_talker_call.upper() == c_up:
+                        b.active_talker_call = None
+                    if b.active_talker_dmr_id and b.active_talker_dmr_id == dmr_id:
+                        b.active_talker_dmr_id = 0
+
+                # Drop only if caller is our internal bot user name itself (e.g. SVX-GWBRIDI)
+                internal_bot_users = {b.bot_user.upper() for b in gateway_pool.values()}
+                if c_up and c_up in internal_bot_users:
                     continue
 
                 for bot in target_bots:
