@@ -34,6 +34,7 @@ export default function RegisterPage() {
   const [reqMumble, setReqMumble] = useState(false);
   const [reqDvswitch, setReqDvswitch] = useState(false);
   const [reqZello, setReqZello] = useState(false);
+  const [reqTeamspeak, setReqTeamspeak] = useState(false);
   const [zelloUsername, setZelloUsername] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
@@ -83,6 +84,7 @@ export default function RegisterPage() {
           req_mumble: reqMumble,
           req_dvswitch: reqDvswitch,
           req_zello: reqZello,
+          req_teamspeak: reqTeamspeak,
           zello_username: zelloUsername.trim(),
         }),
       });
@@ -262,6 +264,7 @@ export default function RegisterPage() {
                   { label: "DMR Hotspot (Port 62031)", checked: reqDmr, set: setReqDmr },
                   { label: "SvxLink / SvxReflector (Port 5300)", checked: reqSvxlink, set: setReqSvxlink },
                   { label: "Mumble / Mumla (Port 64738)", checked: reqMumble, set: setReqMumble },
+                  { label: "TeamSpeak 3 (Port 9987)", checked: reqTeamspeak, set: setReqTeamspeak },
                   { label: "DVSwitch Mobile (Port 32345)", checked: reqDvswitch, set: setReqDvswitch },
                   { label: "Zello Channels Bridge", checked: reqZello, set: setReqZello },
                 ].map((item) => (

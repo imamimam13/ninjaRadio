@@ -167,6 +167,7 @@ class SelfCareRegisterRequest(BaseModel):
     req_mumble: bool = False
     req_dvswitch: bool = False
     req_zello: bool = False
+    req_teamspeak: bool = False
     zello_username: Optional[str] = ""
 
 
@@ -182,11 +183,12 @@ class SelfCareServiceRequest(BaseModel):
     req_mumble: Optional[bool] = None
     req_dvswitch: Optional[bool] = None
     req_zello: Optional[bool] = None
+    req_teamspeak: Optional[bool] = None
     zello_username: Optional[str] = None
 
 
 class SelfCareRotatePasswordRequest(BaseModel):
-    protocol: str  # dmr | svxlink | mumble
+    protocol: str  # dmr | svxlink | mumble | teamspeak
     new_password: Optional[str] = None
 
 
@@ -197,6 +199,7 @@ class AdminApprovalRequest(BaseModel):
     allow_mumble: bool = False
     allow_dvswitch: bool = False
     allow_zello: bool = False
+    allow_teamspeak: bool = False
     zello_username: Optional[str] = None
     default_tg: Optional[int] = 510
 
@@ -224,15 +227,18 @@ class UserAccountPublicResponse(BaseModel):
     req_mumble: bool
     req_dvswitch: bool
     req_zello: bool
+    req_teamspeak: bool = False
     allow_web: bool
     allow_dmr: bool
     allow_svxlink: bool
     allow_mumble: bool
     allow_dvswitch: bool
     allow_zello: bool
+    allow_teamspeak: bool = False
     dmr_password: str = ""
     svxlink_password: str = ""
     mumble_password: str = ""
+    teamspeak_password: str = ""
     zello_username: str = ""
     dvswitch_allowed_ip: str = ""
 

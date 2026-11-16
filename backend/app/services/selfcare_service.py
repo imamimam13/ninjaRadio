@@ -127,15 +127,18 @@ def sanitize_user_response(user: UserAccount) -> UserAccountPublicResponse:
         req_mumble=user.req_mumble,
         req_dvswitch=user.req_dvswitch,
         req_zello=user.req_zello,
+        req_teamspeak=user.req_teamspeak,
         allow_web=user.allow_web if is_approved else False,
         allow_dmr=user.allow_dmr if is_approved else False,
         allow_svxlink=user.allow_svxlink if is_approved else False,
         allow_mumble=user.allow_mumble if is_approved else False,
         allow_dvswitch=user.allow_dvswitch if is_approved else False,
         allow_zello=user.allow_zello if is_approved else False,
+        allow_teamspeak=user.allow_teamspeak if is_approved else False,
         dmr_password=user.dmr_password if (is_approved and user.allow_dmr) else "",
         svxlink_password=user.svxlink_password if (is_approved and user.allow_svxlink) else "",
         mumble_password=user.mumble_password if (is_approved and user.allow_mumble) else "",
+        teamspeak_password=user.teamspeak_password if (is_approved and user.allow_teamspeak) else "",
         zello_username=user.zello_username or "",
         dvswitch_allowed_ip=user.dvswitch_allowed_ip if (is_approved and user.allow_dvswitch) else "",
     )
@@ -205,6 +208,7 @@ class SelfCareService:
             req_mumble=bool(data.req_mumble),
             req_dvswitch=bool(data.req_dvswitch),
             req_zello=bool(data.req_zello),
+            req_teamspeak=bool(data.req_teamspeak),
             zello_username=(data.zello_username or "").strip(),
         )
         session.add(user)
@@ -244,12 +248,14 @@ class SelfCareService:
             base["dmr_password"] = u.dmr_password or ""
             base["svxlink_password"] = u.svxlink_password or ""
             base["mumble_password"] = u.mumble_password or ""
+            base["teamspeak_password"] = u.teamspeak_password or ""
             base["allow_web"] = u.allow_web
             base["allow_dmr"] = u.allow_dmr
             base["allow_svxlink"] = u.allow_svxlink
             base["allow_mumble"] = u.allow_mumble
             base["allow_dvswitch"] = u.allow_dvswitch
             base["allow_zello"] = u.allow_zello
+            base["allow_teamspeak"] = u.allow_teamspeak
             base["dvswitch_allowed_ip"] = u.dvswitch_allowed_ip or ""
             output.append(UserAccountAdminResponse(**base, prefix_valid=prefix_ok, prefix_hint=hint))
         return output
@@ -271,6 +277,7 @@ class SelfCareService:
         user.allow_mumble = bool(req.allow_mumble)
         user.allow_dvswitch = bool(req.allow_dvswitch)
         user.allow_zello = bool(req.allow_zello)
+        user.allow_teamspeak = bool(req.allow_teamspeak)
 
         if req.zello_username is not None:
             user.zello_username = req.zello_username.strip()
@@ -282,6 +289,8 @@ class SelfCareService:
             user.svxlink_password = generate_protocol_password(6)
         if user.allow_mumble and not user.mumble_password:
             user.mumble_password = generate_protocol_password(6)
+        if user.allow_teamspeak and not user.teamspeak_password:
+            user.teamspeak_password = generate_protocol_password(6)
 
         await SelfCareService._sync_callbook_entry(session, user, default_tg=req.default_tg or 510)
         await session.commit()
@@ -306,6 +315,7 @@ class SelfCareService:
         user.allow_mumble = False
         user.allow_dvswitch = False
         user.allow_zello = False
+        user.allow_teamspeak = False
 
         # Block TX in callbook fallback as well
         cb_res = await session.execute(

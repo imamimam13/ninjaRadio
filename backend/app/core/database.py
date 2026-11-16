@@ -99,6 +99,7 @@ class UserAccount(Base):
     req_mumble: Mapped[bool] = mapped_column(Boolean, default=False)
     req_dvswitch: Mapped[bool] = mapped_column(Boolean, default=False)
     req_zello: Mapped[bool] = mapped_column(Boolean, default=False)
+    req_teamspeak: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Approved permissions by Admin
     allow_web: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -107,11 +108,13 @@ class UserAccount(Base):
     allow_mumble: Mapped[bool] = mapped_column(Boolean, default=False)
     allow_dvswitch: Mapped[bool] = mapped_column(Boolean, default=False)
     allow_zello: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_teamspeak: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Per-protocol unique credentials (6-char auto-generated on approve)
     dmr_password: Mapped[str] = mapped_column(String(32), default="")
     svxlink_password: Mapped[str] = mapped_column(String(32), default="")
     mumble_password: Mapped[str] = mapped_column(String(32), default="")
+    teamspeak_password: Mapped[str] = mapped_column(String(32), default="")
     zello_username: Mapped[str] = mapped_column(String(64), default="")
     dvswitch_allowed_ip: Mapped[str] = mapped_column(String(64), default="")
 
@@ -158,6 +161,18 @@ async def init_db():
             pass
         try:
             await conn.execute(text("ALTER TABLE organizations ADD COLUMN allow_tx BOOLEAN DEFAULT 1"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE user_accounts ADD COLUMN req_teamspeak BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE user_accounts ADD COLUMN allow_teamspeak BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE user_accounts ADD COLUMN teamspeak_password VARCHAR(32) DEFAULT ''"))
         except Exception:
             pass
         # Automatically update any existing BD callsigns from KOMUNITAS to BRIDI
