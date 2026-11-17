@@ -873,6 +873,10 @@ export default function SettingsPage() {
     channel: string;
     tg: number;
     slot: number;
+    server?: string;
+    server_password?: string;
+    channel_password?: string;
+    svx_bot?: string;
     status: string;
   }
 
@@ -888,6 +892,9 @@ export default function SettingsPage() {
 
   const [showAddTs3BotModal, setShowAddTs3BotModal] = useState(false);
   const [newTs3BotName, setNewTs3BotName] = useState("");
+  const [newTs3BotServer, setNewTs3BotServer] = useState("127.0.0.1:9987");
+  const [newTs3BotServerPw, setNewTs3BotServerPw] = useState("");
+  const [newTs3BotChannelPw, setNewTs3BotChannelPw] = useState("");
   const [newTs3BotChannel, setNewTs3BotChannel] = useState("");
   const [newTs3BotTg, setNewTs3BotTg] = useState(1025);
   const [newTs3BotSlot, setNewTs3BotSlot] = useState(2);
@@ -972,7 +979,10 @@ export default function SettingsPage() {
           channel: newTs3BotChannel,
           tg: newTs3BotTg,
           slot: newTs3BotSlot,
-          svx_bot: newTs3BotSvx
+          svx_bot: newTs3BotSvx,
+          server: newTs3BotServer || "127.0.0.1:9987",
+          server_password: newTs3BotServerPw,
+          channel_password: newTs3BotChannelPw
         }),
       });
       if (res.ok) {
@@ -2284,6 +2294,9 @@ export default function SettingsPage() {
                       type="button"
                       onClick={() => {
                         setNewTs3BotName("");
+                        setNewTs3BotServer("127.0.0.1:9987");
+                        setNewTs3BotServerPw("");
+                        setNewTs3BotChannelPw("");
                         setNewTs3BotChannel(ts3Rooms[0]?.name || "TG 1025 - BRIDISV");
                         setNewTs3BotTg(1025);
                         setNewTs3BotSlot(2);
@@ -2311,6 +2324,11 @@ export default function SettingsPage() {
                         </div>
                         <div className="text-[10px] font-mono text-slate-400 flex flex-wrap items-center gap-1.5">
                           <span>{b.channel} • <span className="text-cyan-400 font-bold">TG {b.tg}</span> (Slot {b.slot})</span>
+                          {b.server && !b.server.startsWith("127.0.0.1") && !b.server.startsWith("localhost") && (
+                            <span className="px-1.5 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800 text-[9px] font-mono font-semibold">
+                              🌐 {b.server}
+                            </span>
+                          )}
                           {b.svx_bot && (
                             <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800 text-[9px] font-mono flex items-center gap-1 font-semibold">
                               <Radio className="w-2.5 h-2.5 text-cyan-400" /> Paired: {b.svx_bot}
@@ -3820,8 +3838,42 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
               </div>
 
               <div>
+                <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                  <span>Alamat Server TeamSpeak 3 (Host:Port)</span>
+                  <span className="text-[10px] text-cyan-400 font-normal">
+                    {newTs3BotServer === "127.0.0.1:9987" || !newTs3BotServer ? "🏠 Server Lokal" : "🌐 Remote Server Link"}
+                  </span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    placeholder="127.0.0.1:9987 atau IP:Port server lain"
+                    value={newTs3BotServer}
+                    onChange={(e) => setNewTs3BotServer(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setNewTs3BotServer("127.0.0.1:9987")}
+                    className="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl shrink-0"
+                    title="Gunakan Server Lokal"
+                  >
+                    Lokal
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Gunakan <code>127.0.0.1:9987</code> untuk server lokal, atau masukkan domain/IP server TS3 lain (misal: <code>voice.komunitas.org:9987</code>).
+                </p>
+              </div>
+
+              <div>
                 <label className="block text-slate-400 mb-1 font-semibold">Channel Standby</label>
-                <select
+                <input
+                  type="text"
+                  required
+                  list="ts3_rooms_datalist"
+                  placeholder="Contoh: TG 1025 - BRIDISV atau Nama Channel di Server Luar"
                   value={newTs3BotChannel}
                   onChange={(e) => {
                     const sel = e.target.value;
@@ -3833,13 +3885,40 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                     }
                   }}
                   className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
-                >
+                />
+                <datalist id="ts3_rooms_datalist">
                   {ts3Rooms.map((r, i) => (
                     <option key={i} value={r.name}>
-                      {r.name} (TG {r.targetTg || r.tg})
+                      TG {r.targetTg || r.tg} (Slot {r.slot || 2})
                     </option>
                   ))}
-                </select>
+                </datalist>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Pilih dari daftar channel lokal atau ketik nama channel server luar yang ingin dituju.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Password Server (Opsional)</label>
+                  <input
+                    type="password"
+                    placeholder="Kosongkan jika publik"
+                    value={newTs3BotServerPw}
+                    onChange={(e) => setNewTs3BotServerPw(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-slate-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Password Channel (Opsional)</label>
+                  <input
+                    type="password"
+                    placeholder="Kosongkan jika tanpa pw"
+                    value={newTs3BotChannelPw}
+                    onChange={(e) => setNewTs3BotChannelPw(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-slate-300 outline-none"
+                  />
+                </div>
               </div>
 
               <div>

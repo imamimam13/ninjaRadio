@@ -3829,11 +3829,25 @@ async def save_teamspeak_bot_endpoint(payload: dict):
     tg = int(payload.get("tg") or 510)
     slot = int(payload.get("slot") or 2)
     svx_bot = (payload.get("svx_bot") or "").strip()
+    server = (payload.get("server") or "127.0.0.1:9987").strip()
+    server_password = (payload.get("server_password") or "").strip()
+    channel_password = (payload.get("channel_password") or "").strip()
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Nama bot dan channel harus diisi.")
 
     bots = [b for b in bots if b.get("name") != name]
-    bots.append({"name": name, "channel": channel, "tg": tg, "slot": slot, "svx_bot": svx_bot, "status": "STATIONED"})
+    bot_entry = {
+        "name": name,
+        "channel": channel,
+        "tg": tg,
+        "slot": slot,
+        "svx_bot": svx_bot,
+        "server": server,
+        "server_password": server_password,
+        "channel_password": channel_password,
+        "status": "STATIONED"
+    }
+    bots.append(bot_entry)
     cfg["teamspeak_bots"] = bots
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
