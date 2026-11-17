@@ -21,7 +21,8 @@ import {
   Info,
   Users,
   Bot,
-  Settings
+  Settings,
+  RefreshCw
 } from "lucide-react";
 
 interface TSChannel {
@@ -47,14 +48,33 @@ export default function TeamSpeakPage() {
   const [telemetry, setTelemetry] = useState<any>(null);
   const [bots, setBots] = useState<TSBot[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [customToken, setCustomToken] = useState<string | null>(null);
+  const [isGeneratingToken, setIsGeneratingToken] = useState<boolean>(false);
 
   const serverHost = typeof window !== "undefined" ? window.location.hostname : "43.173.13.117";
-  const voicePort = 9987;
-  const queryPort = 10011;
-  const filePort = 30033;
-  const adminToken = "nROmoSRen56eICbHWRtGvjpZx5fexEoVcuoTdDvS";
-  const queryUser = "serveradmin";
-  const queryPass = "Eao7tfYU";
+  const voicePort = telemetry?.voice_port || 9987;
+  const queryPort = telemetry?.query_port || 10011;
+  const filePort = telemetry?.file_port || 30033;
+  const adminToken = customToken || telemetry?.admin_token || "Memuat token dari server...";
+  const queryUser = telemetry?.query_user || "serveradmin";
+  const queryPass = telemetry?.query_pass || "Eao7tfYU";
+
+  const handleGenerateNewToken = async () => {
+    setIsGeneratingToken(true);
+    try {
+      const res = await fetch("/api/teamspeak/token/generate", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token) {
+          setCustomToken(data.token);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to generate new token:", err);
+    } finally {
+      setIsGeneratingToken(false);
+    }
+  };
 
   useEffect(() => {
     const fetchTelemetry = async () => {
@@ -177,14 +197,20 @@ export default function TeamSpeakPage() {
                   <Key className="w-5 h-5 text-emerald-400" />
                   <h2 className="font-heading font-bold text-sm text-white">SERVERADMIN PRIVILEGE KEY</h2>
                 </div>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                  TOKEN
-                </span>
+                <button
+                  onClick={handleGenerateNewToken}
+                  disabled={isGeneratingToken}
+                  className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 hover:bg-emerald-900 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  title="Generate Token Baru dari ServerQuery"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isGeneratingToken ? "animate-spin" : ""}`} />
+                  {isGeneratingToken ? "MEMBUAT..." : "BUAT BARU"}
+                </button>
               </div>
               <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-1 font-mono text-xs">
-                <div className="text-slate-400 text-[11px]">One-Time Claim Token:</div>
+                <div className="text-slate-400 text-[11px]">Active Claim Token:</div>
                 <div className="flex items-center justify-between">
-                  <span className="text-emerald-300 font-bold truncate max-w-[200px]">{adminToken}</span>
+                  <span className="text-emerald-300 font-bold truncate max-w-[200px]" title={adminToken}>{adminToken}</span>
                   <button
                     onClick={() => copyToClipboard(adminToken, "token")}
                     className="text-slate-400 hover:text-emerald-400 transition-colors shrink-0 ml-2"

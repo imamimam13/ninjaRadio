@@ -124,6 +124,40 @@ async def send_ts3_command(cmd: str, timeout: float = 2.0) -> Optional[str]:
         return None
 
 
+_ts3_admin_token_cache = {"token": "", "last_check": 0.0}
+
+
+async def get_or_create_admin_token(force_new: bool = False) -> str:
+    """Fetches the active unused ServerAdmin privilege key from TS3, or creates a new one if none exist."""
+    now = time.time()
+    if not force_new and _ts3_admin_token_cache["token"] and (now - _ts3_admin_token_cache["last_check"] < 60.0):
+        return _ts3_admin_token_cache["token"]
+
+    if not force_new:
+        resp = await send_ts3_command("tokenlist")
+        if resp:
+            tokens = parse_ts3_response(resp)
+            for t in tokens:
+                tok = t.get("token")
+                t_id1 = str(t.get("token_id1", "6"))
+                if tok and t_id1 == "6":
+                    _ts3_admin_token_cache["token"] = tok
+                    _ts3_admin_token_cache["last_check"] = now
+                    return tok
+
+    # If no token exists or force_new requested, create a new ServerAdmin token (group 6 = Server Admin)
+    create_resp = await send_ts3_command("tokenadd tokentype=0 tokenid1=6 tokenid2=0")
+    if create_resp:
+        parsed = parse_ts3_response(create_resp)
+        if parsed and parsed[0].get("token"):
+            new_tok = parsed[0]["token"]
+            _ts3_admin_token_cache["token"] = new_tok
+            _ts3_admin_token_cache["last_check"] = now
+            return new_tok
+
+    return _ts3_admin_token_cache["token"]
+
+
 async def get_teamspeak_telemetry(force: bool = False) -> Dict[str, Any]:
     """Returns live TeamSpeak 3 telemetry (channels, clients, server status) with 3s cache."""
     now = time.time()
@@ -160,12 +194,18 @@ async def get_teamspeak_telemetry(force: bool = False) -> Dict[str, Any]:
             "clients": [c.get("client_nickname", "") for c in in_ch_clients]
         })
 
+    admin_tok = await get_or_create_admin_token()
+
     s_info = serverinfo[0] if serverinfo else {}
     data = {
         "online": True,
         "host": TS3_HOST,
         "voice_port": TS3_VOICE_PORT,
         "query_port": TS3_QUERY_PORT,
+        "file_port": 30033,
+        "query_user": TS3_USER,
+        "query_pass": TS3_PASS,
+        "admin_token": admin_tok,
         "server_name": s_info.get("virtualserver_name", "NinjaRadio TeamSpeak 3"),
         "total_clients": len(real_clients),
         "max_clients": int(s_info.get("virtualserver_maxclients", 512)),
