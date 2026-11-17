@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
@@ -75,7 +76,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     public void Initialize()
     {
         botName = bot.Name ?? bot.Id.ToString();
-        ResolveBotTarget(botName);
+        ResolveBotTarget(botName, bot.Id.ToString());
 
         // Resolve DedicatedTaskScheduler for cross-thread calls to TSLib
         try
@@ -90,11 +91,15 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
         catch { }
 
-        if (targetTg == 1025) defaultBotName = "TS3-GW-BRIDISV";
+        if (!string.IsNullOrEmpty(bot.Name))
+        {
+            defaultBotName = bot.Name;
+        }
+        else if (targetTg == 1025) defaultBotName = "TS3-GW-BRIDISV";
         else if (targetTg == 510990) defaultBotName = "TS3-GW-NINJA";
         else if (targetTg == 510) defaultBotName = "TS3-GW-NASIONAL";
         else if (targetTg == 5109) defaultBotName = "TS3-GW-NUSANTARA";
-        else defaultBotName = (bot.Name ?? bot.Id.ToString()).ToUpper();
+        else defaultBotName = $"TS3-GW-TG{targetTg}";
 
         // Ensure bot is set to clean default name initially
         SafeChangeNickname(defaultBotName);
@@ -123,7 +128,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
         fullClient.OutStream = this;
 
-        rxPort = GetRxPortForTg(targetTg);
+        if (rxPort <= 0) rxPort = GetRxPortForTg(targetTg);
         StartRxListener();
 
         Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}");
@@ -141,28 +146,66 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
     }
 
-    private void ResolveBotTarget(string name)
+    private void ResolveBotTarget(string name, string id)
     {
-        string lower = name.ToLower();
-        if (lower.Contains("bridisv") || lower.Contains("1025"))
+        string cleanName = Regex.Replace((name ?? "").ToLower(), @"[^a-zA-Z0-9_-]", "_");
+        string cleanId = Regex.Replace((id ?? "").ToLower(), @"[^a-zA-Z0-9_-]", "_");
+
+        string[] possiblePaths = new string[]
         {
-            targetTg = 1025;
-            targetSlot = 2;
+            $"/app/data/bots/{cleanId}/target.cfg",
+            $"/app/data/bots/{cleanName}/target.cfg",
+            $"bots/{cleanId}/target.cfg",
+            $"bots/{cleanName}/target.cfg"
+        };
+
+        bool foundCfg = false;
+        foreach (var path in possiblePaths)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    foreach (var line in File.ReadAllLines(path))
+                    {
+                        var parts = line.Split('=', 2);
+                        if (parts.Length == 2)
+                        {
+                            string k = parts[0].Trim().ToLower();
+                            string v = parts[1].Trim();
+                            if (k == "tg" && int.TryParse(v, out int parsedTg)) { targetTg = parsedTg; foundCfg = true; }
+                            else if (k == "slot" && int.TryParse(v, out int parsedSlot)) targetSlot = parsedSlot;
+                            else if (k == "rx_port" && int.TryParse(v, out int parsedPort)) rxPort = parsedPort;
+                        }
+                    }
+                    if (foundCfg)
+                    {
+                        Console.WriteLine($"[NinjaRadioBridge] ✓ Loaded dynamic target from {path}: TG {targetTg}, Slot {targetSlot}, Port {rxPort}");
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[NinjaRadioBridge] Note reading {path}: {ex.Message}");
+            }
         }
-        else if (lower.Contains("ninja") || lower.Contains("510990"))
+
+        if (!foundCfg)
         {
-            targetTg = 510990;
-            targetSlot = 2;
-        }
-        else if (lower.Contains("nasional") || lower.Contains("510"))
-        {
-            targetTg = 510;
-            targetSlot = 1;
-        }
-        else if (lower.Contains("nusantara") || lower.Contains("5109"))
-        {
-            targetTg = 5109;
-            targetSlot = 2;
+            // Fallback: extract any digits from bot name
+            string lower = (name ?? "").ToLower();
+            var match = Regex.Match(lower, @"(?:tg)?[_\- ]?(\d{2,7})");
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int extractedTg) && extractedTg > 0)
+            {
+                targetTg = extractedTg;
+                targetSlot = (targetTg == 510 || targetTg == 5108 || targetTg == 91) ? 1 : 2;
+            }
+            else if (lower.Contains("bridisv")) { targetTg = 1025; targetSlot = 2; }
+            else if (lower.Contains("ninja")) { targetTg = 510990; targetSlot = 2; }
+            else if (lower.Contains("nasional")) { targetTg = 510; targetSlot = 1; }
+            else if (lower.Contains("nusantara")) { targetTg = 5109; targetSlot = 2; }
+            rxPort = GetRxPortForTg(targetTg);
         }
     }
 
