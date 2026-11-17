@@ -46,6 +46,31 @@ except Exception as e:
     done
 ) &
 
+# Background watcher for config.json changes (auto-reloads bots when edited in Web UI)
+(
+    get_cfg_hash() {
+        python3 -c "
+import json, hashlib
+try:
+    with open('/app/ninja_data/config.json', 'r', encoding='utf-8') as f:
+        cfg = json.load(f)
+    raw = json.dumps(cfg.get('teamspeak_bots', []), sort_keys=True) + '|' + json.dumps(cfg.get('teamspeak_rooms', []), sort_keys=True)
+    print(hashlib.md5(raw.encode()).hexdigest())
+except Exception:
+    print('0')
+" 2>/dev/null
+    }
+    LAST_HASH=$(get_cfg_hash)
+    while sleep 3; do
+        CUR_HASH=$(get_cfg_hash)
+        if [ "$CUR_HASH" != "0" ] && [ "$CUR_HASH" != "$LAST_HASH" ]; then
+            echo "[TS3-Bridge] 🔄 Detected TS3 bot/room config change! Auto-reloading TS3AudioBot..."
+            kill -TERM 1 2>/dev/null || pkill -f TS3AudioBot.dll
+            break
+        fi
+    done
+) &
+
 echo "[TS3-Bridge] Launching headless bot engine from /app/data..."
 cd /app/data
 exec su-exec ts3bot dotnet /app/TS3AudioBot.dll --non-interactive --stats-disabled
