@@ -131,7 +131,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         if (rxPort <= 0) rxPort = GetRxPortForTg(targetTg);
         StartRxListener();
 
-        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}, ClientId={fullClient?.ClientId}, ChannelId={fullClient?.ChannelId}");
+        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}, ClientId={fullClient?.ClientId}");
     }
 
     private int GetRxPortForTg(int tg)
