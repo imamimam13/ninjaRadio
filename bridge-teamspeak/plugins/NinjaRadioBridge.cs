@@ -164,9 +164,9 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         {
             try
             {
-                if (File.Exists(path))
+                if (System.IO.File.Exists(path))
                 {
-                    foreach (var line in File.ReadAllLines(path))
+                    foreach (var line in System.IO.File.ReadAllLines(path))
                     {
                         var parts = line.Split('=', 2);
                         if (parts.Length == 2)
@@ -269,7 +269,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                     PlayRxAudio(pcmPayload, keyFlag == 1, (int)dmrId, callerCall);
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 if (!rxRunning) break;
                 Thread.Sleep(10);
