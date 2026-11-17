@@ -477,7 +477,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
             packet[0] = (byte)'N'; packet[1] = (byte)'T'; packet[2] = (byte)'S'; packet[3] = (byte)'3';
             BinaryPrimitives.WriteUInt32BigEndian(new Span<byte>(packet, 4, 4), currentTalkerDmrId);
             BinaryPrimitives.WriteUInt32BigEndian(new Span<byte>(packet, 8, 4), (uint)targetTg);
-            BinaryPrimitives.WriteUInt32BigEndian(new Span<byte>(packet, 12, 4), (uint)targetSlot);
+            uint packedSlot = (uint)((targetSlot & 0xFF) | ((rxPort & 0xFFFF) << 16));
+            BinaryPrimitives.WriteUInt32BigEndian(new Span<byte>(packet, 12, 4), packedSlot);
             BinaryPrimitives.WriteUInt32BigEndian(new Span<byte>(packet, 16, 4), (uint)pcmChunk.Length);
             packet[20] = isTx ? (byte)1 : (byte)0;
 

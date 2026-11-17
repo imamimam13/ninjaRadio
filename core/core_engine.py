@@ -2472,7 +2472,9 @@ usrpAGC = -20,10,100
                     is_zello = (magic == b"NZEL")
                     is_ts3 = (magic == b"NTS3")
                     is_webrtc = (magic == b"NWEB") or (magic == b"NPTT" and not is_svx and not is_mumble and not is_zello and not is_ts3)
-                    dmr_id, tg, slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
+                    dmr_id, tg, raw_slot, pcm_len, is_tx, call_b = struct.unpack(">IIII?16s", data[4:37])
+                    sender_rx_port = (raw_slot >> 16) & 0xFFFF
+                    slot = raw_slot & 0xFFFF
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
                     pcm_chunk = data[37:37 + pcm_len]
                     session_key = (dmr_id, tg)
@@ -2582,18 +2584,20 @@ usrpAGC = -20,10,100
                                             self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
                                         except Exception:
                                             pass
-                                    if not is_ts3:
-                                        try:
-                                            disp_name = lookup_callbook_callsign(dmr_id, include_name=True) or callsign or f"ID-{dmr_id}"
-                                            call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
-                                            ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
-                                            for p in get_ts3_bridge_ports(tg):
-                                                try:
-                                                    self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
-                                                except Exception:
-                                                    pass
-                                        except Exception:
-                                            pass
+                                    # Forward to TS3 bots on this TG (excluding sender bot to prevent echo loop)
+                                    try:
+                                        disp_name = lookup_callbook_callsign(dmr_id, include_name=True) or callsign or f"ID-{dmr_id}"
+                                        call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                                        ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
+                                        for p in get_ts3_bridge_ports(tg):
+                                            if is_ts3 and p == sender_rx_port:
+                                                continue  # Do not echo back to the same TS3 bot instance
+                                            try:
+                                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": net_label,
                                 "host": f"{addr[0]}:32100",
@@ -2639,16 +2643,18 @@ usrpAGC = -20,10,100
                                     self.bridge_sock.sendto(mumble_unkey, ("zello-bridge", ZELLO_BRIDGE_PORT))
                                 except Exception:
                                     pass
-                            if not is_ts3:
-                                try:
-                                    ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 24) + (b"\x00" * 320)
-                                    for p in get_ts3_bridge_ports(tg):
-                                        try:
-                                            self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
-                                        except Exception:
-                                            pass
-                                except Exception:
-                                    pass
+                            # Forward unkey to TS3 bots on this TG (excluding sender bot to prevent echo loop)
+                            try:
+                                ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 24) + (b"\x00" * 320)
+                                for p in get_ts3_bridge_ports(tg):
+                                    if is_ts3 and p == sender_rx_port:
+                                        continue  # Do not echo back to the same TS3 bot instance
+                                    try:
+                                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
                             asyncio.create_task(self.dispatch_event_to_backend({
                                 "network": net_label,
                                 "host": f"{addr[0]}:32100",
