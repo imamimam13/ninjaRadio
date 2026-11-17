@@ -2,12 +2,27 @@ import asyncio
 import logging
 import os
 import re
+import socket
 import time
 from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger("teamspeak-service")
 
-TS3_HOST = os.getenv("TS3_HOST", "172.18.0.1")
+def _detect_docker_host_ip() -> str:
+    env_host = os.getenv("TS3_HOST", "").strip()
+    if env_host and env_host != "172.18.0.1":
+        return env_host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            my_ip = s.getsockname()[0]
+            if my_ip.startswith("172.") or my_ip.startswith("10.") or my_ip.startswith("192.168."):
+                return my_ip.rsplit(".", 1)[0] + ".1"
+    except Exception:
+        pass
+    return env_host or "172.18.0.1"
+
+TS3_HOST = _detect_docker_host_ip()
 TS3_QUERY_PORT = int(os.getenv("TS3_QUERY_PORT", "10011"))
 TS3_VOICE_PORT = int(os.getenv("TS3_VOICE_PORT", "9987"))
 TS3_USER = os.getenv("TS3_QUERY_USER", "serveradmin")
@@ -174,6 +189,11 @@ async def get_teamspeak_telemetry(force: bool = False) -> Dict[str, Any]:
     resp_serverinfo = await send_ts3_command("serverinfo")
 
     raw_channels = parse_ts3_response(resp_channels)
+    if len(raw_channels) <= 1:
+        await ensure_default_channels()
+        resp_channels = await send_ts3_command("channellist -topic") or resp_channels
+        raw_channels = parse_ts3_response(resp_channels)
+
     raw_clients = parse_ts3_response(resp_clients) if resp_clients else []
     serverinfo = parse_ts3_response(resp_serverinfo) if resp_serverinfo else [{}]
 
@@ -184,12 +204,21 @@ async def get_teamspeak_telemetry(force: bool = False) -> Dict[str, Any]:
     for ch in raw_channels:
         cid = int(ch.get("cid", 0))
         cname = ch.get("channel_name", f"Channel {cid}")
+        topic_str = ch.get("channel_topic", "")
+        # Dynamically populate _tg_to_cid from live channel names/topics
+        for text_src in (cname, topic_str):
+            m = re.search(r"\bTG\s*(\d{2,7})\b", text_src, re.IGNORECASE)
+            if m:
+                try:
+                    _tg_to_cid[int(m.group(1))] = cid
+                except Exception:
+                    pass
         # Count clients in this channel
         in_ch_clients = [c for c in real_clients if int(c.get("cid", 0)) == cid]
         clean_channels.append({
             "cid": cid,
             "name": cname,
-            "topic": ch.get("channel_topic", ""),
+            "topic": topic_str,
             "total_clients": len(in_ch_clients),
             "clients": [c.get("client_nickname", "") for c in in_ch_clients]
         })
@@ -227,13 +256,8 @@ async def get_teamspeak_telemetry(force: bool = False) -> Dict[str, Any]:
     return data
 
 
-# Channel to TG mapping cache
-_tg_to_cid: Dict[int, int] = {
-    1025: 2,
-    510990: 3,
-    510: 4,
-    5109: 5
-}
+# Channel to TG mapping cache (populated dynamically from live TS3 ServerQuery channels)
+_tg_to_cid: Dict[int, int] = {}
 _last_ts3_talker_update: Dict[int, str] = {}
 
 

@@ -61,7 +61,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     private DateTime lastVoiceTime = DateTime.MinValue;
     private DateTime txStartTime = DateTime.MinValue;
     private string currentTalkerCall = "";
-    private uint currentTalkerDmrId = 1022057;
+    private uint currentTalkerDmrId = 0;
     private Timer hangoverTimer;
     private readonly byte[] pcmBuffer = new byte[320];
     private int pcmBufferOffset = 0;
@@ -525,25 +525,29 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
     private void ResolveSenderIdentity(string rawName)
     {
-        string clean = rawName.Trim();
+        string clean = (rawName ?? "").Trim();
+        // Strip leading tags like [DMR] or [TS3] if present
+        clean = Regex.Replace(clean, @"^\[[^\]]+\]\s*", "").Trim();
+
         var idMatch = Regex.Match(clean, @"\b(\d{7})\b");
-        if (idMatch.Success)
+        if (idMatch.Success && uint.TryParse(idMatch.Groups[1].Value, out uint parsedId))
         {
-            currentTalkerDmrId = uint.Parse(idMatch.Groups[1].Value);
+            currentTalkerDmrId = parsedId;
         }
         else
         {
-            currentTalkerDmrId = 1022057; // Default official operator profile DMR ID
+            currentTalkerDmrId = 0; // Let Core Engine resolve by callsign or keep actual TS3 nickname
         }
 
-        var callMatch = Regex.Match(clean, @"[A-Za-z0-9]{3,10}");
-        if (callMatch.Success)
+        // Preserve actual speaker name/callsign (up to 15 ASCII chars)
+        string safeName = Regex.Replace(clean, @"[^A-Za-z0-9_\- ]", "").Trim();
+        if (!string.IsNullOrEmpty(safeName))
         {
-            currentTalkerCall = callMatch.Value.ToUpper();
+            currentTalkerCall = (safeName.Length > 15 ? safeName.Substring(0, 15) : safeName).Trim().ToUpper();
         }
         else
         {
-            currentTalkerCall = "BD62BOT";
+            currentTalkerCall = "TS3-USER";
         }
     }
 

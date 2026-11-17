@@ -2423,7 +2423,7 @@ async def save_freedmr_config(payload: dict):
 # ----------------- SvxLink & SvxReflector Multi-TG Gateway Management -----------------
 
 @router.get("/svxlink/telemetry")
-async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
+async def get_svxlink_telemetry(request: Request, session: AsyncSession = Depends(get_db)):
     """Returns live SvxReflector & Multi-TG Unified Switchboard Node Matrix telemetry."""
     import asyncio
     import httpx
@@ -2834,7 +2834,8 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
             ts_monitored_tgs = [1025, 510990, 510, 5109]
 
         if ts3_telemetry.get("online"):
-            ext_ip = os.getenv("EXTERNAL_IP", "43.173.13.117")
+            req_host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(":")[0].strip()
+            ext_ip = os.getenv("EXTERNAL_IP", "").strip() or (req_host if req_host and req_host not in ("127.0.0.1", "localhost", "backend") else "127.0.0.1")
             tot_clients = ts3_telemetry.get("total_clients", 0)
             channels_cnt = len(ts3_telemetry.get("channels", []))
 
@@ -3830,23 +3831,55 @@ async def generate_teamspeak_token_endpoint():
 
 @router.get("/teamspeak/rooms")
 async def get_teamspeak_rooms_endpoint():
-    """Returns configured TS3 rooms merged with live ServerQuery telemetry."""
+    """Returns configured TS3 rooms merged with live ServerQuery telemetry (resolving live CIDs dynamically)."""
     cfg = read_config_file()
     saved_rooms = cfg.get("teamspeak_rooms", DEFAULT_TEAMSPEAK_ROOMS)
     try:
         from backend.app.services.teamspeak_service import get_teamspeak_telemetry
         telem = await get_teamspeak_telemetry()
-        live_chs = {ch.get("cid"): ch for ch in telem.get("channels", [])}
+        live_list = telem.get("channels", [])
+        live_by_cid = {ch.get("cid"): ch for ch in live_list if ch.get("cid")}
+        live_by_name = {str(ch.get("name", "")).strip().lower(): ch for ch in live_list if ch.get("name")}
+        matched_cids = set()
         enriched = []
         for r in saved_rooms:
             r_copy = dict(r)
+            r_name = str(r.get("name") or r.get("channel") or "").strip().lower()
             cid = r.get("cid")
-            if cid in live_chs:
-                l_info = live_chs[cid]
+            # Match by channel name first so CIDs automatically adapt on any VPS/TS3 server
+            l_info = live_by_name.get(r_name) or (live_by_cid.get(cid) if cid in live_by_cid else None)
+            if l_info:
+                real_cid = l_info.get("cid", cid)
+                r_copy["cid"] = real_cid
+                r_copy["name"] = l_info.get("name", r_copy.get("name", ""))
+                r_copy["channel"] = r_copy["name"]
                 r_copy["topic"] = l_info.get("topic", r_copy.get("description", ""))
                 r_copy["total_clients"] = l_info.get("total_clients", 0)
                 r_copy["clients"] = l_info.get("clients", [])
+                if real_cid:
+                    matched_cids.add(real_cid)
             enriched.append(r_copy)
+        # Also include any additional permanent channels present on the live TS3 server (excluding Default Channel CID 1)
+        for ch in live_list:
+            ch_cid = ch.get("cid", 0)
+            if ch_cid > 1 and ch_cid not in matched_cids:
+                ch_name = str(ch.get("name", f"Channel {ch_cid}"))
+                m_tg = re.search(r"\b(\d{3,7})\b", ch_name + " " + str(ch.get("topic", "")))
+                guessed_tg = int(m_tg.group(1)) if m_tg else 1025
+                enriched.append({
+                    "cid": ch_cid,
+                    "id": f"ts3_live_{ch_cid}",
+                    "name": ch_name,
+                    "channel": ch_name,
+                    "targetTg": guessed_tg,
+                    "tg": guessed_tg,
+                    "slot": 1 if guessed_tg in (510, 5108, 91) else 2,
+                    "description": ch.get("topic", ""),
+                    "topic": ch.get("topic", ""),
+                    "total_clients": ch.get("total_clients", 0),
+                    "clients": ch.get("clients", []),
+                    "isActive": True
+                })
         return {"status": "SUCCESS", "rooms": enriched}
     except Exception:
         return {"status": "SUCCESS", "rooms": saved_rooms}

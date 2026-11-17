@@ -83,6 +83,29 @@ def get_ts3_bridge_port(tg: int) -> int:
     ports = get_ts3_bridge_ports(tg)
     return ports[0] if ports else 12352
 
+_cached_docker_host_ip = None
+
+def get_docker_host_ip() -> str:
+    """Dynamically detects the Docker bridge gateway IP on the host (e.g. 172.18.0.1 or 172.19.0.1) across any VPS."""
+    global _cached_docker_host_ip
+    if _cached_docker_host_ip:
+        return _cached_docker_host_ip
+    env_ip = os.getenv("DOCKER_HOST_IP", "").strip()
+    if env_ip:
+        _cached_docker_host_ip = env_ip
+        return _cached_docker_host_ip
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            my_ip = s.getsockname()[0]
+            if my_ip.startswith("172.") or my_ip.startswith("10.") or my_ip.startswith("192.168."):
+                _cached_docker_host_ip = my_ip.rsplit(".", 1)[0] + ".1"
+                return _cached_docker_host_ip
+    except Exception:
+        pass
+    _cached_docker_host_ip = "172.18.0.1"
+    return _cached_docker_host_ip
+
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 WEB_PTT_PORT = int(os.getenv("WEB_PTT_PORT", 32100))
 DMR_MASTER_PORT = int(os.getenv("DMR_MASTER_PORT", 62031))
@@ -2262,7 +2285,7 @@ usrpAGC = -20,10,100
                                 ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                                 for p in get_ts3_bridge_ports(active_tg):
                                     try:
-                                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                                        self.bridge_sock.sendto(ts3_unkey, (get_docker_host_ip(), p))
                                     except Exception:
                                         pass
                             except Exception:
@@ -2380,7 +2403,7 @@ usrpAGC = -20,10,100
                             ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, target_tg, target_dmr_id, target_slot, 0, call_b) + chunk_pcm
                             for p in get_ts3_bridge_ports(target_tg):
                                 try:
-                                    self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                    self.bridge_sock.sendto(ts3_pkt, (get_docker_host_ip(), p))
                                 except Exception:
                                     pass
                         except Exception:
@@ -2484,8 +2507,27 @@ usrpAGC = -20,10,100
                     sender_rx_port = (raw_slot >> 16) & 0xFFFF
                     slot = raw_slot & 0xFFFF
                     callsign = call_b.split(b"\x00")[0].decode("ascii", errors="ignore").strip() or "WEB-OP"
+                    has_explicit_dmr_id = (dmr_id > 0)
+                    if dmr_id == 0:
+                        first_token = callsign.split()[0] if callsign else ""
+                        resolved_id = (
+                            lookup_callbook_dmr_id(callsign)
+                            or lookup_callbook_dmr_id(first_token)
+                            or lookup_subscriber_csv_id(callsign)
+                            or lookup_subscriber_csv_id(first_token)
+                            or 0
+                        )
+                        if resolved_id > 0:
+                            dmr_id = resolved_id
+                            has_explicit_dmr_id = True
+                        else:
+                            dmr_id = int(self.config.get("server_dmr_id", 5109999))
+                    elif is_ts3 or is_svx or is_mumble or is_zello:
+                        cb_call = lookup_callbook_callsign(dmr_id, include_name=False)
+                        if cb_call and callsign and not callsign.upper().startswith(cb_call.upper()):
+                            has_explicit_dmr_id = False
                     pcm_chunk = data[37:37 + pcm_len]
-                    session_key = (dmr_id, tg)
+                    session_key = (callsign, tg) if not has_explicit_dmr_id else (dmr_id, tg)
                     now = time.time()
                     if is_svx:
                         net_label = "SVX / SDR"
@@ -2529,7 +2571,7 @@ usrpAGC = -20,10,100
                         self.current_operator_callsign = callsign
                         self.current_operator_dmr_id = dmr_id
                         if self.dmr_master_server:
-                            self.dmr_master_server.mark_local_transmission(dmr_id, tg, slot)
+                            self.dmr_master_server.mark_local_transmission(dmr_id, tg, slot, callsign=callsign)
                         if session_key not in active_tx_sessions:
                             active_tx_sessions.add(session_key)
                             self.current_tx_start_time = now
@@ -2573,7 +2615,14 @@ usrpAGC = -20,10,100
                                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                                     usrp_pkt = build_usrp_frame(self.ab_tx_seq, 1, USRP_TYPE_VOICE, frame_pcm)
                                     self.broadcast_to_usrp_clients(usrp_pkt, tg=tg)
+                                    disp_name = (
+                                        (lookup_callbook_callsign(dmr_id, include_name=True) if has_explicit_dmr_id else None)
+                                        or callsign
+                                        or f"ID-{dmr_id}"
+                                    )
+                                    call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
                                     mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0) + frame_pcm
+                                    ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
                                     if not is_from_mumble:
                                         try:
                                             self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
@@ -2584,7 +2633,7 @@ usrpAGC = -20,10,100
                                                 pass
                                     if not is_svx:
                                         try:
-                                            self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
+                                            self.bridge_sock.sendto(ts3_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
                                         except Exception:
                                             pass
                                     if not is_zello:
@@ -2594,14 +2643,11 @@ usrpAGC = -20,10,100
                                             pass
                                     # Forward to TS3 bots on this TG (excluding sender bot to prevent echo loop)
                                     try:
-                                        disp_name = lookup_callbook_callsign(dmr_id, include_name=True) or callsign or f"ID-{dmr_id}"
-                                        call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
-                                        ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
                                         for p in get_ts3_bridge_ports(tg):
                                             if is_ts3 and p == sender_rx_port:
                                                 continue  # Do not echo back to the same TS3 bot instance
                                             try:
-                                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                                self.bridge_sock.sendto(ts3_pkt, (get_docker_host_ip(), p))
                                             except Exception:
                                                 pass
                                     except Exception:
@@ -2658,7 +2704,7 @@ usrpAGC = -20,10,100
                                     if is_ts3 and p == sender_rx_port:
                                         continue  # Do not echo back to the same TS3 bot instance
                                     try:
-                                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                                        self.bridge_sock.sendto(ts3_unkey, (get_docker_host_ip(), p))
                                     except Exception:
                                         pass
                             except Exception:
@@ -3229,7 +3275,7 @@ usrpAGC = -20,10,100
                                 ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
                                 for p in get_ts3_bridge_ports(r_tg):
                                     try:
-                                        self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                        self.bridge_sock.sendto(ts3_pkt, (get_docker_host_ip(), p))
                                     except Exception:
                                         pass
                             except Exception:
@@ -3257,7 +3303,7 @@ usrpAGC = -20,10,100
                         ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                         for p in get_ts3_bridge_ports(r_tg):
                             try:
-                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                                self.bridge_sock.sendto(ts3_unkey, (get_docker_host_ip(), p))
                             except Exception:
                                 pass
                     except Exception:
@@ -3529,7 +3575,7 @@ usrpAGC = -20,10,100
                                 ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
                                 for p in get_ts3_bridge_ports(r_tg):
                                     try:
-                                        self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                        self.bridge_sock.sendto(ts3_pkt, (get_docker_host_ip(), p))
                                     except Exception:
                                         pass
                             except Exception:
@@ -3557,7 +3603,7 @@ usrpAGC = -20,10,100
                         ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                         for p in get_ts3_bridge_ports(r_tg):
                             try:
-                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                                self.bridge_sock.sendto(ts3_unkey, (get_docker_host_ip(), p))
                             except Exception:
                                 pass
                     except Exception:

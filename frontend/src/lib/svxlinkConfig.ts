@@ -12,7 +12,7 @@ export interface SvxlinkConfigParams {
 }
 
 export function generateSvxlinkConf(params: SvxlinkConfigParams): string {
-  const host = params.host || "43.173.13.117";
+  const host = params.host || "127.0.0.1";
   const logicName = params.nodeType === "repeater" ? "RepeaterLogic" : "SimplexLogic";
   const logicType = params.nodeType === "repeater" ? "Repeater" : "Simplex";
   const cleanCall = params.callsign.trim().toUpperCase() || "YB0NINJA";

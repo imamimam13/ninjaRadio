@@ -39,6 +39,7 @@ interface TSBot {
   tg: number;
   slot: number;
   svx_bot?: string;
+  server?: string;
   status: string;
 }
 
@@ -51,7 +52,7 @@ export default function TeamSpeakPage() {
   const [customToken, setCustomToken] = useState<string | null>(null);
   const [isGeneratingToken, setIsGeneratingToken] = useState<boolean>(false);
 
-  const serverHost = typeof window !== "undefined" ? window.location.hostname : "43.173.13.117";
+  const serverHost = typeof window !== "undefined" ? window.location.hostname : "127.0.0.1";
   const voicePort = telemetry?.voice_port || 9987;
   const queryPort = telemetry?.query_port || 10011;
   const filePort = telemetry?.file_port || 30033;
@@ -419,10 +420,21 @@ export default function TeamSpeakPage() {
                               <span className="text-cyan-300 font-black">{bot.name}</span>
                             </td>
                             <td className="p-3">
-                              <span className="px-2.5 py-1 rounded-lg bg-blue-950/60 text-blue-300 border border-blue-800/70 font-bold inline-flex items-center gap-1.5">
-                                <Volume2 className="w-3 h-3 text-cyan-400" />
-                                {bot.channel}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="px-2.5 py-1 rounded-lg bg-blue-950/60 text-blue-300 border border-blue-800/70 font-bold inline-flex items-center gap-1.5">
+                                  <Volume2 className="w-3 h-3 text-cyan-400" />
+                                  {bot.channel}
+                                </span>
+                                {bot.server && !bot.server.startsWith("127.0.0.1") && !bot.server.startsWith("localhost") ? (
+                                  <span className="px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-700 text-[10px] font-bold">
+                                    🌐 {bot.server}
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[10px]">
+                                    🏠 {serverHost}:9987
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="p-3">
                               {bot.svx_bot ? (

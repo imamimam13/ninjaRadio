@@ -309,7 +309,7 @@ class HomeBrewMasterServer:
                 return True
         return False
 
-    def mark_local_transmission(self, src_id: int, tg: int = 0, slot: int = 0):
+    def mark_local_transmission(self, src_id: int, tg: int = 0, slot: int = 0, callsign: str = ""):
         now = time.time()
         existing = self.active_local_txs.get(src_id)
         if isinstance(existing, dict) and (now - existing.get("time", 0) < 3.5):
@@ -317,10 +317,13 @@ class HomeBrewMasterServer:
                 tg = existing["tg"]
             if not slot and existing.get("slot"):
                 slot = existing["slot"]
+            if not callsign and existing.get("callsign"):
+                callsign = existing["callsign"]
         self.active_local_txs[src_id] = {
             "time": now,
             "tg": tg,
-            "slot": slot
+            "slot": slot,
+            "callsign": callsign
         }
         for s, item in list(self.active_local_txs.items()):
             t = item["time"] if isinstance(item, dict) else item
@@ -1006,7 +1009,9 @@ class HomeBrewMasterServer:
 
         self.total_tx_packets += 1
 
-        sender_call = lookup_callbook_callsign(src_id)
+        local_tx_info = self.active_local_txs.get(src_id) if exclude_addr is None else None
+        local_call = local_tx_info.get("callsign", "") if isinstance(local_tx_info, dict) else ""
+        sender_call = local_call or lookup_callbook_callsign(src_id)
         if not sender_call:
             for c_addr, c in self.clients.items():
                 if c_addr[0] != "127.0.0.1" and str(c.get("dmr_id", "")).startswith(str(src_id)) and c.get("callsign") not in ["HOTSPOT", "DVSWITCH"]:
