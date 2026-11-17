@@ -1475,6 +1475,12 @@ async def save_system_config(config: dict):
     # Notify svxlink-bridge to synchronize Multi-TG bots with SvxReflector
     if "svxlink_rooms" in config or "svxlink_bots" in config:
         try:
+            reload_marker = "/app/data/.svxlink_reload"
+            with open(reload_marker, "w") as rf:
+                rf.write(str(time.time()))
+        except Exception:
+            pass
+        try:
             import httpx
             async with httpx.AsyncClient(timeout=6.0) as client:
                 await client.post("http://svxlink-bridge:12349/sync")
@@ -2947,6 +2953,13 @@ async def save_svxlink_channels(payload: dict):
         raise HTTPException(status_code=500, detail=f"Failed to save config: {e}")
 
     try:
+        reload_marker = "/app/data/.svxlink_reload"
+        with open(reload_marker, "w") as rf:
+            rf.write(str(time.time()))
+    except Exception:
+        pass
+
+    try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             await client.post("http://svxlink-bridge:12349/sync")
     except Exception:
@@ -2982,6 +2995,13 @@ async def delete_svxlink_channel(channel_name: str):
                 json.dump(data, f, indent=2)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to update config: {e}")
+
+    try:
+        reload_marker = "/app/data/.svxlink_reload"
+        with open(reload_marker, "w") as rf:
+            rf.write(str(time.time()))
+    except Exception:
+        pass
 
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -3119,6 +3139,13 @@ async def create_or_update_svxlink_bot(payload: dict):
         raise HTTPException(status_code=500, detail=f"Failed to save SvxLink bot: {e}")
 
     try:
+        reload_marker = "/app/data/.svxlink_reload"
+        with open(reload_marker, "w") as rf:
+            rf.write(str(time.time()))
+    except Exception:
+        pass
+
+    try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             await client.post("http://svxlink-bridge:12349/sync")
     except Exception:
@@ -3151,6 +3178,13 @@ async def delete_svxlink_bot(bot_name: str):
             json.dump(data, f, indent=2)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete SvxLink bot: {e}")
+
+    try:
+        reload_marker = "/app/data/.svxlink_reload"
+        with open(reload_marker, "w") as rf:
+            rf.write(str(time.time()))
+    except Exception:
+        pass
 
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
