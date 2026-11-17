@@ -53,12 +53,23 @@ def main():
 
     # Write root ts3audiobot.toml
     bots_dict_lines = []
+    active_bot_ids = set()
     for b in bots:
         b_name = b.get("name", "").strip()
         if not b_name:
             continue
         b_id = sanitize_id(b_name)
+        active_bot_ids.add(b_id)
         bots_dict_lines.append(f'{b_id} = {{ run = true }}')
+
+    # Remove stale bot config folders that are no longer in config.json
+    if os.path.exists(BOTS_DIR):
+        for item in os.listdir(BOTS_DIR):
+            item_path = os.path.join(BOTS_DIR, item)
+            if os.path.isdir(item_path) and item not in active_bot_ids:
+                print(f"[TS3-Bridge] Removing stale bot folder: {item}")
+                import shutil
+                shutil.rmtree(item_path, ignore_errors=True)
 
     bots_block = "\n".join(bots_dict_lines)
     ts3audiobot_toml = f"""[bot]
