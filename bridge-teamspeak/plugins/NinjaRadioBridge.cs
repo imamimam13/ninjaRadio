@@ -131,7 +131,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         if (rxPort <= 0) rxPort = GetRxPortForTg(targetTg);
         StartRxListener();
 
-        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}");
+        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}, ClientId={fullClient?.ClientId}, ChannelId={fullClient?.ChannelId}");
     }
 
     private int GetRxPortForTg(int tg)
@@ -366,6 +366,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     // Direction TS3 -> DMR: Received audio from TeamSpeak channel client
     public void Write(Span<byte> data, Meta meta)
     {
+        Console.WriteLine($"[NinjaRadioBridge] 🔍 [{defaultBotName}] Write called: len={data.Length}, myClientId={fullClient?.ClientId}");
         if (data.Length < 6) return;
 
         var senderId = (ClientId)BinaryPrimitives.ReadUInt16BigEndian(data.Slice(2, 2));
@@ -385,8 +386,9 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         {
             pcmChunk = decoder.Decode(opusPayload, decodeBuffer);
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"[NinjaRadioBridge] ⚠️ Decode error: {ex.Message}");
             return;
         }
 
