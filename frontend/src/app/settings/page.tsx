@@ -2165,10 +2165,10 @@ export default function SettingsPage() {
                   <input
                     type="text"
                     readOnly
-                    value="43.173.13.117"
+                    value={typeof window !== "undefined" ? window.location.hostname : ""}
                     className="w-full px-3 py-2 rounded-xl text-white font-mono text-xs bg-[#080d17] border border-slate-800 cursor-default"
                   />
-                  <p className="text-[10px] text-slate-500 mt-0.5">Alamat IP Server TeamSpeak 3 publik.</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Alamat IP Server TeamSpeak 3 publik (otomatis mengikuti host VPS).</p>
                 </div>
 
                 <div>
@@ -2223,7 +2223,7 @@ export default function SettingsPage() {
                         </div>
                         <div className="flex items-center gap-1.5">
                           <a
-                            href={`ts3server://43.173.13.117?port=9987&channel=${encodeURIComponent(room.name)}`}
+                            href={`ts3server://${typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}?port=9987&channel=${encodeURIComponent(room.name)}`}
                             className="px-2 py-1 rounded-lg bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30 text-[10px] font-semibold flex items-center gap-1"
                           >
                             Join
@@ -2337,14 +2337,35 @@ export default function SettingsPage() {
                         </div>
                       </div>
                       {isAdminUnlocked && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteTs3Bot(b.name)}
-                          className="p-1 rounded bg-slate-800 hover:bg-rose-900/50 text-rose-400"
-                          title="Hapus Bot"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewTs3BotName(b.name || "");
+                              setNewTs3BotServer(b.server || "127.0.0.1:9987");
+                              setNewTs3BotServerPw(b.server_password || "");
+                              setNewTs3BotChannelPw(b.channel_password || "");
+                              setNewTs3BotChannel(b.channel || "");
+                              setNewTs3BotTg(b.tg || 1025);
+                              setNewTs3BotSlot(b.slot || 2);
+                              setNewTs3BotSvx(b.svx_bot || "");
+                              fetchAvailableSvxBots();
+                              setShowAddTs3BotModal(true);
+                            }}
+                            className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400"
+                            title="Edit Bot"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTs3Bot(b.name)}
+                            className="p-1 rounded bg-slate-800 hover:bg-rose-900/50 text-rose-400"
+                            title="Hapus Bot"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -2692,7 +2713,7 @@ export default function SettingsPage() {
                     <div className="flex justify-between">
                       <span className="text-slate-500">VoIP Server Host:</span>
                       <span className="text-white font-bold">
-                        {typeof window !== "undefined" ? window.location.hostname : "43.173.13.117"}
+                        {typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -2735,7 +2756,7 @@ export default function SettingsPage() {
 {`# /etc/svxlink/svxlink.conf (di PC / Raspberry Pi SDR QRadioLink)
 [ReflectorLogic]
 TYPE=Reflector
-HOST=${typeof window !== "undefined" ? window.location.hostname : "43.173.13.117"}
+HOST=${typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}
 PORT=5300
 CALLSIGN=${serverCallsign}
 AUTH_KEY="ninjaradio_svx"

@@ -425,17 +425,17 @@ export default function AccountPage() {
                           <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="font-mono text-xs text-cyan-300 font-bold">
-                                Server: 43.173.13.117:9987
+                                Server: {typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}:9987
                               </span>
                               <span className="font-mono text-xs text-slate-300">
                                 Nick: <b>{user.callsign}</b>
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-400 leading-relaxed">
-                              Gunakan aplikasi TeamSpeak 3 Client di PC atau smartphone. Masukkan Server <b>43.173.13.117:9987</b> dan Nickname <b>{user.callsign}</b>. Callsign carry-over aktif di topik room.
+                              Gunakan aplikasi TeamSpeak 3 Client di PC atau smartphone. Masukkan Server <b>{typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}:9987</b> dan Nickname <b>{user.callsign}</b>. Callsign carry-over aktif di topik room.
                             </p>
                             <a
-                              href={`ts3server://43.173.13.117?port=9987&nickname=${encodeURIComponent(user.callsign)}`}
+                              href={`ts3server://${typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}?port=9987&nickname=${encodeURIComponent(user.callsign)}`}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs transition"
                             >
                               🚀 Buka Langsung di TeamSpeak 3

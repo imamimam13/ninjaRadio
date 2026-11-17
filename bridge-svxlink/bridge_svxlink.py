@@ -1084,7 +1084,12 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                 keyup = struct.unpack(">I", data[12:16])[0]
                 talkgroup = struct.unpack(">I", data[16:20])[0]
                 dmr_id = struct.unpack(">I", data[20:24])[0] if len(data) >= 24 else 0
-                pcm_8k = data[32:]
+                explicit_call = ""
+                if len(data) >= 376:
+                    explicit_call = data[32:56].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                    pcm_8k = data[56:]
+                else:
+                    pcm_8k = data[32:]
 
                 # Route DMR RX: prioritize specific bot dedicated to this talkgroup; fallback to Any-TG gateway
                 dedicated_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
@@ -1108,7 +1113,7 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     continue
 
                 last_dmr_tx = time.time()
-                caller_call = resolve_dmr_id(dmr_id) if dmr_id else ""
+                caller_call = explicit_call.split()[0] if explicit_call else (resolve_dmr_id(dmr_id) if dmr_id else "")
                 if time.time() - last_rx_log > 2.5 and target_bots:
                     last_rx_log = time.time()
                     bot_names = ", ".join([f"{b.bot_user} ('{b.room_name}')" for b in target_bots])

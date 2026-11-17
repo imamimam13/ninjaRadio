@@ -170,7 +170,7 @@ export default function SvxLinkPage() {
   const getEffectiveHost = () => {
     if (genHost.trim()) return genHost.trim();
     if (typeof window !== "undefined") return window.location.hostname;
-    return "43.173.13.117";
+    return "127.0.0.1";
   };
 
   const getGeneratedSvxlinkConf = () => {
@@ -1714,7 +1714,7 @@ export default function SvxLinkPage() {
                         type="text"
                         value={genHost}
                         onChange={(e) => setGenHost(e.target.value)}
-                        placeholder={typeof window !== "undefined" ? window.location.hostname : "43.173.13.117"}
+                        placeholder={typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}
                         className="w-full px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-200 focus:border-cyan-500 focus:outline-none"
                       />
                     </div>
