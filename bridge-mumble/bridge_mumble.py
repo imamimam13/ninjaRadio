@@ -725,7 +725,7 @@ def lookup_callsign_by_dmr_id(dmr_id: int) -> str:
                 if row and row[0]:
                     c_clean = str(row[0]).strip().upper()
                     name_part = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
-                    if name_part and len(c_clean) + len(name_part) < 18:
+                    if name_part:
                         callsign = f"{c_clean}-{name_part.split()[0]}"
                     else:
                         callsign = c_clean
@@ -1070,17 +1070,13 @@ class MumbleGatewayBot:
             return
         try:
             myself = getattr(self.mumble.users, "myself", None)
-            if myself and hasattr(myself, "set_comment"):
-                myself.set_comment(comment_str)
-                return
-            import pymumble_py3.constants as mumble_constants
-            msg = self.mumble.messages[mumble_constants.PYMUMBLE_MSG_TYPES_USERSTATE]()
             if myself:
-                s_id = myself.get("session") if (isinstance(myself, dict) or hasattr(myself, "__getitem__")) else getattr(myself, "session", None)
-                if s_id is not None:
-                    msg.session = int(s_id)
-            msg.comment = str(comment_str)
-            self.mumble.send_message(mumble_constants.PYMUMBLE_MSG_TYPES_USERSTATE, msg)
+                if hasattr(myself, "comment"):
+                    myself.comment(str(comment_str))
+                    return
+                elif hasattr(myself, "set_comment"):
+                    myself.set_comment(str(comment_str))
+                    return
         except Exception as e:
             logger.debug(f"[{self.default_bot_user}] Dynamic set_comment error: {e}")
 
@@ -1105,31 +1101,26 @@ class MumbleGatewayBot:
             if target_ch and hasattr(target_ch, "send_text_message"):
                 target_ch.send_text_message(msg_html)
                 return
-
-            import pymumble_py3.constants as mumble_constants
-            msg = self.mumble.messages[mumble_constants.PYMUMBLE_MSG_TYPES_TEXTMESSAGE]()
-            msg.channel_id.append(int(my_ch_id))
-            msg.message = msg_html
-            self.mumble.send_message(mumble_constants.PYMUMBLE_MSG_TYPES_TEXTMESSAGE, msg)
         except Exception as e:
             logger.debug(f"[{self.default_bot_user}] Send text notification error: {e}")
 
     def morph_to_callsign(self, callsign: str, dmr_id: int):
-        """Displays active DMR caller in Mumble via text notification and status comment."""
+        """Displays active DMR caller in Mumble via dynamic status comment (zero TTS interruption)."""
         now_ts = time.time()
         self.last_dmr_rx_time = now_ts
         if not callsign or callsign == self.current_morphed_callsign:
             return
 
         self.current_morphed_callsign = callsign
+        disp_call = callsign.replace("-", " ")
         if ENABLE_MUMBLE_NAME_MORPH:
-            new_name = f"[DMR] {callsign}"[:25]
+            new_name = f"[DMR] {disp_call}"[:25]
             self._rename(new_name)
-        self._set_comment(f"🔴 <b>TX Live:</b> {callsign} ({dmr_id}) on TG {self.tg}")
-        # Send chat notification to Mumble channel on DMR RX (disabled by default to prevent client TTS audio read-out)
+        self._set_comment(f"🔴 <b>TX Live:</b> [DMR] {disp_call} ({dmr_id}) on TG {self.tg}")
+        # Send chat notification to Mumble channel only if explicitly enabled (disabled by default to prevent client TTS audio read-out)
         if os.getenv("ENABLE_MUMBLE_CHAT_NOTIF", "false").lower() == "true":
             self.send_channel_notification(callsign, dmr_id)
-        logger.info(f"[{self.default_bot_user}] 💬 DMR RX Notification: {callsign} ({dmr_id}) on TG {self.tg}")
+        logger.info(f"[{self.default_bot_user}] 💬 DMR RX Status Comment: [DMR] {disp_call} ({dmr_id}) on TG {self.tg}")
 
     def revert_morph(self):
         """Reverts status comment back to default when DMR transmission ceases."""
@@ -1337,6 +1328,7 @@ class MumbleGatewayBot:
                 if target_ch:
                     ch_id = target_ch["channel_id"] if (isinstance(target_ch, dict) or hasattr(target_ch, "__getitem__")) else getattr(target_ch, "channel_id", 0)
                     self.mumble.users.myself.move_in(int(ch_id))
+                    self._set_comment(f"🥷 <b>NinjaRadio Gateway</b> — Bridged to DMR TG {self.tg}")
                     logger.info(f"[{self.bot_user}] ✓ Permanently stationed in '{self.room_name}' (ID: {ch_id})")
                 else:
                     logger.warning(f"[{self.bot_user}] Channel '{self.room_name}' not yet available in channel tree.")

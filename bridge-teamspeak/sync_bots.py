@@ -92,22 +92,32 @@ send_stats = false
         b_dir = os.path.join(BOTS_DIR, b_id)
         os.makedirs(b_dir, exist_ok=True)
 
+        target_server = (b.get("server") or b.get("address") or "127.0.0.1:9987").strip()
+        server_pw = (b.get("server_password") or b.get("password") or "").strip()
+        channel_pw = (b.get("channel_password") or "").strip()
+
         target_ch = (b.get("channel") or "").strip()
         target_tg = b.get("tg")
 
-        cid = room_cid_map.get(target_ch.lower())
-        if not cid and target_tg:
-            cid = room_cid_map.get(str(target_tg))
+        # For local server, resolve to channel CID if known; for remote server, use channel path directly
+        is_local = target_server.startswith("127.0.0.1") or target_server.startswith("localhost") or target_server.startswith("teamspeak-server")
+        cid = None
+        if is_local:
+            cid = room_cid_map.get(target_ch.lower())
+            if not cid and target_tg:
+                cid = room_cid_map.get(str(target_tg))
 
         channel_setting = f"/{cid}" if cid else f"/{target_ch}"
+        server_pw_line = f'server_password = "{server_pw}"\n' if server_pw else ""
+        channel_pw_line = f'channel_password = "{channel_pw}"\n' if channel_pw else ""
 
         bot_toml = f"""run = true
 
 [connect]
-address = "127.0.0.1:9987"
+address = "{target_server}"
 name = "{b_name}"
 channel = "{channel_setting}"
-"""
+{server_pw_line}{channel_pw_line}"""
         with open(os.path.join(b_dir, "bot.toml"), "w", encoding="utf-8") as f:
             f.write(bot_toml)
 

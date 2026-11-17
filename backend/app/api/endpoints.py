@@ -3698,6 +3698,18 @@ async def get_teamspeak_telemetry_endpoint():
         return {"online": False, "error": str(e), "channels": [], "clients": []}
 
 
+@router.post("/teamspeak/token/generate")
+async def generate_teamspeak_token_endpoint():
+    """Generates a fresh ServerAdmin privilege key dynamically from TS3 ServerQuery."""
+    try:
+        from backend.app.services.teamspeak_service import get_or_create_admin_token, _ts3_cache
+        new_token = await get_or_create_admin_token(force_new=True)
+        _ts3_cache["last_check"] = 0.0
+        return {"status": "SUCCESS", "token": new_token}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/teamspeak/rooms")
 async def get_teamspeak_rooms_endpoint():
     """Returns configured TS3 rooms merged with live ServerQuery telemetry."""
