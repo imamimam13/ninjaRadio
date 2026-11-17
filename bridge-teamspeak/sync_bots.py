@@ -83,8 +83,8 @@ send_stats = false
     with open(os.path.join(DATA_DIR, "ts3audiobot.toml"), "w", encoding="utf-8") as f:
         f.write(ts3audiobot_toml)
 
-    # Write individual bot.toml
-    for b in bots:
+    # Write individual bot.toml and target.cfg
+    for idx, b in enumerate(bots):
         b_name = b.get("name", "").strip()
         if not b_name:
             continue
@@ -97,15 +97,17 @@ send_stats = false
         channel_pw = (b.get("channel_password") or "").strip()
 
         target_ch = (b.get("channel") or "").strip()
-        target_tg = b.get("tg")
+        b_tg = int(b.get("tg") if b.get("tg") is not None else 1025)
+        b_slot = int(b.get("slot") if b.get("slot") is not None else (1 if b_tg in [510, 5108, 91] else 2))
+        rx_p = int(b.get("rx_port", 12352 + idx))
 
         # For local server, resolve to channel CID if known; for remote server, use channel path directly
         is_local = target_server.startswith("127.0.0.1") or target_server.startswith("localhost") or target_server.startswith("teamspeak-server")
         cid = None
         if is_local:
             cid = room_cid_map.get(target_ch.lower())
-            if not cid and target_tg:
-                cid = room_cid_map.get(str(target_tg))
+            if not cid and b_tg:
+                cid = room_cid_map.get(str(b_tg))
 
         channel_setting = f"/{cid}" if cid else f"/{target_ch}"
         server_pw_line = f'server_password = "{server_pw}"\n' if server_pw else ""
@@ -121,7 +123,17 @@ channel = "{channel_setting}"
         with open(os.path.join(b_dir, "bot.toml"), "w", encoding="utf-8") as f:
             f.write(bot_toml)
 
-        print(f"[TS3-Bridge] Configured bot '{b_name}' ({b_id}) -> channel {channel_setting}")
+        # Write target.cfg for NinjaRadioBridge.cs plugin
+        target_cfg = f"""tg={b_tg}
+slot={b_slot}
+rx_port={rx_p}
+name={b_name}
+server={target_server}
+"""
+        with open(os.path.join(b_dir, "target.cfg"), "w", encoding="utf-8") as f:
+            f.write(target_cfg)
+
+        print(f"[TS3-Bridge] Configured bot '{b_name}' ({b_id}) -> TG {b_tg} (Slot {b_slot}, Port {rx_p}), channel {channel_setting} on {target_server}")
 
     print(f"[TS3-Bridge] Generated config for {len(bots)} TeamSpeak 3 bot(s) successfully.")
 

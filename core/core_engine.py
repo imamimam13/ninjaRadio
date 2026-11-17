@@ -28,20 +28,60 @@ SVXLINK_BRIDGE_PORT = 12348
 ZELLO_BRIDGE_PORT = 12351
 TEAMSPEAK_BRIDGE_PORT = 12352
 
-def get_ts3_bridge_port(tg: int) -> int:
+_ts3_port_cache = {"last_check": 0.0, "tg_to_ports": {}}
+
+def get_ts3_bridge_ports(tg: int) -> list:
+    """Returns all UDP listener ports for TS3 bots matching this TalkGroup dynamically from config."""
+    now = time.time()
     try:
         t = int(tg or 0)
     except Exception:
         t = 0
+    if t <= 0:
+        return []
+
+    if now - _ts3_port_cache["last_check"] > 2.0:
+        _ts3_port_cache["last_check"] = now
+        tg_map = {}
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    ts_bots = cfg.get("teamspeak_bots", [])
+                    for idx, b in enumerate(ts_bots):
+                        b_tg = b.get("tg") if b.get("tg") is not None else b.get("targetTg")
+                        if b_tg is not None:
+                            try:
+                                b_tg_int = int(b_tg)
+                                port = int(b.get("rx_port", 12352 + idx))
+                                if b_tg_int not in tg_map:
+                                    tg_map[b_tg_int] = []
+                                if port not in tg_map[b_tg_int]:
+                                    tg_map[b_tg_int].append(port)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        _ts3_port_cache["tg_to_ports"] = tg_map
+
+    ports = _ts3_port_cache["tg_to_ports"].get(t)
+    if ports:
+        return ports
+
+    # Fallback to default port mapping
     if t == 1025:
-        return 12352
+        return [12352]
     elif t == 510990:
-        return 12353
+        return [12353]
     elif t == 510:
-        return 12354
+        return [12354]
     elif t == 5109:
-        return 12355
-    return 12352
+        return [12355]
+    return []
+
+def get_ts3_bridge_port(tg: int) -> int:
+    ports = get_ts3_bridge_ports(tg)
+    return ports[0] if ports else 12352
 
 USRP_AUDIO_PORT = int(os.getenv("USRP_AUDIO_PORT", 32345))
 WEB_PTT_PORT = int(os.getenv("WEB_PTT_PORT", 32100))
@@ -2212,7 +2252,11 @@ usrpAGC = -20,10,100
                                 pass
                             try:
                                 ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
-                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(active_tg)))
+                                for p in get_ts3_bridge_ports(active_tg):
+                                    try:
+                                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                             # Forward unkey frame to DVSwitch Mobile clients
@@ -2326,7 +2370,11 @@ usrpAGC = -20,10,100
                             disp_name = lookup_callbook_callsign(target_dmr_id, include_name=True) or target_call or f"ID-{target_dmr_id}"
                             call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
                             ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, target_tg, target_dmr_id, target_slot, 0, call_b) + chunk_pcm
-                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(target_tg)))
+                            for p in get_ts3_bridge_ports(target_tg):
+                                try:
+                                    self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
 
@@ -2539,7 +2587,11 @@ usrpAGC = -20,10,100
                                             disp_name = lookup_callbook_callsign(dmr_id, include_name=True) or callsign or f"ID-{dmr_id}"
                                             call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
                                             ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
-                                            self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(tg)))
+                                            for p in get_ts3_bridge_ports(tg):
+                                                try:
+                                                    self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                                except Exception:
+                                                    pass
                                         except Exception:
                                             pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -2590,7 +2642,11 @@ usrpAGC = -20,10,100
                             if not is_ts3:
                                 try:
                                     ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 24) + (b"\x00" * 320)
-                                    self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(tg)))
+                                    for p in get_ts3_bridge_ports(tg):
+                                        try:
+                                            self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                                        except Exception:
+                                            pass
                                 except Exception:
                                     pass
                             asyncio.create_task(self.dispatch_event_to_backend({
@@ -3157,7 +3213,11 @@ usrpAGC = -20,10,100
                                 disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
                                 call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
                                 ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
-                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
+                                for p in get_ts3_bridge_ports(r_tg):
+                                    try:
+                                        self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                 elif data_type == 2:
@@ -3181,7 +3241,11 @@ usrpAGC = -20,10,100
                         pass
                     try:
                         ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
-                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
+                        for p in get_ts3_bridge_ports(r_tg):
+                            try:
+                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
@@ -3449,7 +3513,11 @@ usrpAGC = -20,10,100
                                 disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
                                 call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
                                 ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
-                                self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
+                                for p in get_ts3_bridge_ports(r_tg):
+                                    try:
+                                        self.bridge_sock.sendto(ts3_pkt, ("172.18.0.1", p))
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                 elif data_type == 2:
@@ -3473,7 +3541,11 @@ usrpAGC = -20,10,100
                         pass
                     try:
                         ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
-                        self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", get_ts3_bridge_port(r_tg)))
+                        for p in get_ts3_bridge_ports(r_tg):
+                            try:
+                                self.bridge_sock.sendto(ts3_unkey, ("172.18.0.1", p))
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                 asyncio.create_task(self.dispatch_event_to_backend(traffic_event))
