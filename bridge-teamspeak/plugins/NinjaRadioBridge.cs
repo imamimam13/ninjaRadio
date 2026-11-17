@@ -45,8 +45,9 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     private DateTime lastRxAudioTime = DateTime.MinValue;
     private DateTime lastRxLogTime = DateTime.MinValue;
 
-    // Opus Decoder & Encoder
+    // Opus Decoder & Encoder (Per-client decoder dictionary prevents bitstream corruption when 2 clients have open mics)
     private OpusDecoder decoder;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, OpusDecoder> clientDecoders = new System.Collections.Concurrent.ConcurrentDictionary<ushort, OpusDecoder>();
     private OpusEncoder encoder;
     private readonly byte[] decodeBuffer = new byte[1920];
 
@@ -56,6 +57,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
     // VOX State & Hysteresis Guardrails (GEMINI.md Section 7.3)
     private volatile bool isVoiceActive = false;
+    private ushort activeTalkerClientId = 0;
     private DateTime lastVoiceTime = DateTime.MinValue;
     private DateTime txStartTime = DateTime.MinValue;
     private string currentTalkerCall = "";
@@ -379,8 +381,15 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     {
         if (data.Length < 6) return;
 
-        var senderId = (ClientId)BinaryPrimitives.ReadUInt16BigEndian(data.Slice(2, 2));
+        ushort rawSenderId = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(2, 2));
+        var senderId = (ClientId)rawSenderId;
         if (senderId == fullClient.ClientId) return; // Self echo suppression
+
+        // Single-talker lock: While one TS3 client is actively talking, ignore silent/background open-mic packets from other clients in the room
+        if (isVoiceActive && activeTalkerClientId != 0 && rawSenderId != activeTalkerClientId)
+        {
+            return;
+        }
 
         string senderName = "TS3-USER";
         if (fullClient.Book != null && fullClient.Book.Clients != null && fullClient.Book.Clients.TryGetValue(senderId, out var cl))
@@ -394,7 +403,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         Span<byte> pcmChunk;
         try
         {
-            pcmChunk = decoder.Decode(opusPayload, decodeBuffer);
+            var clientDecoder = clientDecoders.GetOrAdd(rawSenderId, _ => OpusDecoder.Create(8000, 1));
+            pcmChunk = clientDecoder.Decode(opusPayload, decodeBuffer);
         }
         catch (Exception ex)
         {
@@ -420,12 +430,13 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         if (!isVoiceActive && rms >= 90.0)
         {
             isVoiceActive = true;
+            activeTalkerClientId = rawSenderId;
             txStartTime = now;
             lastVoiceTime = now;
             ResolveSenderIdentity(senderName);
             Console.WriteLine($"[NinjaRadioBridge] 🎙️ TX Key-Up: {currentTalkerCall} ({currentTalkerDmrId}) -> TG {targetTg} Slot {targetSlot} (RMS: {rms:F1})");
         }
-        else if (isVoiceActive)
+        else if (isVoiceActive && rawSenderId == activeTalkerClientId)
         {
             if (rms >= 60.0)
             {
@@ -433,7 +444,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
             }
         }
 
-        if (isVoiceActive)
+        if (isVoiceActive && rawSenderId == activeTalkerClientId)
         {
             // Hard Time-Out Timer (TOT): 180 seconds max
             if ((now - txStartTime).TotalSeconds > 180)
@@ -441,6 +452,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                 Console.WriteLine($"[NinjaRadioBridge] ⚠️ Hard TOT Expired for {currentTalkerCall} on TG {targetTg}");
                 SendCorePacket(false, Array.Empty<byte>());
                 isVoiceActive = false;
+                activeTalkerClientId = 0;
                 return;
             }
 
@@ -465,6 +477,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         if (isVoiceActive && (now - lastVoiceTime).TotalMilliseconds >= 450)
         {
             isVoiceActive = false;
+            activeTalkerClientId = 0;
             pcmBufferOffset = 0;
             Console.WriteLine($"[NinjaRadioBridge] ⏹️ TX Unkey: {currentTalkerCall} ({currentTalkerDmrId}) -> TG {targetTg}");
             SendCorePacket(false, Array.Empty<byte>());
@@ -543,6 +556,11 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
         hangoverTimer?.Dispose();
         decoder?.Dispose();
+        foreach (var d in clientDecoders.Values)
+        {
+            try { d?.Dispose(); } catch { }
+        }
+        clientDecoders.Clear();
         encoder?.Dispose();
         txSocket?.Dispose();
 
