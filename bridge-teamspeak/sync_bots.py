@@ -101,7 +101,7 @@ send_stats = false
         b_slot = int(b.get("slot") if b.get("slot") is not None else (1 if b_tg in [510, 5108, 91] else 2))
         rx_p = int(b.get("rx_port", 12352 + idx))
 
-        # For local server, resolve to channel CID if known; for remote server, use channel path directly
+        # For local server, resolve to channel CID if known
         is_local = target_server.startswith("127.0.0.1") or target_server.startswith("localhost") or target_server.startswith("teamspeak-server")
         cid = None
         if is_local:
@@ -109,9 +109,21 @@ send_stats = false
             if not cid and b_tg:
                 cid = room_cid_map.get(str(b_tg))
 
-        channel_setting = f"/{cid}" if cid else f"/{target_ch}"
-        server_pw_line = f'server_password = "{server_pw}"\n' if server_pw else ""
-        channel_pw_line = f'channel_password = "{channel_pw}"\n' if channel_pw else ""
+        # Format channel parameter correctly for TS3AudioBot:
+        # - Numeric ID must be prefixed with '/' (e.g. '/2' or '/1234')
+        # - Channel name or path must NOT have a leading '/' (e.g. 'TG 1025 - BRIDISV' or 'Lobby/Radio')
+        if cid:
+            channel_setting = f"/{cid}"
+        elif target_ch.startswith("/") and target_ch[1:].isdigit():
+            channel_setting = target_ch
+        elif target_ch.isdigit():
+            channel_setting = f"/{target_ch}"
+        else:
+            channel_setting = target_ch.lstrip("/")
+
+        # TS3AudioBot uses inline table or sub-table for passwords
+        server_pw_line = f'server_password = {{ pw = "{server_pw}" }}\n' if server_pw else ""
+        channel_pw_line = f'channel_password = {{ pw = "{channel_pw}" }}\n' if channel_pw else ""
 
         bot_toml = f"""run = true
 
