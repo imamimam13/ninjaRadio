@@ -57,10 +57,22 @@ interface SvxBot {
   status: string;
 }
 
+interface Ts3Bot {
+  name: string;
+  channel: string;
+  tg: number;
+  slot: number;
+  svx_bot?: string;
+  server?: string;
+  server_password?: string;
+  channel_password?: string;
+  status?: string;
+}
+
 interface UnifiedNode {
   id: string;
   callsign: string;
-  category: "SvxLink" | "DMR" | "DVSwitch" | "Mumble" | "Hotspot" | "Zello";
+  category: "SvxLink" | "DMR" | "DVSwitch" | "Mumble" | "Hotspot" | "Zello" | "TeamSpeak";
   sourceType: "Local" | "Network" | "Ext SVX";
   bridgeLabel: string;
   hostLabel: string;
@@ -127,6 +139,21 @@ export default function SvxLinkPage() {
   const [savingBot, setSavingBot] = useState(false);
   const [showBotForm, setShowBotForm] = useState(false);
 
+  // TeamSpeak 3 Bot & Crosslink Editor State
+  const [tsBots, setTsBots] = useState<Ts3Bot[]>([]);
+  const [showTsBotForm, setShowTsBotForm] = useState(false);
+  const [editingTsBotName, setEditingTsBotName] = useState<string | null>(null);
+  const tsBotFormRef = useRef<HTMLDivElement>(null);
+  const [tsBotName, setTsBotName] = useState("");
+  const [tsBotChannel, setTsBotChannel] = useState("");
+  const [tsBotTg, setTsBotTg] = useState("51024");
+  const [tsBotSlot, setTsBotSlot] = useState("2");
+  const [tsBotSvx, setTsBotSvx] = useState("");
+  const [tsBotServer, setTsBotServer] = useState("127.0.0.1:9987");
+  const [tsBotServerPw, setTsBotServerPw] = useState("");
+  const [tsBotChannelPw, setTsBotChannelPw] = useState("");
+  const [savingTsBot, setSavingTsBot] = useState(false);
+
   // Interactive Logic & Config Generator State
   const [genNodeType, setGenNodeType] = useState<"simplex" | "repeater">("simplex");
   const [genCallsign, setGenCallsign] = useState("YB0NINJA");
@@ -167,10 +194,11 @@ export default function SvxLinkPage() {
 
   const fetchAll = async () => {
     try {
-      const [telRes, botRes, logRes] = await Promise.all([
+      const [telRes, botRes, logRes, tsBotRes] = await Promise.all([
         fetch("/api/svxlink/telemetry"),
         fetch("/api/svxlink/bots"),
-        fetch("/api/svxlink/logs")
+        fetch("/api/svxlink/logs"),
+        fetch("/api/teamspeak/bots")
       ]);
       if (telRes.ok) {
         const tData = await telRes.json();
@@ -185,10 +213,86 @@ export default function SvxLinkPage() {
         const lData = await logRes.json();
         if (lData.recent_logs) setLogs(lData.recent_logs.slice(-30));
       }
+      if (tsBotRes.ok) {
+        const tsData = await tsBotRes.json();
+        if (tsData.bots) setTsBots(tsData.bots);
+      }
     } catch (err) {
       console.error("Failed to fetch SvxLink data:", err);
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleOpenTsBotEditor = (bot?: Ts3Bot) => {
+    if (bot) {
+      setEditingTsBotName(bot.name);
+      setTsBotName(bot.name);
+      setTsBotChannel(bot.channel || "");
+      setTsBotTg((bot.tg || 51024).toString());
+      setTsBotSlot((bot.slot || 2).toString());
+      setTsBotSvx(bot.svx_bot || "");
+      setTsBotServer(bot.server || "127.0.0.1:9987");
+      setTsBotServerPw(bot.server_password || "");
+      setTsBotChannelPw(bot.channel_password || "");
+    } else {
+      setEditingTsBotName(null);
+      setTsBotName("");
+      setTsBotChannel("");
+      setTsBotTg("51024");
+      setTsBotSlot("2");
+      setTsBotSvx("");
+      setTsBotServer("127.0.0.1:9987");
+      setTsBotServerPw("");
+      setTsBotChannelPw("");
+    }
+    setShowTsBotForm(true);
+    setTimeout(() => {
+      tsBotFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  };
+
+  const handleSaveTsBot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tsBotName.trim() || !tsBotChannel.trim()) return;
+    setSavingTsBot(true);
+    try {
+      const res = await fetch("/api/teamspeak/bots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: tsBotName.trim().toUpperCase(),
+          channel: tsBotChannel.trim(),
+          tg: parseInt(tsBotTg, 10) || 1025,
+          slot: parseInt(tsBotSlot, 10) || 2,
+          svx_bot: tsBotSvx.trim(),
+          server: tsBotServer.trim() || "127.0.0.1:9987",
+          server_password: tsBotServerPw.trim(),
+          channel_password: tsBotChannelPw.trim()
+        })
+      });
+      if (res.ok) {
+        setShowTsBotForm(false);
+        setEditingTsBotName(null);
+        fetchAll();
+      }
+    } catch (err) {
+      console.error("Failed to save TS3 bot:", err);
+    } finally {
+      setSavingTsBot(false);
+    }
+  };
+
+  const handleDeleteTsBot = async (name: string) => {
+    try {
+      const res = await fetch(`/api/teamspeak/bots/${encodeURIComponent(name)}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        fetchAll();
+      }
+    } catch (err) {
+      console.error("Failed to delete TS3 bot:", err);
     }
   };
 
@@ -624,7 +728,7 @@ export default function SvxLinkPage() {
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
                       TYPE:
                     </span>
-                    {["All", "SvxLink", "DMR", "DVSwitch", "Mumble", "Zello", "Hotspot"].map((t) => (
+                    {["All", "SvxLink", "TeamSpeak", "DMR", "DVSwitch", "Mumble", "Zello", "Hotspot"].map((t) => (
                       <button
                         key={t}
                         onClick={() => setTypeFilter(t)}
@@ -777,6 +881,250 @@ export default function SvxLinkPage() {
                   </div>
                 )}
 
+                {/* TeamSpeak 3 Bot & Cross-Server Link Editor Form */}
+                {showTsBotForm && (
+                  <div
+                    ref={tsBotFormRef}
+                    className="rounded-2xl border border-cyan-500/70 bg-[#0b1628] p-5 shadow-[0_0_25px_rgba(6,182,212,0.2)] space-y-4 transition-all duration-300"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                      <div className="flex items-center gap-2">
+                        <Pencil className="w-5 h-5 text-cyan-400 animate-pulse" />
+                        <div>
+                          <h2 className="font-heading font-black text-base text-white flex items-center gap-2">
+                            <span>KELOLA BOT TEAMSPEAK 3 (INTERNAL &amp; CROSS-SERVER EKSTERNAL)</span>
+                            {editingTsBotName && (
+                              <span className="text-cyan-400 font-mono underline">{editingTsBotName}</span>
+                            )}
+                          </h2>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            Edit manual Talkgroup (TG) bot internal maupun klien bot eksternal, serta pilih bot tujuan Cross-Link (SvxLink / TS3 Internal).
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenTsBotEditor()}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-xs font-mono font-bold text-emerald-300 border border-emerald-500/50 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>+ Bot TS3 Baru</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowTsBotForm(false);
+                            setEditingTsBotName(null);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-slate-300 flex items-center gap-1.5 border border-slate-700 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Tutup</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick Selector of Existing TS3 Bots (Internal & External) */}
+                    {tsBots.length > 0 && (
+                      <div className="space-y-1.5">
+                        <span className="text-[11px] font-mono font-bold text-slate-400 block">
+                          Daftar Bot TeamSpeak Aktif (Klik untuk Edit Manual TG / Room / Server):
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {tsBots.map((tb) => {
+                            const isExt = tb.server && !tb.server.startsWith("127.0.0.1") && !tb.server.startsWith("localhost");
+                            const isSelected = editingTsBotName === tb.name;
+                            return (
+                              <div
+                                key={tb.name}
+                                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-mono transition-all ${
+                                  isSelected
+                                    ? "bg-cyan-950/90 border-cyan-400 text-white shadow-[0_0_12px_rgba(6,182,212,0.3)]"
+                                    : isExt
+                                    ? "bg-purple-950/40 border-purple-700/60 text-purple-200 hover:border-purple-400"
+                                    : "bg-slate-900/90 border-slate-700 text-slate-200 hover:border-cyan-500"
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenTsBotEditor(tb)}
+                                  className="flex items-center gap-1.5 text-left cursor-pointer"
+                                >
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isExt ? "bg-purple-600 text-white" : "bg-cyan-700 text-white"}`}>
+                                    {isExt ? "EXT" : "INT"}
+                                  </span>
+                                  <span className="font-bold">{tb.name}</span>
+                                  <span className="text-slate-400">({tb.channel})</span>
+                                  <span className="text-emerald-400 font-bold">TG {tb.tg}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm(`Hapus bot TeamSpeak ${tb.name}?`)) {
+                                      handleDeleteTsBot(tb.name);
+                                    }
+                                  }}
+                                  className="text-rose-400 hover:text-rose-300 ml-1 cursor-pointer"
+                                  title={`Hapus ${tb.name}`}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleSaveTsBot} className="space-y-3 text-xs font-mono pt-2 border-t border-slate-800/80">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">Nama Bot TS3</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. TS32TS3 / TS3-LOKAL-51024"
+                            value={tsBotName}
+                            onChange={(e) => setTsBotName(e.target.value)}
+                            required
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">
+                            Alamat Server TS3 (Internal / Luar)
+                          </label>
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              placeholder="127.0.0.1:9987 atau 38.47.176.16:9191"
+                              value={tsBotServer}
+                              onChange={(e) => setTsBotServer(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-bold focus:border-cyan-500 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setTsBotServer("127.0.0.1:9987")}
+                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] text-cyan-300 border border-slate-700 shrink-0 cursor-pointer"
+                              title="Set ke Server Internal Lokal"
+                            >
+                              Lokal
+                            </button>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">Nama Room / Channel TS3</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. SETTING PERANGKAT / Crosslink ROIP"
+                            value={tsBotChannel}
+                            onChange={(e) => setTsBotChannel(e.target.value)}
+                            required
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">
+                            Pilih Bot Tujuan Cross-Link (Otomatis Isi TG)
+                          </label>
+                          <select
+                            value={`${tsBotSvx}|${tsBotTg}`}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (!val) return;
+                              const [svxName, tgStr] = val.split("|");
+                              if (svxName) setTsBotSvx(svxName);
+                              if (tgStr) setTsBotTg(tgStr);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-cyan-700/80 text-cyan-300 font-bold focus:border-cyan-400 focus:outline-none"
+                          >
+                            <option value={`|${tsBotTg}`}>-- Pilih Bot SvxLink / TS3 untuk Di-Cross --</option>
+                            <optgroup label="Bot SvxLink (Reflector Bridge)">
+                              {bots.map((sb) => (
+                                <option key={`svx_${sb.name}`} value={`${sb.name}|${sb.tg}`}>
+                                  [SVX] {sb.name} ➔ TG {sb.tg} ({sb.channel})
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Bot TS3 Server Internal (Lokal)">
+                              {tsBots
+                                .filter((lb) => !lb.server || lb.server.startsWith("127.0.0.1") || lb.server.startsWith("localhost"))
+                                .map((lb) => (
+                                  <option key={`ts3_${lb.name}`} value={`${lb.svx_bot || ""}|${lb.tg}`}>
+                                    [TS3-INT] {lb.name} ➔ Room &apos;{lb.channel}&apos; (TG {lb.tg})
+                                  </option>
+                                ))}
+                            </optgroup>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">Target Talkgroup (Edit Manual TG)</label>
+                          <input
+                            type="number"
+                            placeholder="e.g. 51024"
+                            value={tsBotTg}
+                            onChange={(e) => setTsBotTg(e.target.value)}
+                            required
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-emerald-600/70 text-emerald-400 font-black focus:border-emerald-400 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">TimeSlot</label>
+                          <select
+                            value={tsBotSlot}
+                            onChange={(e) => setTsBotSlot(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                          >
+                            <option value="1">Slot 1</option>
+                            <option value="2">Slot 2</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">Linked SvxLink Bot (Opsional)</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. SVXLINKCROSS510"
+                            value={tsBotSvx}
+                            onChange={(e) => setTsBotSvx(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-cyan-300 focus:border-cyan-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block mb-1 font-bold">Password Channel / Server (Opsional)</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <input
+                              type="password"
+                              placeholder="Pass Room"
+                              value={tsBotChannelPw}
+                              onChange={(e) => setTsBotChannelPw(e.target.value)}
+                              className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                            />
+                            <input
+                              type="password"
+                              placeholder="Pass Server"
+                              value={tsBotServerPw}
+                              onChange={(e) => setTsBotServerPw(e.target.value)}
+                              className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-end">
+                          <button
+                            type="submit"
+                            disabled={savingTsBot}
+                            className="w-full py-2 px-4 rounded-xl font-bold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all disabled:opacity-50 cursor-pointer"
+                          >
+                            {savingTsBot ? "MENYIMPAN..." : "💾 SIMPAN & SINKRONKAN BOT TS3"}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                )}
+
                 {/* Node Cards Grid */}
                 <div
                   className={`grid gap-4 font-mono ${
@@ -924,6 +1272,45 @@ export default function SvxLinkPage() {
                                       }}
                                       className="p-1 rounded bg-slate-800/90 hover:bg-rose-900/70 text-rose-400 border border-slate-700 hover:border-rose-500 transition-colors cursor-pointer"
                                       title={`Hapus Bot ${b.name}`}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                            {node.category === "TeamSpeak" && (() => {
+                              const matchedTsBot = tsBots.find(
+                                (item) => item.name.toUpperCase() === node.callsign.toUpperCase()
+                              );
+                              const defaultInternalBot = tsBots.find(
+                                (item) => !item.server || item.server.startsWith("127.0.0.1") || item.server.startsWith("localhost")
+                              );
+                              return (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenTsBotEditor(matchedTsBot || defaultInternalBot);
+                                    }}
+                                    className="px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-cyan-900/70 text-cyan-300 border border-slate-700 hover:border-cyan-500 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold"
+                                    title={matchedTsBot ? `Edit Bot TS3 ${matchedTsBot.name}` : "Edit Manual TG & Bot TeamSpeak"}
+                                  >
+                                    <Pencil className="w-3 h-3 text-cyan-400" />
+                                    <span>Edit</span>
+                                  </button>
+                                  {matchedTsBot && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (confirm(`Hapus bot TeamSpeak ${matchedTsBot.name}?`)) {
+                                          handleDeleteTsBot(matchedTsBot.name);
+                                        }
+                                      }}
+                                      className="p-1 rounded bg-slate-800/90 hover:bg-rose-900/70 text-rose-400 border border-slate-700 hover:border-rose-500 transition-colors cursor-pointer"
+                                      title={`Hapus Bot TS3 ${matchedTsBot.name}`}
                                     >
                                       <Trash2 className="w-3 h-3" />
                                     </button>

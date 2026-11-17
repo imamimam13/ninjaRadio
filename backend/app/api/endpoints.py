@@ -2787,28 +2787,70 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
             "sw": "Zello Channel API"
         })
 
-    # 8. Connected TeamSpeak 3 Voice Server
+    # 8. Connected TeamSpeak 3 Voice Server & External Cross-Server Bots
     try:
         from backend.app.services.teamspeak_service import get_teamspeak_telemetry
         ts3_telemetry = await get_teamspeak_telemetry()
+        ts_cfg_all = read_config_file()
+        ts_rooms_cfg = ts_cfg_all.get("teamspeak_rooms", DEFAULT_TEAMSPEAK_ROOMS)
+        ts_bots_cfg = ts_cfg_all.get("teamspeak_bots", DEFAULT_TEAMSPEAK_BOTS)
+
+        # Dynamically collect all internal monitored TGs from rooms and local bots
+        ts_monitored_tgs = []
+        for r in ts_rooms_cfg:
+            rtg = r.get("tg") if r.get("tg") is not None else r.get("targetTg")
+            if rtg:
+                try:
+                    rtg_int = int(rtg)
+                    if rtg_int > 0 and rtg_int not in ts_monitored_tgs:
+                        ts_monitored_tgs.append(rtg_int)
+                except Exception:
+                    pass
+
+        local_ts_bots = []
+        external_ts_bots = []
+        for b in ts_bots_cfg:
+            b_srv = str(b.get("server") or "127.0.0.1:9987").strip()
+            is_local_srv = (
+                b_srv.startswith("127.0.0.1")
+                or b_srv.startswith("localhost")
+                or b_srv.startswith("teamspeak-server")
+                or not b_srv
+            )
+            if is_local_srv:
+                local_ts_bots.append(b)
+                btg = b.get("tg")
+                if btg:
+                    try:
+                        btg_int = int(btg)
+                        if btg_int > 0 and btg_int not in ts_monitored_tgs:
+                            ts_monitored_tgs.append(btg_int)
+                    except Exception:
+                        pass
+            else:
+                external_ts_bots.append(b)
+
+        if not ts_monitored_tgs:
+            ts_monitored_tgs = [1025, 510990, 510, 5109]
+
         if ts3_telemetry.get("online"):
             ext_ip = os.getenv("EXTERNAL_IP", "43.173.13.117")
             tot_clients = ts3_telemetry.get("total_clients", 0)
             channels_cnt = len(ts3_telemetry.get("channels", []))
-            
-            # Check if any monitored TG in TS3 is currently transmitting
-            ts_monitored_tgs = [1025, 510990, 510, 5109]
+
             active_ts_stream = None
             active_ts_tg = 0
             for t in ts_monitored_tgs:
-                if t in active_streams_by_tg:
-                    active_ts_stream = active_streams_by_tg[t]
+                st = active_streams_by_tg.get(t) or active_streams_by_tg.get(str(t))
+                if st:
+                    active_ts_stream = st
                     active_ts_tg = t
                     break
 
             is_ts_talking = bool(active_ts_stream)
             ts_talker = active_ts_stream.get("callsign", "") if active_ts_stream else ""
             ts_dur = active_ts_stream.get("duration_sec", 2) if active_ts_stream else 0
+            local_bot_names = ", ".join([str(b.get("name", "")).upper() for b in local_ts_bots if b.get("name")])
 
             unified_nodes.append({
                 "id": "ts3_server",
@@ -2818,16 +2860,58 @@ async def get_svxlink_telemetry(session: AsyncSession = Depends(get_db)):
                 "bridgeLabel": f"TeamSpeak 3 Server ({channels_cnt} Rooms)",
                 "hostLabel": f"{ext_ip}:9987",
                 "routeFrom": "TS3 Multi-Room",
-                "routeTo": f"DMR TG {active_ts_tg} (Active)" if is_ts_talking else "DMR Multi-TG Independent",
-                "tg": active_ts_tg if active_ts_tg > 0 else 1025,
+                "routeTo": f"DMR TG {active_ts_tg} (Active)" if is_ts_talking else "DMR/SVX Multi-TG Dynamic",
+                "tg": active_ts_tg if active_ts_tg > 0 else (ts_monitored_tgs[0] if ts_monitored_tgs else 1025),
                 "slot": 2,
                 "monitoredTGs": ts_monitored_tgs,
                 "isTalking": is_ts_talking,
                 "talkerCallsign": ts_talker,
                 "talkingDurationSec": ts_dur,
                 "connected": True,
-                "sysop": f"TEAMSPEAK 3 · {tot_clients} Users Online",
+                "sysop": f"TEAMSPEAK 3 · {tot_clients} Users ({local_bot_names})" if local_bot_names else f"TEAMSPEAK 3 · {tot_clients} Users Online",
                 "sw": "TeamSpeak 3 (Anti Phone-Home)"
+            })
+
+        # 8b. External TeamSpeak 3 Crosslink Bot Clients
+        for eb in external_ts_bots:
+            eb_name = str(eb.get("name") or "TS3-EXT").strip().upper()
+            eb_chan = str(eb.get("channel") or "Default").strip()
+            eb_srv = str(eb.get("server") or "").strip()
+            eb_tg = int(eb.get("tg") or 510)
+            eb_slot = int(eb.get("slot") or 2)
+            eb_svx = str(eb.get("svx_bot") or "").strip()
+            eb_stream = active_streams_by_tg.get(eb_tg) or active_streams_by_tg.get(str(eb_tg))
+            eb_talking = bool(eb_stream)
+            eb_talker = eb_stream.get("callsign", "") if eb_stream else ""
+            eb_dur = eb_stream.get("duration_sec", 2) if eb_stream else 0
+
+            matching_local = [str(lb.get("name", "")).upper() for lb in local_ts_bots if int(lb.get("tg") or 0) == eb_tg]
+            cross_targets = []
+            if eb_svx:
+                cross_targets.append(f"SVX:{eb_svx}")
+            if matching_local:
+                cross_targets.append(f"TS3:{','.join(matching_local)}")
+            cross_targets.append(f"TG {eb_tg}")
+            route_to_label = " + ".join(cross_targets)
+
+            unified_nodes.append({
+                "id": f"ts3_ext_{eb_name}",
+                "callsign": eb_name,
+                "category": "TeamSpeak",
+                "sourceType": "Network",
+                "bridgeLabel": f"Ext TS3 Room '{eb_chan}'",
+                "hostLabel": eb_srv,
+                "routeFrom": f"Ext TS3 ({eb_chan})",
+                "routeTo": route_to_label,
+                "tg": eb_tg,
+                "slot": eb_slot,
+                "monitoredTGs": [eb_tg],
+                "isTalking": eb_talking,
+                "talkerCallsign": eb_talker,
+                "talkingDurationSec": eb_dur,
+                "connected": True,
+                "sysop": f"EXT TS3 CLIENT · Cross ➔ {route_to_label}",
+                "sw": f"HoneyBBQ Client ({eb_srv})"
             })
     except Exception as e:
         logger.debug(f"Note loading TS3 telemetry: {e}")

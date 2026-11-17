@@ -109,12 +109,23 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         encoder.Bitrate = 24000;
 
         txSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        string resolvedCoreHost = CoreHost;
+        try
+        {
+            if (System.IO.File.Exists("/app/ninja_data/core_ip.txt"))
+            {
+                string ipFromFile = System.IO.File.ReadAllText("/app/ninja_data/core_ip.txt").Trim();
+                if (!string.IsNullOrEmpty(ipFromFile)) resolvedCoreHost = ipFromFile;
+            }
+        }
+        catch { }
+
         IPAddress coreIp;
-        if (!IPAddress.TryParse(CoreHost, out coreIp))
+        if (!IPAddress.TryParse(resolvedCoreHost, out coreIp))
         {
             try
             {
-                var addresses = Dns.GetHostAddresses(CoreHost);
+                var addresses = Dns.GetHostAddresses(resolvedCoreHost);
                 coreIp = addresses.Length > 0 ? addresses[0] : IPAddress.Loopback;
             }
             catch
@@ -366,7 +377,6 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     // Direction TS3 -> DMR: Received audio from TeamSpeak channel client
     public void Write(Span<byte> data, Meta meta)
     {
-        Console.WriteLine($"[NinjaRadioBridge] 🔍 [{defaultBotName}] Write called: len={data.Length}, myClientId={fullClient?.ClientId}");
         if (data.Length < 6) return;
 
         var senderId = (ClientId)BinaryPrimitives.ReadUInt16BigEndian(data.Slice(2, 2));

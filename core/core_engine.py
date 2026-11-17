@@ -1674,6 +1674,14 @@ usrpAGC = -20,10,100
             self.web_ptt_sock.setblocking(False)
             asyncio.create_task(self.run_web_ptt_ingress_loop())
             logger.info(f"✓ Direct Z3DMR Web PTT Ingress active on UDP port {WEB_PTT_PORT}")
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s_ip:
+                    s_ip.connect(("8.8.8.8", 80))
+                    my_ip = s_ip.getsockname()[0]
+                    with open("/app/data/core_ip.txt", "w", encoding="utf-8") as f_ip:
+                        f_ip.write(my_ip)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Failed to bind Web PTT ingress port {WEB_PTT_PORT}: {e}")
 
@@ -2506,7 +2514,7 @@ usrpAGC = -20,10,100
                                 self._last_web_busy_alert = now
                                 logger.warning(f"🚫 [COLLISION-GUARD] Blocked Web/Gateway PTT from {addr} ({callsign} - {dmr_id}) on busy TG {tg}")
                             continue
-                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx, is_gateway=(is_svx or is_mumble or is_zello or is_webrtc))
+                        is_allowed, reason = check_core_tx_permission(dmr_id, callsign, tg, is_svx=is_svx, is_gateway=(is_svx or is_mumble or is_zello or is_webrtc or is_ts3))
                         if not is_allowed:
                             if now - getattr(self, "_last_web_fw_alert", 0) > 3.0:
                                 self._last_web_fw_alert = now
