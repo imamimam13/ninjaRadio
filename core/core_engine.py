@@ -1739,8 +1739,20 @@ usrpAGC = -20,10,100
         """Monitors active PTT carrier and auto-unkeys if client audio stream drops completely."""
         while self.running:
             await asyncio.sleep(0.2)
+            now = time.time()
+            # 1. Per-TG DirectDMR & Gateway session watchdog: auto-unkey any gateway TG session silent for > 1.5s
+            if getattr(self, "direct_dmr", None) and hasattr(self.direct_dmr, "_tx_sessions"):
+                for tg_k, sess in list(self.direct_dmr._tx_sessions.items()):
+                    if sess.get("in_tx") and (now - sess.get("last_tx_ts", 0.0) > 1.5):
+                        s_call = sess.get("callsign", "GATEWAY")
+                        s_src = sess.get("src_id", 0)
+                        s_slot = sess.get("slot", 2)
+                        logger.info(f"[PTT-Watchdog] ⏹️ Auto-unkeying stale DirectDMR session on TG {tg_k} ({s_call} / {s_src}) after 1.5s silence")
+                        self.direct_dmr.push_web_ptt_pcm(s_call, s_src, tg_k, s_slot, b"", is_tx=False)
+                        if hasattr(self, "_active_gw_tx_by_tg"):
+                            self._active_gw_tx_by_tg.pop(tg_k, None)
+
             if self.is_transmitting:
-                now = time.time()
                 # Allow 5.0s startup grace period for browser getUserMedia() / WebAudio initialization
                 if now - getattr(self, "current_tx_start_time", 0.0) < 5.0:
                     continue
@@ -2540,11 +2552,39 @@ usrpAGC = -20,10,100
                     else:
                         net_label = "Direct DMR (WebRTC)"
                     if is_tx:
+                        if not hasattr(self, "_active_gw_tx_by_tg"):
+                            self._active_gw_tx_by_tg = {}
+                        if not hasattr(self, "_gw_stream_ids"):
+                            self._gw_stream_ids = {}
+                        if not hasattr(self, "_gw_session_last_ts"):
+                            self._gw_session_last_ts = {}
+
+                        # Expire stale gateway sessions that stopped sending packets (> 1.0s without unkey)
+                        for stale_k, stale_ts in list(self._gw_session_last_ts.items()):
+                            if stale_k != session_key and (now - stale_ts) > 1.0:
+                                active_tx_sessions.discard(stale_k)
+                                self._gw_session_last_ts.pop(stale_k, None)
+                                self._gw_stream_ids.pop(stale_k, None)
+                                if isinstance(stale_k, tuple) and len(stale_k) == 2:
+                                    cur_gw = self._active_gw_tx_by_tg.get(stale_k[1])
+                                    if cur_gw and cur_gw.get("session_key") == stale_k:
+                                        self._active_gw_tx_by_tg.pop(stale_k[1], None)
+
+                        # Same-TG Gateway Collision Guard: if another gateway session is actively streaming on THIS TG (< 0.65s), drop duplicate!
+                        existing_gw = self._active_gw_tx_by_tg.get(tg)
+                        if existing_gw and existing_gw.get("session_key") != session_key and (now - existing_gw.get("time", 0.0)) < 0.65:
+                            continue
+
                         # Anti-Collision Guard: If MMDVM or Remote Peer is actively transmitting on this TG, DROP Gateway/SvxLink!
+                        active_rx_talker = self.active_talkers_by_tg.get(tg)
                         is_rx_busy = (
                             self.current_rx_active 
                             and getattr(self, "current_rx_tg", 0) == tg 
-                            and (now - getattr(self, "current_rx_time", 0)) < 1.8
+                            and (now - getattr(self, "current_rx_time", 0)) < 1.2
+                        ) or (
+                            active_rx_talker is not None
+                            and (now - active_rx_talker.get("time", 0.0)) < 0.8
+                            and active_rx_talker.get("src") != dmr_id
                         )
                         is_master_busy = (
                             self.dmr_master_server and self.dmr_master_server.is_tg_busy(tg, dmr_id)
@@ -2570,17 +2610,24 @@ usrpAGC = -20,10,100
                         self.current_tx_dmr_id = dmr_id
                         self.current_operator_callsign = callsign
                         self.current_operator_dmr_id = dmr_id
+                        self._gw_session_last_ts[session_key] = now
+                        self._active_gw_tx_by_tg[tg] = {
+                            "session_key": session_key,
+                            "src_id": dmr_id,
+                            "callsign": callsign,
+                            "slot": slot,
+                            "time": now,
+                            "addr": addr,
+                        }
                         if self.dmr_master_server:
                             self.dmr_master_server.mark_local_transmission(dmr_id, tg, slot, callsign=callsign)
                         if session_key not in active_tx_sessions:
                             active_tx_sessions.add(session_key)
                             self.current_tx_start_time = now
                             pkt_count = 0
+                            gw_stream_id = int(now * 1000) & 0xFFFFFFFF
+                            self._gw_stream_ids[session_key] = gw_stream_id
                             if self.dmr_master_server:
-                                gw_stream_id = int(now * 1000) & 0xFFFFFFFF
-                                if not hasattr(self, "_gw_stream_ids"):
-                                    self._gw_stream_ids = {}
-                                self._gw_stream_ids[session_key] = gw_stream_id
                                 self.dmr_master_server.acquire_or_check_tg_lock(tg, gw_stream_id, dmr_id, 1, origin_addr=addr)
                             logger.info(f"🎙️ [WebPTT-Ingress] 🔴 Keyed up from {addr} [{net_label}]: ID {dmr_id} ({callsign}) -> TG {tg} (TS{slot}, pcm={len(pcm_chunk)}B)")
                             # Broadcast caller info to DVSwitch Mobile clients
@@ -2602,6 +2649,11 @@ usrpAGC = -20,10,100
                                     "is_transmitting": True,
                                     "data_type": 0
                                 }))
+                        else:
+                            gw_stream_id = self._gw_stream_ids.get(session_key) or (int(now * 1000) & 0xFFFFFFFF)
+                            self._gw_stream_ids[session_key] = gw_stream_id
+                            if self.dmr_master_server:
+                                self.dmr_master_server.acquire_or_check_tg_lock(tg, gw_stream_id, dmr_id, 1, origin_addr=addr)
                         pkt_count += 1
                         if pkt_count % 100 == 0:
                             logger.info(f"🎙️ [WebPTT-Ingress] Streaming audio from {callsign}: {pkt_count} frames processed")
@@ -2667,16 +2719,27 @@ usrpAGC = -20,10,100
 
                         # Encode directly to DMRD frames via Direct Z3DMR Vocoder (Zero Analog_Bridge collision)
                         if self.direct_dmr:
-                            self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx=True)
+                            self.direct_dmr.push_web_ptt_pcm(callsign, dmr_id, tg, slot, pcm_chunk, is_tx=True, stream_id=gw_stream_id)
                     else:
-                        if session_key in active_tx_sessions:
-                            active_tx_sessions.discard(session_key)
-                            self.is_transmitting = False
-                            self.current_tx_tg = 0
-                            self.current_tx_slot = 0
-                            self.current_tx_dmr_id = 0
-                            if self.dmr_master_server and hasattr(self, "_gw_stream_ids") and session_key in self._gw_stream_ids:
-                                gw_stream_id = self._gw_stream_ids.pop(session_key, 0)
+                        # Also match any active session on this TG if callsign/dmr_id slightly differed on unkey
+                        matched_session = session_key if session_key in active_tx_sessions else None
+                        if not matched_session and hasattr(self, "_active_gw_tx_by_tg") and tg in self._active_gw_tx_by_tg:
+                            cand_key = self._active_gw_tx_by_tg[tg].get("session_key")
+                            if cand_key in active_tx_sessions:
+                                matched_session = cand_key
+                        if matched_session:
+                            active_tx_sessions.discard(matched_session)
+                            if hasattr(self, "_gw_session_last_ts"):
+                                self._gw_session_last_ts.pop(matched_session, None)
+                            if hasattr(self, "_active_gw_tx_by_tg"):
+                                self._active_gw_tx_by_tg.pop(tg, None)
+                            self.is_transmitting = bool(active_tx_sessions)
+                            if not self.is_transmitting:
+                                self.current_tx_tg = 0
+                                self.current_tx_slot = 0
+                                self.current_tx_dmr_id = 0
+                            if self.dmr_master_server and hasattr(self, "_gw_stream_ids") and matched_session in self._gw_stream_ids:
+                                gw_stream_id = self._gw_stream_ids.pop(matched_session, 0)
                                 self.dmr_master_server.acquire_or_check_tg_lock(tg, gw_stream_id, dmr_id, 2, origin_addr=addr)
                             logger.info(f"🎙️ [WebPTT-Ingress] ⏹️ Unkeyed from {addr} [{net_label}]: ID {dmr_id} ({callsign}) -> TG {tg} (total frames: {pkt_count})")
                             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
@@ -3111,17 +3174,17 @@ usrpAGC = -20,10,100
             is_local_mmdvm = host_str.startswith("127.0.0.1")
             callsign = traffic.get("callsign") or lookup_callbook_callsign(src_id) or f"ID-{src_id}"
 
-            is_local_origin = is_local_mmdvm or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id))
+            is_local_origin = is_local_mmdvm or (self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id, dst_tg))
 
-            # Anti-Collision Guard: If Gateway (SvxLink/Mumble/Zello/Web) is currently transmitting on this TG, DROP MMDVM!
-            if self.is_transmitting and getattr(self, "current_tx_tg", 0) == dst_tg:
-                if (now - getattr(self, "last_audio_tx_time", 0)) < 1.8:
-                    if traffic.get("data_type") == 0:
-                        logger.warning(
-                            f"🚫 [COLLISION-GUARD] Suppressed MMDVM uplink from {callsign} ({src_id}) on TG {dst_tg} "
-                            f"— Gateway/SvxLink is actively transmitting on this TG!"
-                        )
-                    return
+            # Anti-Collision Guard: If Gateway (SvxLink/Mumble/Zello/Web/TS3) is currently transmitting on THIS TG, DROP MMDVM!
+            gw_tx = getattr(self, "_active_gw_tx_by_tg", {}).get(dst_tg)
+            if gw_tx and (now - gw_tx.get("time", 0.0)) < 1.2:
+                if traffic.get("data_type") == 0:
+                    logger.warning(
+                        f"🚫 [COLLISION-GUARD] Suppressed MMDVM uplink from {callsign} ({src_id}) on TG {dst_tg} "
+                        f"— Gateway/SvxLink is actively transmitting on this TG!"
+                    )
+                return
 
             self.current_rx_src = src_id
             self.current_rx_tg = dst_tg
@@ -3393,10 +3456,11 @@ usrpAGC = -20,10,100
             network_name = traffic.get("network", "Remote Peer")
             now = time.time()
 
-            # 1. Loopback suppression: if transmission originated locally, drop!
-            if self.is_transmitting and (src_id == getattr(self, "current_tx_dmr_id", 0) or (getattr(self, "current_tx_tg", 0) and dst_tg == self.current_tx_tg)):
+            # 1. Loopback suppression: if transmission originated locally on this TG, drop!
+            gw_tx = getattr(self, "_active_gw_tx_by_tg", {}).get(dst_tg)
+            if gw_tx and (now - gw_tx.get("time", 0.0)) < 1.0:
                 return
-            if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id):
+            if self.dmr_master_server and self.dmr_master_server.is_local_transmission(src_id, dst_tg):
                 return
 
             # 1b. Multi-peer deduplication: if another peer is already streaming this exact (src_id, dst_tg) within 0.5s, drop duplicate!
@@ -3438,6 +3502,9 @@ usrpAGC = -20,10,100
                             routed_tgs.append((t_tg, t_slot))
 
             # Enforce Server-Wide Per-Talkgroup Contention Lock before accepting incoming peer DMRD
+            gw_eff_tx = getattr(self, "_active_gw_tx_by_tg", {}).get(effective_tg)
+            if gw_eff_tx and (now - gw_eff_tx.get("time", 0.0)) < 1.0:
+                return
             if self.dmr_master_server and effective_tg > 0:
                 p_stream_id = traffic.get("stream_id", 0)
                 p_dtype = traffic.get("data_type", 1)

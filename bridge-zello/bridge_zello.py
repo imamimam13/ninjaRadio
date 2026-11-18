@@ -547,7 +547,17 @@ def run_dmr_rx_listener(loop: asyncio.AbstractEventLoop):
                 magic, seq, mem, key_flag, tg, src_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
                 pcm_8k = data[32:]
                 if tg == bridge_state.target_tg:
-                    loop.call_soon_threadsafe(dmr_to_zello_queue.put_nowait, (key_flag, pcm_8k, tg, src_id, slot))
+                    # Half-duplex guard: do not feed DMR audio back into Zello while an authorized Zello speaker is actively talking
+                    if key_flag == 1 and bridge_state.active_speaker_allowed and (time.time() - bridge_state.last_rx_time < 0.75):
+                        continue
+                    def _enqueue_pkt(item=(key_flag, pcm_8k, tg, src_id, slot)):
+                        if item[0] == 1 and dmr_to_zello_queue.qsize() > 60:
+                            try:
+                                dmr_to_zello_queue.get_nowait()
+                            except Exception:
+                                pass
+                        dmr_to_zello_queue.put_nowait(item)
+                    loop.call_soon_threadsafe(_enqueue_pkt)
         except Exception:
             time.sleep(0.01)
 
@@ -676,6 +686,23 @@ async def zello_websocket_worker():
 
                     while is_app_running and bridge_state.ws_connected:
                         try:
+                            # Zello -> DMR RX Watchdog: auto-unkey Core if Zello binary audio stops for > 1.2s without on_stream_stop
+                            if bridge_state.active_speaker_allowed and bridge_state.active_speaker_id and (time.time() - bridge_state.last_rx_time > 1.2):
+                                cur_dmr_id = bridge_state.active_speaker_id
+                                cur_call = bridge_state.active_speaker_call or (bridge_state.bot_callsign or "ZELLO")
+                                call_b = cur_call.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                                unkey_nptt = struct.pack(">4sIIII?16s", b"NZEL", int(cur_dmr_id), int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
+                                try:
+                                    udp_tx_sock.sendto(unkey_nptt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
+                                except Exception:
+                                    pass
+                                record_log(f"⏱️ [Zello Watchdog] Auto-released DMR TX for {cur_call} ({cur_dmr_id}) after 1.2s silence")
+                                bridge_state.active_speaker_allowed = False
+                                bridge_state.active_speaker = None
+                                bridge_state.active_speaker_id = 0
+                                bridge_state.active_speaker_call = None
+                                bridge_state.active_stream_id = None
+
                             try:
                                 key_flag, pcm_8k, tg, src_id, slot = await asyncio.wait_for(dmr_to_zello_queue.get(), timeout=0.08)
                             except asyncio.TimeoutError:
@@ -809,6 +836,19 @@ async def zello_websocket_worker():
 
                 # 2. Incoming Zello WebSocket Message Loop (Zello -> DMR)
                 zello_agc_gain = 1.6
+                authorized_streams: Dict[int, Tuple[int, str, int]] = {}
+
+                def _send_core_unkey(dmr_id_val: int, call_val: str):
+                    if not dmr_id_val:
+                        return
+                    c_str = call_val or (bridge_state.bot_callsign or "ZELLO")
+                    c_bytes = c_str.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
+                    u_pkt = struct.pack(">4sIIII?16s", b"NZEL", int(dmr_id_val), int(bridge_state.target_tg), int(bridge_state.slot), 0, False, c_bytes)
+                    try:
+                        udp_tx_sock.sendto(u_pkt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
+                    except Exception:
+                        pass
+
                 try:
                     async for msg in ws:
                         if isinstance(msg, str):
@@ -829,17 +869,11 @@ async def zello_websocket_worker():
 
                                 # Remote speaker started talking on Zello
                                 if cmd == "on_stream_start":
-                                    stream_id = data.get("stream_id")
+                                    stream_id = int(data.get("stream_id") or 0)
                                     speaker_user = (data.get("from") or "").strip()
                                     speaker_disp = (data.get("display_name") or data.get("name") or "").strip()
                                     speaker_label = speaker_disp or speaker_user or "ZelloUser"
                                     user_dmr_id, user_callsign = resolve_zello_identity(speaker_user, speaker_disp)
-                                    bridge_state.active_speaker = speaker_label
-                                    bridge_state.active_stream_id = stream_id
-                                    bridge_state.last_rx_time = time.time()
-                                    bridge_state.rx_packet_count = 0
-                                    zello_rx_pcm_buffer.clear()
-                                    zello_agc_gain = 1.6
 
                                     # Parse codec_header to detect exact audio sample rate from Zello
                                     codec_hdr_b64 = data.get("codec_header")
@@ -854,15 +888,8 @@ async def zello_websocket_worker():
                                         except Exception as e:
                                             logger.debug(f"Error parsing codec_header: {e}")
 
-                                    bridge_state.current_stream_sample_rate = stream_sr
-                                    if not opus_decoder or opus_decoder.sample_rate != stream_sr:
-                                        opus_decoder = OpusDecoderWrapper(stream_sr, 1)
-
                                     # Strict TX Firewall: Must exist in Callbook DB to transmit to DMR/Repeaters
                                     if not user_dmr_id or not user_callsign:
-                                        bridge_state.active_speaker_allowed = False
-                                        bridge_state.active_speaker_id = 0
-                                        bridge_state.active_speaker_call = None
                                         reject_msg = f"🛑 [BLOCKED] Akun Zello '{speaker_label}' ({speaker_user}) tidak terdaftar di Callbook NinjaRadio. Transmisi ditolak."
                                         record_log(f"🛑 [ZELLO-FIREWALL] Blocked TX from unverified Zello user: '{speaker_label}' (from: '{speaker_user}') on stream {stream_id}")
                                         text_cmd = {
@@ -879,9 +906,6 @@ async def zello_websocket_worker():
                                     else:
                                         allowed, reason = check_zello_tx_permission(user_dmr_id, user_callsign, bridge_state.target_tg)
                                         if not allowed:
-                                            bridge_state.active_speaker_allowed = False
-                                            bridge_state.active_speaker_id = 0
-                                            bridge_state.active_speaker_call = None
                                             reject_msg = f"🛑 [BLOCKED] {user_callsign} ({speaker_label}): {reason}. Transmisi ditolak."
                                             record_log(f"🛑 [ZELLO-FIREWALL] Blocked TX for {user_callsign}: {reason}")
                                             text_cmd = {
@@ -896,6 +920,19 @@ async def zello_websocket_worker():
                                             except Exception as te:
                                                 logger.debug(f"Error sending reject text to Zello: {te}")
                                         else:
+                                            # Cleanly unkey previous speaker if another authorized stream was still active
+                                            if bridge_state.active_speaker_allowed and bridge_state.active_speaker_id and bridge_state.active_speaker_id != user_dmr_id:
+                                                _send_core_unkey(bridge_state.active_speaker_id, bridge_state.active_speaker_call)
+                                            authorized_streams[stream_id] = (user_dmr_id, user_callsign, stream_sr)
+                                            bridge_state.active_speaker = speaker_label
+                                            bridge_state.active_stream_id = stream_id
+                                            bridge_state.last_rx_time = time.time()
+                                            bridge_state.rx_packet_count = 0
+                                            zello_rx_pcm_buffer.clear()
+                                            zello_agc_gain = 1.6
+                                            bridge_state.current_stream_sample_rate = stream_sr
+                                            if not opus_decoder or opus_decoder.sample_rate != stream_sr:
+                                                opus_decoder = OpusDecoderWrapper(stream_sr, 1)
                                             bridge_state.active_speaker_allowed = True
                                             bridge_state.active_speaker_id = user_dmr_id
                                             bridge_state.active_speaker_call = user_callsign
@@ -919,27 +956,23 @@ async def zello_websocket_worker():
 
                                 # Remote speaker stopped talking on Zello
                                 elif cmd == "on_stream_stop":
-                                    stream_id = data.get("stream_id")
+                                    stream_id = int(data.get("stream_id") or 0)
                                     record_log(f"Zello RX Ended for stream {stream_id} (Total {bridge_state.rx_packet_count} audio packets)")
-                                    
-                                    # Send unkey frame to DirectDmrEngine only if session was authorized
-                                    if getattr(bridge_state, "active_speaker_allowed", False) and bridge_state.active_speaker_id:
-                                        cur_dmr_id = bridge_state.active_speaker_id
-                                        cur_call = bridge_state.active_speaker_call or (bridge_state.bot_callsign or "ZELLO")
-                                        call_b = cur_call.encode("ascii", errors="ignore")[:15].ljust(16, b"\x00")
-                                        unkey_nptt = struct.pack(">4sIIII?16s", b"NZEL", int(cur_dmr_id), int(bridge_state.target_tg), int(bridge_state.slot), 0, False, call_b)
-                                        try:
-                                            udp_tx_sock.sendto(unkey_nptt, (USRP_HOST, CORE_DIRECT_DMR_PORT))
-                                        except Exception:
-                                            pass
-                                    bridge_state.active_speaker_allowed = False
-                                    bridge_state.active_speaker = None
-                                    bridge_state.active_speaker_id = 0
-                                    bridge_state.active_speaker_call = None
-                                    bridge_state.active_stream_id = None
-                                    bridge_state.rx_packet_count = 0
-                                    zello_rx_pcm_buffer.clear()
-                                    zello_agc_gain = 1.6
+                                    stream_info = authorized_streams.pop(stream_id, None)
+                                    if stream_info:
+                                        _send_core_unkey(stream_info[0], stream_info[1])
+                                    elif getattr(bridge_state, "active_speaker_allowed", False) and bridge_state.active_speaker_id:
+                                        _send_core_unkey(bridge_state.active_speaker_id, bridge_state.active_speaker_call)
+
+                                    if bridge_state.active_stream_id == stream_id or not authorized_streams:
+                                        bridge_state.active_speaker_allowed = False
+                                        bridge_state.active_speaker = None
+                                        bridge_state.active_speaker_id = 0
+                                        bridge_state.active_speaker_call = None
+                                        bridge_state.active_stream_id = None
+                                        bridge_state.rx_packet_count = 0
+                                        zello_rx_pcm_buffer.clear()
+                                        zello_agc_gain = 1.6
 
                                 elif data.get("success") is False:
                                     err = data.get("error", "Unknown Zello error")
@@ -951,12 +984,17 @@ async def zello_websocket_worker():
                         elif isinstance(msg, bytes):
                             # Binary audio packet from Zello: [0x01][4B stream_id][4B packet_seq][Opus payload]
                             if len(msg) > 9 and msg[0] == 0x01:
-                                bridge_state.last_rx_time = time.time()
-                                
-                                # Discard audio if speaker is NOT authorized by TX Firewall
-                                if not getattr(bridge_state, "active_speaker_allowed", False) or not bridge_state.active_speaker_id:
+                                pkt_stream_id = struct.unpack(">I", msg[1:5])[0]
+                                stream_info = authorized_streams.get(pkt_stream_id)
+                                if not stream_info and (not getattr(bridge_state, "active_speaker_allowed", False) or not bridge_state.active_speaker_id):
                                     zello_rx_pcm_buffer.clear()
                                     continue
+                                if stream_info:
+                                    bridge_state.active_speaker_id = stream_info[0]
+                                    bridge_state.active_speaker_call = stream_info[1]
+                                    bridge_state.current_stream_sample_rate = stream_info[2]
+                                    bridge_state.active_speaker_allowed = True
+                                bridge_state.last_rx_time = time.time()
 
                                 opus_payload = msg[9:]
                                 
@@ -1021,6 +1059,10 @@ async def zello_websocket_worker():
                                         except Exception:
                                             pass
                 finally:
+                    if bridge_state.active_speaker_allowed and bridge_state.active_speaker_id:
+                        _send_core_unkey(bridge_state.active_speaker_id, bridge_state.active_speaker_call)
+                        bridge_state.active_speaker_allowed = False
+                        bridge_state.active_speaker_id = 0
                     dmr_fwd_task.cancel()
 
         except Exception as e:

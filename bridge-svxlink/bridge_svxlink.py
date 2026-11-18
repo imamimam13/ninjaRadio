@@ -653,8 +653,9 @@ PREEMPHASIS=0
         """Switches active SvxReflector talkgroup dynamically via DTMF PTY."""
         if tg <= 0 or tg == getattr(self, "_current_selected_tg", self.tg):
             return
-        if self.tg > 0 and tg == self.tg:
-            self._current_selected_tg = tg
+        if self.tg > 0:
+            # Dedicated TG bot: never retune away from its assigned self.tg
+            self._current_selected_tg = self.tg
             return
         self._current_selected_tg = tg
         if os.path.exists(self.dtmf_pty_path):
@@ -810,8 +811,8 @@ PREEMPHASIS=0
                 if not data or len(data) < 4:
                     continue
 
-                # Ignore loopback if DMR RX is currently playing into this bot (1.5s hang time)
-                if self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 1.5):
+                # Ignore loopback if DMR RX is currently playing into this bot (0.85s hang time)
+                if self.squelch_is_open or (time.time() - self.last_dmr_rx_play < 0.85):
                     continue
 
                 # Only filter out audio originating from our own internal gateway bot
@@ -829,8 +830,13 @@ PREEMPHASIS=0
                 if len(pcm_16k) == 0:
                     continue
                 rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2)))
-                if rms < 25.0 and not self.is_transmitting_to_dmr:
-                    continue
+                now = time.time()
+                if rms < 25.0:
+                    if not self.is_transmitting_to_dmr:
+                        continue
+                    # Do not let ASYNC_AUDIO_UDP_ZEROFILL=1 zero-fill frames hold the channel open after speech ends
+                    if now - self.last_svx_audio_rx > 0.35:
+                        continue
 
                 # Resolve caller identity (Carry-Over Callsign from SvxReflector / EchoLink)
                 user_dmr_id, user_callsign = resolve_svxlink_identity(raw_talker)
@@ -842,7 +848,6 @@ PREEMPHASIS=0
                     continue
 
                 # Singleton TG Lock: If another bot is already transmitting on this talkgroup, drop duplicate audio!
-                now = time.time()
                 active_holder = ACTIVE_TX_TG_LOCKS.get(tx_tg)
                 if active_holder:
                     holder_bot, holder_ts = active_holder
@@ -854,8 +859,9 @@ PREEMPHASIS=0
                 if not is_allowed:
                     continue
 
-                self.last_svx_audio_rx = now
-                last_svx_tx = now
+                if rms >= 20.0 or not self.is_transmitting_to_dmr:
+                    self.last_svx_audio_rx = now
+                    last_svx_tx = now
 
                 if not self.is_transmitting_to_dmr:
                     self.is_transmitting_to_dmr = True
@@ -973,13 +979,16 @@ PREEMPHASIS=0
                         ev_tg = parts[1] if len(parts) > 1 else str(self.tg)
                         ev_call = parts[2].strip() if len(parts) > 2 else ""
 
-                        def _is_delegated_echo(call_val: str) -> bool:
+                        def _is_delegated_echo(call_val: str, target_tg_val: int = 0) -> bool:
                             c_up = (call_val or "").strip().upper()
                             if not c_up:
                                 return False
                             now_ts = time.time()
+                            eff_tg = target_tg_val if target_tg_val > 0 else self.tg
                             for bot in list(GATEWAY_POOL.values()) + [self]:
-                                if bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0):
+                                if bot is not self and eff_tg > 0 and bot.tg != eff_tg:
+                                    continue
+                                if bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 1.0):
                                     return True
                                 if getattr(bot, "current_tx_call", "") and getattr(bot, "current_tx_call", "").upper() == c_up:
                                     return True
@@ -987,14 +996,14 @@ PREEMPHASIS=0
 
                         if ev_type in ("TALKER_START", "ECHOLINK_START"):
                             internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
-                            is_delegated_echo = _is_delegated_echo(ev_call)
+                            try:
+                                parsed_ev_tg = int(ev_tg) if ev_tg else self.tg
+                            except Exception:
+                                parsed_ev_tg = self.tg
+                            is_delegated_echo = _is_delegated_echo(ev_call, parsed_ev_tg)
                             if ev_call and not is_delegated_echo and ev_call.upper() != self.bot_user.upper() and ev_call.upper() not in internal_bot_names and not ev_call.upper().startswith("SVX-"):
                                 self.active_talker_call = ev_call
-                                try:
-                                    parsed_tg = int(ev_tg)
-                                    self.active_talker_tg = parsed_tg if parsed_tg > 0 else self.tg
-                                except Exception:
-                                    self.active_talker_tg = self.tg
+                                self.active_talker_tg = parsed_ev_tg if parsed_ev_tg > 0 else self.tg
                                 dmr_id, resolved_call = resolve_svxlink_identity(ev_call)
                                 self.active_talker_dmr_id = dmr_id
                                 self.active_talker_start = time.time()
@@ -1020,9 +1029,11 @@ PREEMPHASIS=0
                             internal_bot_names = {b.bot_user.upper() for b in GATEWAY_POOL.values()}
                             c_up = t_call.upper()
                             now_ts = time.time()
+                            eff_tg = self.active_talker_tg or self.tg
                             is_delegated_echo = any(
-                                (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 2.0) or (getattr(bot, "current_tx_call", "") and getattr(bot, "current_tx_call", "").upper() == c_up))
+                                (bot.squelch_is_open or (now_ts - bot.last_dmr_rx_play < 1.0) or (getattr(bot, "current_tx_call", "") and getattr(bot, "current_tx_call", "").upper() == c_up))
                                 for bot in list(GATEWAY_POOL.values()) + [self]
+                                if (bot is self or (eff_tg > 0 and bot.tg == eff_tg))
                             )
                             if not is_delegated_echo and t_call.upper() != self.bot_user.upper() and t_call.upper() not in internal_bot_names and not t_call.upper().startswith("SVX-"):
                                 self.active_talker_call = t_call
@@ -1080,7 +1091,7 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
     while IS_BRIDGING:
         try:
             data, _ = sock.recvfrom(2048)
-            if len(data) >= 32 and (time.time() - last_svx_tx > 0.45):
+            if len(data) >= 32:
                 keyup = struct.unpack(">I", data[12:16])[0]
                 talkgroup = struct.unpack(">I", data[16:20])[0]
                 dmr_id = struct.unpack(">I", data[20:24])[0] if len(data) >= 24 else 0
@@ -1091,23 +1102,22 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                 else:
                     pcm_8k = data[32:]
 
-                # Route DMR RX: prioritize specific bot dedicated to this talkgroup; fallback to Any-TG gateway
+                # Route DMR RX: prioritize a single connected bot dedicated to this talkgroup; fallback to Any-TG gateway (bot.tg == 0)
                 dedicated_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
                 connected_dedicated = [bot for bot in dedicated_bots if bot.connected]
                 if connected_dedicated:
-                    target_bots = connected_dedicated
+                    target_bots = [connected_dedicated[0]]
                 elif dedicated_bots:
-                    target_bots = dedicated_bots
+                    target_bots = [dedicated_bots[0]]
                 else:
-                    target_bots = [bot for bot in gateway_pool.values() if bot.bot_user == "SVX-GATEWAY" or bot.tg == 0]
-                if not target_bots and gateway_pool:
-                    target_bots = list(gateway_pool.values())
+                    any_tg_bots = [bot for bot in gateway_pool.values() if bot.bot_user == "SVX-GATEWAY" or bot.tg == 0]
+                    target_bots = [any_tg_bots[0]] if any_tg_bots else []
                 if not target_bots:
                     continue
 
                 if keyup == 0:
-                    # Unkey frame from DMR Core: close squelch immediately
-                    for bot in target_bots:
+                    # Unkey frame from DMR Core: close squelch immediately on all bots for this TG
+                    for bot in (dedicated_bots or target_bots):
                         bot._set_squelch(False)
                         bot.current_tx_call = None
                     continue
@@ -1119,11 +1129,11 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     bot_names = ", ".join([f"{b.bot_user} ('{b.room_name}')" for b in target_bots])
                     logger.info(f"[SvxLink-Bridge] 🔊 Routing DMR RX (TG {talkgroup} from {caller_call or dmr_id}) -> {bot_names}")
 
-                # Self-Echo Guard: Only drop if this bot is currently actively transmitting SvxLink audio TO DMR
+                # Self-Echo Guard: Per-TG check — drop only if a bot on THIS talkgroup is actively transmitting SvxLink audio TO DMR
                 now_ts = time.time()
                 is_transmitting_to_dmr = any(
                     b.is_transmitting_to_dmr and (now_ts - b.last_svx_audio_rx < 0.6)
-                    for b in target_bots
+                    for b in (dedicated_bots or target_bots)
                 )
                 if is_transmitting_to_dmr:
                     continue

@@ -239,11 +239,15 @@ class HomeBrewMasterServer:
                     self._rejected_stream_ids.pop(stream_id, None)
                 return False
 
-            # Allow same station at same address to immediately re-key after its own terminator
-            if not (lock.get("ended", False) and lock.get("src_id") == src_id and lock.get("addr") == origin_addr):
+            # Allow same station or local DirectDmrEngine broadcast for the active station, or any station after terminator
+            same_station_local = (
+                lock.get("src_id") == src_id
+                and (origin_addr is None or lock.get("addr") is None or lock.get("addr") == origin_addr)
+            )
+            if not (lock.get("ended", False) or same_station_local):
                 self._rejected_stream_ids[stream_id] = now
                 if len(self._rejected_stream_ids) > 256:
-                    cutoff = now - 15.0
+                    cutoff = now - 3.0
                     self._rejected_stream_ids = {k: v for k, v in self._rejected_stream_ids.items() if v > cutoff}
                 logger.warning(
                     f"🚫 [TG-LOCK] Rejected simultaneous PTT on TG {dst_tg} from {origin_addr or 'Local/Peer'} "
@@ -253,13 +257,13 @@ class HomeBrewMasterServer:
                 return False
 
         # Lock acquired or refreshed
-        # Active voice stream: 1.5s tolerance against network jitter
-        # Call Terminator: 1.8s standard DMR Call Hang Time
-        lock_duration = 1.8 if data_type == 2 else 1.5
+        # Active voice stream: 1.2s tolerance against network jitter
+        # Call Terminator: 0.25s tail cushion so replies on the same TG are never blocked
+        lock_duration = 0.25 if data_type == 2 else 1.2
         self.tg_locks[dst_tg] = {
             "stream_id": stream_id,
             "src_id": src_id,
-            "addr": origin_addr,
+            "addr": origin_addr if origin_addr is not None else (lock.get("addr") if lock else None),
             "ended": (data_type == 2),
             "until": now + lock_duration,
         }
@@ -300,12 +304,14 @@ class HomeBrewMasterServer:
             client["last_tg"] = ts1_tgs[0]
             client["last_slot"] = 1
 
-    def is_local_transmission(self, src_id: int) -> bool:
-        """Returns True if the transmission was originated locally within the last 0.6s (Loopback suppression)."""
+    def is_local_transmission(self, src_id: int, dst_tg: int = 0) -> bool:
+        """Returns True if the transmission was originated locally on this TG within the last 0.6s (Loopback suppression)."""
         entry = self.active_local_txs.get(src_id)
         if entry:
             ts = entry["time"] if isinstance(entry, dict) else entry
             if time.time() - ts < 0.6:
+                if dst_tg > 0 and isinstance(entry, dict) and entry.get("tg", 0) > 0 and entry.get("tg") != dst_tg:
+                    return False
                 return True
         return False
 

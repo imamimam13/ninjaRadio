@@ -343,6 +343,7 @@ class DirectOpenDmrVocoder:
         self._dec = None
         self._decoders = {}  # stream_key -> (decoder_ptr, last_seen_time)
         self._enc = None
+        self._encoders = {}  # stream_key -> (encoder_ptr, last_seen_time)
         self._pcm_out = (ctypes.c_int16 * PCM_SAMPLES)()
         self._pcm_in = (ctypes.c_int16 * PCM_SAMPLES)()
         self._frame_out = (ctypes.c_uint8 * FRAME_BYTES)()
@@ -525,7 +526,50 @@ class DirectOpenDmrVocoder:
             except Exception:
                 pass
 
+    def get_or_create_encoder(self, stream_key: str = "tg_1025"):
+        now = time.time()
+        if not self.lib:
+            return None
+        if stream_key not in self._encoders:
+            try:
+                enc = self.lib.opendmr_encoder_create()
+                if enc and hasattr(self.lib, "opendmr_encoder_set_gain"):
+                    try:
+                        self.lib.opendmr_encoder_set_gain(enc, 0)
+                    except Exception:
+                        pass
+                self._encoders[stream_key] = (enc, now)
+                if len(self._encoders) > 16:
+                    for k, (e_ptr, t) in list(self._encoders.items()):
+                        if now - t > 15.0 and k != stream_key:
+                            try:
+                                self.lib.opendmr_encoder_destroy(e_ptr)
+                            except Exception:
+                                pass
+                            del self._encoders[k]
+                return enc
+            except Exception as e:
+                logger.debug(f"Failed to create opendmr encoder for {stream_key}: {e}")
+                return self._enc
+        enc, _ = self._encoders[stream_key]
+        self._encoders[stream_key] = (enc, now)
+        return enc
+
+    def reset_stream_encoder(self, stream_key: str = "tg_1025"):
+        if stream_key in self._encoders and self.lib and hasattr(self.lib, "opendmr_encoder_reset"):
+            try:
+                enc, _ = self._encoders[stream_key]
+                self.lib.opendmr_encoder_reset(enc)
+            except Exception:
+                pass
+
     def reset_encoder(self):
+        for k, (e_ptr, _) in list(self._encoders.items()):
+            if e_ptr and self.lib and hasattr(self.lib, "opendmr_encoder_reset"):
+                try:
+                    self.lib.opendmr_encoder_reset(e_ptr)
+                except Exception:
+                    pass
         if self._enc and self.lib and hasattr(self.lib, "opendmr_encoder_reset"):
             try:
                 self.lib.opendmr_encoder_reset(self._enc)
@@ -536,13 +580,14 @@ class DirectOpenDmrVocoder:
         self.reset_encoder()
         self.reset_decoder()
 
-    def encode_frame(self, pcm: bytes) -> bytes:
-        if not self._enc or len(pcm) != PCM_BYTES:
+    def encode_frame(self, pcm: bytes, enc=None) -> bytes:
+        e_ptr = enc or self._enc
+        if not e_ptr or len(pcm) != PCM_BYTES:
             return bytes(FRAME_BYTES)
         samples = struct.unpack("<160h", pcm)
         for i, s in enumerate(samples):
             self._pcm_in[i] = s
-        ok = self.lib.opendmr_encode(self._enc, self._pcm_in, self._frame_out)
+        ok = self.lib.opendmr_encode(e_ptr, self._pcm_in, self._frame_out)
         if not ok:
             return bytes(FRAME_BYTES)
         return bytes(self._frame_out)
@@ -557,25 +602,26 @@ class DirectOpenDmrVocoder:
             return bytes(PCM_BYTES)
         return struct.pack("<160h", *self._pcm_out)
 
-    def encode_burst(self, pcm_960: bytes, sequence: int = 0, emblc_dict: Optional[dict] = None) -> bytes:
+    def encode_burst(self, pcm_960: bytes, sequence: int = 0, emblc_dict: Optional[dict] = None, stream_key: str = "") -> bytes:
         if len(pcm_960) != BURST_PCM_BYTES:
             return bytes(BURST_BYTES)
         sync = get_burst_center_dibits(sequence, emblc_dict)
+        enc = (self.get_or_create_encoder(stream_key) if stream_key else None) or self._enc
 
-        if self._has_native_burst_enc and self._enc:
+        if self._has_native_burst_enc and enc:
             samples = struct.unpack("<480h", pcm_960)
             for i, s in enumerate(samples):
                 self._pcm_480_in[i] = s
             for i in range(24):
                 self._center_buf[i] = sync[i] if i < len(sync) else 0
-            ok = self.lib.opendmr_encode_burst(self._enc, self._pcm_480_in, self._burst_out, self._center_buf)
+            ok = self.lib.opendmr_encode_burst(enc, self._pcm_480_in, self._burst_out, self._center_buf)
             if ok:
                 return bytes(self._burst_out)
 
         # Fallback to Python burst interleaver if native not available
-        f1 = self.encode_frame(pcm_960[:320])
-        f2 = self.encode_frame(pcm_960[320:640])
-        f3 = self.encode_frame(pcm_960[640:960])
+        f1 = self.encode_frame(pcm_960[:320], enc=enc)
+        f2 = self.encode_frame(pcm_960[320:640], enc=enc)
+        f3 = self.encode_frame(pcm_960[640:960], enc=enc)
         return interleave_burst((f1, f2, f3), sync)
 
     def decode_burst(self, burst_33: bytes, stream_key: str = "slot_2") -> bytes:
@@ -771,7 +817,10 @@ class DirectDmrEngine:
         self.rx_hpf = BiquadFilter(HPF_160HZ_B, HPF_160HZ_A)
         self.rx_lpf = BiquadFilter(LPF_3650HZ_B, LPF_3650HZ_A)
 
-        # TX State Tracking
+        # Per-Talkgroup Multi-Stream TX State & Independent 60ms TDMA Burst Pacers
+        self._tx_sessions: Dict[int, dict] = {}
+        self._pacer_queues: Dict[int, "queue.Queue[Tuple[bytes, float]]"] = {}
+        self._pacer_threads: Dict[int, threading.Thread] = {}
         self.in_tx = False
         self.current_stream_id = 0
         self.current_burst_seq = 0
@@ -785,18 +834,19 @@ class DirectDmrEngine:
         self.tx_pcm_buffer = bytearray()
         self.last_tx_ts = 0.0
 
-        # Real-time 60ms TDMA Burst Pacer Queue
+        # Default pacer queue for fallback
         self._pacer_queue: "queue.Queue[Tuple[bytes, float]]" = queue.Queue()
-        self._pacer_thread = threading.Thread(target=self._run_pacer_loop, daemon=True, name="DirectDMR-TDMA-Pacer")
+        self._pacer_thread = threading.Thread(target=self._run_pacer_loop, args=(self._pacer_queue,), daemon=True, name="DirectDMR-TDMA-Pacer")
         self._pacer_thread.start()
         logger.info(f"✓ Direct Z3DMR Engine ready (Vocoder available: {self.vocoder.is_available()}, version: {self.vocoder.version()})")
 
-    def _run_pacer_loop(self):
+    def _run_pacer_loop(self, q: Optional["queue.Queue[Tuple[bytes, float]]"] = None):
         """Dispatches DMRD bursts at a strict 60ms monotonic cadence required by MMDVMHost and Z3DMR."""
+        target_q = q or self._pacer_queue
         next_send_mono = 0.0
         while True:
             try:
-                pkt, interval_s = self._pacer_queue.get()
+                pkt, interval_s = target_q.get()
                 now_mono = time.monotonic()
                 if next_send_mono <= 0.0 or (now_mono - next_send_mono) > 0.24:
                     # Stream start or after idle gap: send immediately and anchor cadence clock
@@ -815,15 +865,17 @@ class DirectDmrEngine:
                 logger.debug(f"[DirectDMR] Pacer loop note: {e}")
                 time.sleep(0.01)
 
-    def _condition_tx_burst(self, burst_pcm: bytes) -> Tuple[bytes, int]:
+    def _condition_tx_burst(self, burst_pcm: bytes, hpf: Optional[BiquadFilter] = None, lpf: Optional[BiquadFilter] = None) -> Tuple[bytes, int]:
         """
         Continuous telecom biquad filter (300Hz HPF + 3200Hz LPF) with smooth tanh soft limiter.
         Avoids brick-wall gating cuts and preserves natural speech syllables for the AMBE vocoder.
         """
+        h_filt = hpf or self.hpf
+        l_filt = lpf or self.lpf
         samples = struct.unpack("<480h", burst_pcm[:BURST_PCM_BYTES])
         processed = []
         for s in samples:
-            f_val = self.lpf.process(self.hpf.process(float(s)))
+            f_val = l_filt.process(h_filt.process(float(s)))
             sign = 1.0 if f_val >= 0 else -1.0
             x = abs(f_val)
             if x <= 16000.0:
@@ -840,8 +892,20 @@ class DirectDmrEngine:
         if self.vocoder.is_available():
             self.vocoder.reset_decoder()
 
-    def _enqueue_paced_pkt(self, pkt: bytes, interval_s: float = 0.060):
-        self._pacer_queue.put((pkt, interval_s))
+    def _enqueue_paced_pkt(self, pkt: bytes, interval_s: float = 0.060, tg: int = 0):
+        import queue
+        import threading
+        if tg > 0:
+            q = self._pacer_queues.get(tg)
+            if q is None:
+                q = queue.Queue()
+                self._pacer_queues[tg] = q
+                t = threading.Thread(target=self._run_pacer_loop, args=(q,), daemon=True, name=f"DirectDMR-Pacer-TG{tg}")
+                self._pacer_threads[tg] = t
+                t.start()
+            q.put((pkt, interval_s))
+        else:
+            self._pacer_queue.put((pkt, interval_s))
 
     def push_web_ptt_pcm(
         self,
@@ -850,146 +914,161 @@ class DirectDmrEngine:
         tg: int,
         slot: int,
         pcm_chunk: bytes,
-        is_tx: bool
+        is_tx: bool,
+        stream_id: Optional[int] = None,
     ) -> List[bytes]:
         """
-        Receives PCM audio chunks from Web PTT, encodes them to DMRD packets,
-        and broadcasts them via the 60ms TDMA pacer to DMR Master and connected repeaters.
+        Receives PCM audio chunks from Web PTT / VoIP Gateways (TS3, SvxLink, Zello, Mumble),
+        encodes them per-Talkgroup into DMRD packets with independent vocoder & filter state,
+        and broadcasts them via per-TG 60ms TDMA pacers to DMR Master and connected repeaters.
         """
         out_packets = []
         now = time.time()
+        tg_key = int(tg or 0)
+        stream_key = f"tg_{tg_key}"
+        sess = self._tx_sessions.get(tg_key)
 
         if not is_tx:
-            # PTT Released (Unkey)
-            if self.in_tx:
-                # Flush any remaining PCM in buffer (pad partial burst with silence if >= 20ms)
-                while len(self.tx_pcm_buffer) >= 320:
-                    if len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
-                        burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
-                        del self.tx_pcm_buffer[:BURST_PCM_BYTES]
+            # PTT Released (Unkey) for this specific Talkgroup
+            if sess and sess.get("in_tx"):
+                buf = sess["tx_pcm_buffer"]
+                while len(buf) >= 320:
+                    if len(buf) >= BURST_PCM_BYTES:
+                        burst_pcm = bytes(buf[:BURST_PCM_BYTES])
+                        del buf[:BURST_PCM_BYTES]
                     else:
-                        burst_pcm = bytes(self.tx_pcm_buffer).ljust(BURST_PCM_BYTES, b"\x00")
-                        self.tx_pcm_buffer.clear()
-                    burst_pcm, _ = self._condition_tx_burst(burst_pcm)
-                    burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
+                        burst_pcm = bytes(buf).ljust(BURST_PCM_BYTES, b"\x00")
+                        buf.clear()
+                    burst_pcm, _ = self._condition_tx_burst(burst_pcm, sess["hpf"], sess["lpf"])
+                    burst = self.vocoder.encode_burst(burst_pcm, sess["burst_seq"], sess["emblc"], stream_key=stream_key)
                     pkt = build_dmrd_packet(
-                        src_id=self.current_src_id,
-                        dst_tg=self.current_tg,
-                        slot=self.current_slot,
+                        src_id=sess["src_id"],
+                        dst_tg=tg_key,
+                        slot=sess["slot"],
                         data_type=1,
-                        seq=self.current_burst_seq,
+                        seq=sess["burst_seq"],
                         payload=burst,
                         rpt_id=self.rpt_id,
-                        stream_id=self.current_stream_id
+                        stream_id=sess["stream_id"]
                     )
                     out_packets.append(pkt)
-                    self._enqueue_paced_pkt(pkt, 0.060)
-                    self.current_burst_seq = (self.current_burst_seq + 1) % 6
+                    self._enqueue_paced_pkt(pkt, 0.060, tg=tg_key)
+                    sess["burst_seq"] = (sess["burst_seq"] + 1) % 6
 
                 # Send 2 DMRD Voice Terminators (0x22) with valid BPTC(196,96) Terminator LC for reliable RF unkey
-                term_burst = self.current_term_burst or build_dmr_terminator_burst(self.current_src_id, self.current_tg, self.current_slot)
+                term_burst = sess.get("term_burst") or build_dmr_terminator_burst(sess["src_id"], tg_key, sess["slot"])
                 for _ in range(2):
                     term_pkt = build_dmrd_packet(
-                        src_id=self.current_src_id,
-                        dst_tg=self.current_tg,
-                        slot=self.current_slot,
+                        src_id=sess["src_id"],
+                        dst_tg=tg_key,
+                        slot=sess["slot"],
                         data_type=2,
                         seq=0,
                         payload=term_burst,
                         rpt_id=self.rpt_id,
-                        stream_id=self.current_stream_id
+                        stream_id=sess["stream_id"]
                     )
                     out_packets.append(term_pkt)
-                    self._enqueue_paced_pkt(term_pkt, 0.030)
+                    self._enqueue_paced_pkt(term_pkt, 0.030, tg=tg_key)
 
-                logger.info(f"🎙️ [DirectDMR] Unkeyed TX session for {self.current_callsign} (TG {self.current_tg})")
+                logger.info(f"🎙️ [DirectDMR] Unkeyed TX session for {sess['callsign']} (TG {tg_key})")
 
-            self.in_tx = False
-            self.tx_pcm_buffer.clear()
-            self.current_burst_seq = 0
-            self.current_emblc = None
-            if getattr(self, "tx_conditioner", None) is not None:
-                self.tx_conditioner.reset()
-            self.hpf.reset()
-            self.lpf.reset()
-            self.rx_hpf.reset()
-            self.rx_lpf.reset()
+            if sess:
+                sess["in_tx"] = False
+                sess["tx_pcm_buffer"].clear()
+                sess["burst_seq"] = 0
+                sess["emblc"] = None
+                sess["hpf"].reset()
+                sess["lpf"].reset()
             if self.vocoder.is_available():
-                self.vocoder.reset_encoder()
+                self.vocoder.reset_stream_encoder(stream_key)
+            self.in_tx = any(s.get("in_tx") for s in self._tx_sessions.values())
             return out_packets
 
-        # PTT Active (Keyed)
+        # PTT Active (Keyed) for this specific Talkgroup
         clean_dmr_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
-        if not self.in_tx or self.current_tg != tg or self.current_src_id != clean_dmr_id:
-            # Start new transmission session: send DMRD Voice Header (0x21)
+        if not sess or not sess.get("in_tx") or sess.get("src_id") != clean_dmr_id:
+            eff_slot = slot if slot in (1, 2) else 2
+            eff_stream_id = int(stream_id) if (stream_id and stream_id > 0) else (int(now * 1000) & 0xFFFFFFFF)
+            hpf = sess["hpf"] if sess and "hpf" in sess else BiquadFilter(HPF_160HZ_B, HPF_160HZ_A)
+            lpf = sess["lpf"] if sess and "lpf" in sess else BiquadFilter(LPF_3650HZ_B, LPF_3650HZ_A)
+            hpf.reset()
+            lpf.reset()
+            sess = {
+                "in_tx": True,
+                "stream_id": eff_stream_id,
+                "burst_seq": 0,
+                "tg": tg_key,
+                "slot": eff_slot,
+                "src_id": clean_dmr_id,
+                "callsign": callsign,
+                "emblc": build_dmr_emblc_fragments(clean_dmr_id, tg_key),
+                "hdr_burst": build_dmr_header_burst(clean_dmr_id, tg_key, eff_slot),
+                "term_burst": build_dmr_terminator_burst(clean_dmr_id, tg_key, eff_slot),
+                "tx_pcm_buffer": bytearray(),
+                "last_tx_ts": now,
+                "hpf": hpf,
+                "lpf": lpf,
+            }
+            self._tx_sessions[tg_key] = sess
             self.in_tx = True
-            self.current_stream_id = int(now * 1000) & 0xFFFFFFFF
-            self.current_burst_seq = 0
-            self.current_tg = tg
-            self.current_slot = slot if slot in (1, 2) else 2
+            self.current_stream_id = eff_stream_id
+            self.current_tg = tg_key
+            self.current_slot = eff_slot
             self.current_src_id = clean_dmr_id
             self.current_callsign = callsign
-            self.tx_pcm_buffer.clear()
-            if getattr(self, "tx_conditioner", None) is not None:
-                self.tx_conditioner.reset()
-            self.hpf.reset()
-            self.lpf.reset()
-            self.current_emblc = build_dmr_emblc_fragments(self.current_src_id, self.current_tg)
-            self.current_hdr_burst = build_dmr_header_burst(self.current_src_id, self.current_tg, self.current_slot)
-            self.current_term_burst = build_dmr_terminator_burst(self.current_src_id, self.current_tg, self.current_slot)
 
             if self.vocoder.is_available():
-                # Pre-warm vocoder LPC predictor history with 2 primed frames so initial burst has full volume
+                enc = self.vocoder.get_or_create_encoder(stream_key)
                 warmup_pcm = bytes(320)
-                self.vocoder.encode_frame(warmup_pcm)
-                self.vocoder.encode_frame(warmup_pcm)
+                self.vocoder.encode_frame(warmup_pcm, enc=enc)
+                self.vocoder.encode_frame(warmup_pcm, enc=enc)
 
             # Send 3 Voice Header preamble packets (0x21) per ETSI DMR / HomeBrew standard
-            for p_seq in range(3):
+            for _ in range(3):
                 hdr_pkt = build_dmrd_packet(
-                    src_id=self.current_src_id,
-                    dst_tg=self.current_tg,
-                    slot=self.current_slot,
+                    src_id=clean_dmr_id,
+                    dst_tg=tg_key,
+                    slot=eff_slot,
                     data_type=0,
                     seq=0,
-                    payload=self.current_hdr_burst,
+                    payload=sess["hdr_burst"],
                     rpt_id=self.rpt_id,
-                    stream_id=self.current_stream_id
+                    stream_id=eff_stream_id
                 )
                 out_packets.append(hdr_pkt)
-                self._enqueue_paced_pkt(hdr_pkt, 0.020)
-            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg} (TS{slot}, Stream {self.current_stream_id}, 3x Preamble 0x21 sent)")
+                self._enqueue_paced_pkt(hdr_pkt, 0.020, tg=tg_key)
+            logger.info(f"🎙️ [DirectDMR] 🔴 Started Direct DMR TX: {callsign} ({dmr_id}) -> TG {tg_key} (TS{eff_slot}, Stream {eff_stream_id}, 3x Preamble 0x21 sent)")
 
-        # Accumulate PCM and encode 960-byte (60ms) bursts
+        # Accumulate PCM and encode 960-byte (60ms) bursts for this Talkgroup
         if pcm_chunk:
-            self.tx_pcm_buffer.extend(pcm_chunk)
+            buf = sess["tx_pcm_buffer"]
+            buf.extend(pcm_chunk)
+            sess["last_tx_ts"] = now
             self.last_tx_ts = now
 
-            while len(self.tx_pcm_buffer) >= BURST_PCM_BYTES:
-                burst_pcm = bytes(self.tx_pcm_buffer[:BURST_PCM_BYTES])
-                del self.tx_pcm_buffer[:BURST_PCM_BYTES]
+            while len(buf) >= BURST_PCM_BYTES:
+                burst_pcm = bytes(buf[:BURST_PCM_BYTES])
+                del buf[:BURST_PCM_BYTES]
 
-                # Continuous telecom Biquad Conditioning Pipeline (300Hz HPF + 3200Hz LPF + smooth tanh soft limiter)
-                # Guarantees zero brick-wall gate cuts and uninterrupted speech cadence for the AMBE vocoder
-                burst_pcm, peak = self._condition_tx_burst(burst_pcm)
-
-                burst = self.vocoder.encode_burst(burst_pcm, self.current_burst_seq, self.current_emblc)
-                if self.current_burst_seq == 0 or (self.current_burst_seq == 1 and peak > 0):
-                    logger.info(f"🎙️ [DirectDMR] Ingress PCM peak: {peak}/32767 | AMBE payload: {burst[:6].hex()}... (Seq: {self.current_burst_seq})")
+                burst_pcm, peak = self._condition_tx_burst(burst_pcm, sess["hpf"], sess["lpf"])
+                burst = self.vocoder.encode_burst(burst_pcm, sess["burst_seq"], sess["emblc"], stream_key=stream_key)
+                if sess["burst_seq"] == 0 or (sess["burst_seq"] == 1 and peak > 0):
+                    logger.info(f"🎙️ [DirectDMR] Ingress PCM peak: {peak}/32767 | AMBE payload: {burst[:6].hex()}... (TG: {tg_key}, Seq: {sess['burst_seq']})")
                 pkt = build_dmrd_packet(
-                    src_id=self.current_src_id,
-                    dst_tg=self.current_tg,
-                    slot=self.current_slot,
+                    src_id=sess["src_id"],
+                    dst_tg=tg_key,
+                    slot=sess["slot"],
                     data_type=1,
-                    seq=self.current_burst_seq,
+                    seq=sess["burst_seq"],
                     payload=burst,
                     rpt_id=self.rpt_id,
-                    stream_id=self.current_stream_id
+                    stream_id=sess["stream_id"]
                 )
                 out_packets.append(pkt)
-                self._enqueue_paced_pkt(pkt, 0.060)
+                self._enqueue_paced_pkt(pkt, 0.060, tg=tg_key)
 
-                self.current_burst_seq = (self.current_burst_seq + 1) % 6
+                sess["burst_seq"] = (sess["burst_seq"] + 1) % 6
 
         return out_packets
 
