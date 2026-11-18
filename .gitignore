@@ -59,6 +59,28 @@ zello/
 
 # Scratch and analysis scripts
 scratch/
+scratch_*
+test_*
+cmd.sh
+vps_exec.py
+deploy_*.sh
+revert_*.sh
+InspectPacketEvent.cs
+
+# Archives & binary packages
+*.rar
+*.zip
+*.tar.gz
+*.7z
+
+# Investigation & MCP tool artifacts
+craft.json
+feed.json
+usage.json
+investigation.cany/
+*.cany/
+capture/
+inbox/
 
 # Docker & Caddy persistent state
 caddy_data/
