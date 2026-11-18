@@ -84,6 +84,35 @@ def get_ts3_bridge_port(tg: int) -> int:
     return ports[0] if ports else 12352
 
 _cached_docker_host_ip = None
+_BRIDGE_HOST_CACHE: Dict[str, Tuple[str, float]] = {}
+
+def get_bridge_target(hostname: str, port: int) -> Tuple[str, int]:
+    """Caches resolved IP for bridge containers (TTL 60s) to avoid 450+ synchronous getaddrinfo DNS calls/sec."""
+    now = time.time()
+    cached = _BRIDGE_HOST_CACHE.get(hostname)
+    if cached and (now - cached[1] < 60.0):
+        return (cached[0], port)
+    try:
+        ip = socket.gethostbyname(hostname)
+        _BRIDGE_HOST_CACHE[hostname] = (ip, now)
+        return (ip, port)
+    except Exception:
+        if cached:
+            return (cached[0], port)
+        return (hostname, port)
+
+def send_bridge_packet(sock: socket.socket, pkt: bytes, hostname: str, port: int, fallback_hostname: str = ""):
+    """Sends UDP packet directly to cached bridge container IP."""
+    try:
+        target = get_bridge_target(hostname, port)
+        sock.sendto(pkt, target)
+    except Exception:
+        if fallback_hostname:
+            try:
+                target_fb = get_bridge_target(fallback_hostname, port)
+                sock.sendto(pkt, target_fb)
+            except Exception:
+                pass
 
 def get_docker_host_ip() -> str:
     """Dynamically detects the Docker bridge gateway IP on the host (e.g. 172.18.0.1 or 172.19.0.1) across any VPS."""
@@ -2278,21 +2307,9 @@ usrpAGC = -20,10,100
                             }))
                             # Forward unkey frame to Mumble Bridge & SvxLink Bridge
                             unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0) + (b"\x00" * 320)
-                            try:
-                                self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                try:
-                                    self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                                except Exception:
-                                    pass
-                            try:
-                                self.bridge_sock.sendto(unkey_mumble, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                            except Exception:
-                                pass
-                            try:
-                                self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                            except Exception:
-                                pass
+                            send_bridge_packet(self.bridge_sock, unkey_mumble, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
+                            send_bridge_packet(self.bridge_sock, unkey_mumble, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
+                            send_bridge_packet(self.bridge_sock, unkey_mumble, "zello-bridge", ZELLO_BRIDGE_PORT)
                             try:
                                 ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", seq & 0x7FFFFFFF, 0, 0, active_tg, active_id, active_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                                 for p in get_ts3_bridge_ports(active_tg):
@@ -2394,21 +2411,9 @@ usrpAGC = -20,10,100
 
                         # Forward audio burst to Mumble Bridge & SvxLink Bridge so clients hear DVSwitch Mobile
                         mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq & 0x7FFFFFFF, 0, 1, target_tg, target_dmr_id, target_slot, 0) + chunk_pcm
-                        try:
-                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                        except Exception:
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                pass
-                        try:
-                            self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                        except Exception:
-                            pass
-                        try:
-                            self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                        except Exception:
-                            pass
+                        send_bridge_packet(self.bridge_sock, mumble_pkt, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
+                        send_bridge_packet(self.bridge_sock, mumble_pkt, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
+                        send_bridge_packet(self.bridge_sock, mumble_pkt, "zello-bridge", ZELLO_BRIDGE_PORT)
                         try:
                             disp_name = lookup_callbook_callsign(target_dmr_id, include_name=True) or target_call or f"ID-{target_dmr_id}"
                             call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
@@ -2676,23 +2681,11 @@ usrpAGC = -20,10,100
                                     mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0) + frame_pcm
                                     ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, tg, dmr_id, slot, 0, call_b) + frame_pcm
                                     if not is_from_mumble:
-                                        try:
-                                            self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                                        except Exception:
-                                            try:
-                                                self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                                            except Exception:
-                                                pass
+                                        send_bridge_packet(self.bridge_sock, mumble_pkt, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
                                     if not is_svx:
-                                        try:
-                                            self.bridge_sock.sendto(ts3_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                                        except Exception:
-                                            pass
+                                        send_bridge_packet(self.bridge_sock, ts3_pkt, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
                                     if not is_zello:
-                                        try:
-                                            self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                                        except Exception:
-                                            pass
+                                        send_bridge_packet(self.bridge_sock, mumble_pkt, "zello-bridge", ZELLO_BRIDGE_PORT)
                                     # Forward to TS3 bots on this TG (excluding sender bot to prevent echo loop)
                                     try:
                                         for p in get_ts3_bridge_ports(tg):
@@ -2746,20 +2739,11 @@ usrpAGC = -20,10,100
                             unkey_usrp = build_usrp_frame(self.ab_tx_seq, 0, USRP_TYPE_VOICE, b"\x00" * 320)
                             self.broadcast_to_usrp_clients(unkey_usrp, tg=tg)
                             mumble_unkey = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0) + (b"\x00" * 320)
-                            try:
-                                self.bridge_sock.sendto(mumble_unkey, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                pass
+                            send_bridge_packet(self.bridge_sock, mumble_unkey, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
                             if not is_svx:
-                                try:
-                                    self.bridge_sock.sendto(mumble_unkey, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                                except Exception:
-                                    pass
+                                send_bridge_packet(self.bridge_sock, mumble_unkey, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
                             if not is_zello:
-                                try:
-                                    self.bridge_sock.sendto(mumble_unkey, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                                except Exception:
-                                    pass
+                                send_bridge_packet(self.bridge_sock, mumble_unkey, "zello-bridge", ZELLO_BRIDGE_PORT)
                             # Forward unkey to TS3 bots on this TG (excluding sender bot to prevent echo loop)
                             try:
                                 ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, tg, dmr_id, slot, 0, b"\x00" * 24) + (b"\x00" * 320)
@@ -3317,21 +3301,9 @@ usrpAGC = -20,10,100
                         if len(chunk_320) == 320:
                             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                             mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0) + chunk_320
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                try:
-                                    self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                                except Exception:
-                                    pass
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                            except Exception:
-                                pass
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                            except Exception:
-                                pass
+                            send_bridge_packet(self.bridge_sock, mumble_pkt, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
+                            send_bridge_packet(self.bridge_sock, mumble_pkt, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
+                            send_bridge_packet(self.bridge_sock, mumble_pkt, "zello-bridge", ZELLO_BRIDGE_PORT)
                             try:
                                 disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
                                 call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
@@ -3347,21 +3319,9 @@ usrpAGC = -20,10,100
                     # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                     unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0) + (b"\x00" * 320)
-                    try:
-                        self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                    except Exception:
-                        try:
-                            self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                        except Exception:
-                            pass
-                    try:
-                        self.bridge_sock.sendto(unkey_mumble, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                    except Exception:
-                        pass
-                    try:
-                        self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                    except Exception:
-                        pass
+                    send_bridge_packet(self.bridge_sock, unkey_mumble, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
+                    send_bridge_packet(self.bridge_sock, unkey_mumble, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
+                    send_bridge_packet(self.bridge_sock, unkey_mumble, "zello-bridge", ZELLO_BRIDGE_PORT)
                     try:
                         ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                         for p in get_ts3_bridge_ports(r_tg):
@@ -3621,21 +3581,9 @@ usrpAGC = -20,10,100
                         if len(chunk_320) == 320:
                             self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                             mumble_pkt = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0) + chunk_320
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                            except Exception:
-                                try:
-                                    self.bridge_sock.sendto(mumble_pkt, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                                except Exception:
-                                    pass
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                            except Exception:
-                                pass
-                            try:
-                                self.bridge_sock.sendto(mumble_pkt, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                            except Exception:
-                                pass
+                            send_bridge_packet(self.bridge_sock, mumble_pkt, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
+                            send_bridge_packet(self.bridge_sock, mumble_pkt, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
+                            send_bridge_packet(self.bridge_sock, mumble_pkt, "zello-bridge", ZELLO_BRIDGE_PORT)
                             try:
                                 disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
                                 call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
@@ -3651,21 +3599,9 @@ usrpAGC = -20,10,100
                     # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
                     unkey_mumble = struct.pack(">4sIIIIIII", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0) + (b"\x00" * 320)
-                    try:
-                        self.bridge_sock.sendto(unkey_mumble, ("mumble-bridge", MUMBLE_BRIDGE_PORT))
-                    except Exception:
-                        try:
-                            self.bridge_sock.sendto(unkey_mumble, ("bridge-mumble", MUMBLE_BRIDGE_PORT))
-                        except Exception:
-                            pass
-                    try:
-                        self.bridge_sock.sendto(unkey_mumble, ("svxlink-bridge", SVXLINK_BRIDGE_PORT))
-                    except Exception:
-                        pass
-                    try:
-                        self.bridge_sock.sendto(unkey_mumble, ("zello-bridge", ZELLO_BRIDGE_PORT))
-                    except Exception:
-                        pass
+                    send_bridge_packet(self.bridge_sock, unkey_mumble, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
+                    send_bridge_packet(self.bridge_sock, unkey_mumble, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
+                    send_bridge_packet(self.bridge_sock, unkey_mumble, "zello-bridge", ZELLO_BRIDGE_PORT)
                     try:
                         ts3_unkey = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 0, r_tg, src_id, r_slot, 0, b"\x00" * 24) + (b"\x00" * 320)
                         for p in get_ts3_bridge_ports(r_tg):
