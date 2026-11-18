@@ -61,8 +61,10 @@ def lookup_selfcare_dmr_auth(dmr_id: int) -> Tuple[Optional[str], Optional[bool]
         candidates.append(int(s_id[:7]))
     elif len(s_id) == 8:
         candidates.append(int(s_id[:7]))
+        candidates.append(dmr_id // 10)
     elif dmr_id > 9999999:
         candidates.append(dmr_id // 100)
+        candidates.append(dmr_id // 10)
     try:
         import sqlite3
         with sqlite3.connect(db_path, timeout=1.0) as conn:

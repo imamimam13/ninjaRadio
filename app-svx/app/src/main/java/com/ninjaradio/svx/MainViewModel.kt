@@ -127,10 +127,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         }
         audio.start()
         client.connect(
-            host = server.host,
+            host = server.host.trim(),
             port = server.port,
-            callsign = server.callsign,
-            password = server.password,
+            callsign = server.callsign.trim().uppercase(),
+            password = server.password.trim(),
             tg = server.defaultTg,
         )
     }
