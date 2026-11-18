@@ -1786,14 +1786,14 @@ usrpAGC = -20,10,100
         while self.running:
             await asyncio.sleep(0.2)
             now = time.time()
-            # 1. Per-TG DirectDMR & Gateway session watchdog: auto-unkey any gateway TG session silent for > 1.5s
+            # 1. Per-TG DirectDMR & Gateway session watchdog: auto-unkey any gateway TG session silent for > 2.0s
             if getattr(self, "direct_dmr", None) and hasattr(self.direct_dmr, "_tx_sessions"):
                 for tg_k, sess in list(self.direct_dmr._tx_sessions.items()):
-                    if sess.get("in_tx") and (now - sess.get("last_tx_ts", 0.0) > 1.5):
+                    if sess.get("in_tx") and (now - sess.get("last_tx_ts", 0.0) > 2.0):
                         s_call = sess.get("callsign", "GATEWAY")
                         s_src = sess.get("src_id", 0)
                         s_slot = sess.get("slot", 2)
-                        logger.info(f"[PTT-Watchdog] ⏹️ Auto-unkeying stale DirectDMR session on TG {tg_k} ({s_call} / {s_src}) after 1.5s silence")
+                        logger.info(f"[PTT-Watchdog] ⏹️ Auto-unkeying stale DirectDMR session on TG {tg_k} ({s_call} / {s_src}) after 2.0s silence")
                         self.direct_dmr.push_web_ptt_pcm(s_call, s_src, tg_k, s_slot, b"", is_tx=False)
                         if hasattr(self, "_active_gw_tx_by_tg"):
                             self._active_gw_tx_by_tg.pop(tg_k, None)
@@ -2581,9 +2581,9 @@ usrpAGC = -20,10,100
                         if not hasattr(self, "_gw_session_last_ts"):
                             self._gw_session_last_ts = {}
 
-                        # Expire stale gateway sessions that stopped sending packets (> 1.0s without unkey)
+                        # Expire stale gateway sessions that stopped sending packets (> 2.0s without unkey)
                         for stale_k, stale_ts in list(self._gw_session_last_ts.items()):
-                            if stale_k != session_key and (now - stale_ts) > 1.0:
+                            if stale_k != session_key and (now - stale_ts) > 2.0:
                                 active_tx_sessions.discard(stale_k)
                                 self._gw_session_last_ts.pop(stale_k, None)
                                 self._gw_stream_ids.pop(stale_k, None)
