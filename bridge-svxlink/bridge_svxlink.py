@@ -11,9 +11,18 @@ import re
 from typing import Optional, List, Dict, Tuple, Any
 from collections import deque
 import numpy as np
+try:
+    import audioop
+except ImportError:
+    audioop = None
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
 import requests
+from requests.adapters import HTTPAdapter
+
+HTTP_SESSION = requests.Session()
+_http_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=0)
+HTTP_SESSION.mount("http://", _http_adapter)
 
 log_handlers = [logging.StreamHandler()]
 try:
@@ -664,7 +673,6 @@ PREEMPHASIS=0
                 os.write(fd, f"9{tg}#\n".encode("ascii"))
                 os.close(fd)
                 logger.info(f"[{self.bot_user}] 🔀 Switched SvxReflector active TG to {tg} (DTMF 9{tg}#)")
-                time.sleep(0.08)
             except Exception as e:
                 logger.warning(f"[{self.bot_user}] select_talkgroup({tg}) failed: {e}")
 
@@ -697,7 +705,7 @@ PREEMPHASIS=0
 
         def _send():
             try:
-                requests.get(
+                HTTP_SESSION.get(
                     f"http://{SVX_HOST}:{SVX_HTTP_PORT}/set_talker",
                     params={"node": self.bot_user, "call": clean_call, "tg": target_tg},
                     timeout=0.08 if sync else 0.25,
@@ -713,7 +721,8 @@ PREEMPHASIS=0
     def play_pcm_8k(self, pcm_8k: bytes, tg: int = None):
         """
         Receives 8kHz 16-bit mono PCM from NinjaRadio DirectDmrEngine (UDP 12348),
-        selects target talkgroup, upsamples 2x to 16kHz S16_LE, opens Rx1 PTY squelch, and feeds SvxLink UDP socket.
+        selects target talkgroup, upsamples 2x to 16kHz S16_LE with C-native / fast integer math,
+        opens Rx1 PTY squelch, and feeds SvxLink UDP socket.
         """
         if not self.running or len(pcm_8k) == 0:
             return
@@ -729,22 +738,24 @@ PREEMPHASIS=0
             if tx_call and not self.squelch_is_open:
                 # Pre-notify SvxReflector synchronously before squelch opens so override is active for burst #1
                 self._notify_reflector_talker(tx_call, tg or self.tg, sync=True)
-            elif tx_call:
+            elif tx_call and getattr(self, "_last_delegated_call", "") != tx_call:
                 self._notify_reflector_talker(tx_call, tg or self.tg, sync=False)
 
             self.last_dmr_rx_play = time.time()
             self._set_squelch(True)
 
-            samples_8k = np.frombuffer(pcm_8k, dtype=np.int16).astype(np.float32)
-            if len(samples_8k) == 0:
-                return
+            # High-efficiency 8k -> 16k upsampler: C-native audioop (0.01ms) with fast numpy fallback
+            if audioop:
+                samples_16k_bytes, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, None)
+            else:
+                samples_8k = np.frombuffer(pcm_8k, dtype=np.int16)
+                if len(samples_8k) == 0:
+                    return
+                # Zero float allocation 2x sample-hold upsampler
+                samples_16k = np.repeat(samples_8k, 2)
+                samples_16k_bytes = samples_16k.tobytes()
 
-            # Clean 2x linear interpolation (8kHz -> 16kHz from a553e82)
-            idx_orig = np.arange(len(samples_8k))
-            idx_target = np.linspace(0, len(samples_8k) - 1, len(samples_8k) * 2)
-            samples_16k = np.clip(np.interp(idx_target, idx_orig, samples_8k), -32768, 32767).astype(np.int16)
-
-            self.usrp_sock.sendto(samples_16k.tobytes(), ("127.0.0.1", self.udp_rx_into_svx))
+            self.usrp_sock.sendto(samples_16k_bytes, ("127.0.0.1", self.udp_rx_into_svx))
         except Exception as e:
             logger.debug(f"[{self.bot_user}] play_pcm_8k error: {e}")
 
@@ -825,11 +836,15 @@ PREEMPHASIS=0
                 if not raw_talker or raw_talker in ("SVX", "SVX-LINK", "NONE") or raw_talker.startswith("SVX-"):
                     continue
 
-                # Check if audio frame is non-zero (ignore zero-fill silence frames)
-                pcm_16k = np.frombuffer(data, dtype=np.int16)
-                if len(pcm_16k) == 0:
-                    continue
-                rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2)))
+                # Check if audio frame is non-zero (fast C-native RMS calculation)
+                if audioop:
+                    rms = float(audioop.rms(data, 2))
+                    pcm_16k = None
+                else:
+                    pcm_16k = np.frombuffer(data, dtype=np.int16)
+                    if len(pcm_16k) == 0:
+                        continue
+                    rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2)))
                 now = time.time()
                 if rms < 25.0:
                     if not self.is_transmitting_to_dmr:
@@ -871,6 +886,8 @@ PREEMPHASIS=0
                     logger.info(f"[{self.bot_user}] 🔴 SVXLINK->DMR TX from {user_callsign} ({user_dmr_id}) in '{self.room_name}' -> DMR TG {tx_tg} Slot {tx_slot}")
 
                 # Downsample 16kHz -> 8kHz preserving full treble bandwidth (0 - 4000Hz)
+                if pcm_16k is None:
+                    pcm_16k = np.frombuffer(data, dtype=np.int16)
                 n_8k = len(pcm_16k) // 2
                 if n_8k > 0:
                     pcm_8k_arr = pcm_16k[:n_8k * 2:2].astype(np.float32)
@@ -1111,7 +1128,19 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     target_bots = [dedicated_bots[0]]
                 else:
                     any_tg_bots = [bot for bot in gateway_pool.values() if bot.bot_user == "SVX-GATEWAY" or bot.tg == 0]
-                    target_bots = [any_tg_bots[0]] if any_tg_bots else []
+                    if any_tg_bots:
+                        gw = any_tg_bots[0]
+                        now_lock = time.time()
+                        locked_tg = getattr(gw, "_active_rx_lock_tg", 0)
+                        locked_ts = getattr(gw, "_active_rx_lock_ts", 0.0)
+                        # Mutual Exclusion TG Lock: if dynamic gateway is busy on a different TG (< 0.8s), drop to prevent collision
+                        if locked_tg and locked_tg != talkgroup and (now_lock - locked_ts < 0.8):
+                            continue
+                        gw._active_rx_lock_tg = talkgroup
+                        gw._active_rx_lock_ts = now_lock
+                        target_bots = [gw]
+                    else:
+                        target_bots = []
                 if not target_bots:
                     continue
 
@@ -1120,6 +1149,8 @@ def run_usrp_listener(gateway_pool: Dict[str, SvxGatewayBot]):
                     for bot in (dedicated_bots or target_bots):
                         bot._set_squelch(False)
                         bot.current_tx_call = None
+                        if getattr(bot, "_active_rx_lock_tg", 0) == talkgroup:
+                            bot._active_rx_lock_tg = 0
                     continue
 
                 last_dmr_tx = time.time()
