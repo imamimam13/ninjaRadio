@@ -1161,39 +1161,46 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     # Consistent session key for this active transmission on this slot
     stream_key = f"{src_id}_{dst_tg}_{slot}"
 
-    # Resolve callsign from database or fallback to event/Radio ID
+    # Check if stream is already active (subsequent 60ms bursts inherit resolved identity without DB overhead)
+    cached = ACTIVE_STREAMS.get(stream_key)
     custom_call = event.get("callsign")
-    callsign = custom_call if custom_call else f"ID-{src_id}"
-    name = f"DMR Operator {src_id}"
-    category = "Amatir"
 
-    lookup_id = src_id // 100 if src_id > 9999999 else src_id
-    cb_entry = None
-    if lookup_id in _CALLBOOK_CACHE:
-        cb_entry = _CALLBOOK_CACHE[lookup_id]
-    elif lookup_id > 0:
-        cb_entry = await CallbookService.get_by_dmr_id(session, lookup_id)
-        if cb_entry:
+    if cached:
+        callsign = cached.get("callsign") or custom_call or f"ID-{src_id}"
+        name = cached.get("name") or f"DMR Operator {src_id}"
+        category = cached.get("category") or "Amatir"
+    else:
+        # Resolve callsign from database cache or perform one-time async lookup on initial burst
+        callsign = custom_call if custom_call else f"ID-{src_id}"
+        name = f"DMR Operator {src_id}"
+        category = "Amatir"
+
+        lookup_id = src_id // 100 if src_id > 9999999 else src_id
+        cb_entry = None
+        if lookup_id in _CALLBOOK_CACHE:
+            cb_entry = _CALLBOOK_CACHE[lookup_id]
+        elif lookup_id > 0:
+            cb_entry = await CallbookService.get_by_dmr_id(session, lookup_id)
+            # Cache result (including negative None) to stop 50x/sec SQLite queries
             _CALLBOOK_CACHE[lookup_id] = cb_entry
             _CALLBOOK_CACHE[src_id] = cb_entry
 
-    if not cb_entry and custom_call:
-        clean_lookup = custom_call[3:] if custom_call.startswith("ZL:") else custom_call
-        if clean_lookup in _CALLBOOK_CACHE:
-            cb_entry = _CALLBOOK_CACHE[clean_lookup]
-        else:
-            cb_entry = await CallbookService.get_by_callsign(session, clean_lookup)
-            if cb_entry:
+        if not cb_entry and custom_call:
+            clean_lookup = custom_call[3:] if custom_call.startswith("ZL:") else custom_call
+            if clean_lookup in _CALLBOOK_CACHE:
+                cb_entry = _CALLBOOK_CACHE[clean_lookup]
+            else:
+                cb_entry = await CallbookService.get_by_callsign(session, clean_lookup)
                 _CALLBOOK_CACHE[clean_lookup] = cb_entry
 
-    if cb_entry:
-        callsign = cb_entry.callsign
-        name = cb_entry.name
-        category = cb_entry.organization or "Amatir"
-    elif custom_call and custom_call.startswith("ZL:"):
-        callsign = custom_call
-        name = f"Zello User ({custom_call[3:]})"
-        category = "Zello"
+        if cb_entry:
+            callsign = cb_entry.callsign
+            name = cb_entry.name
+            category = cb_entry.organization or "Amatir"
+        elif custom_call and custom_call.startswith("ZL:"):
+            callsign = custom_call
+            name = f"Zello User ({custom_call[3:]})"
+            category = "Zello"
 
     tg_name = TG_NAMES.get(dst_tg, f"Talkgroup {dst_tg}")
 
@@ -1201,7 +1208,6 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
     if data_type in [0, 1, 3]:
         now = time.time()
         is_new_stream = stream_key not in ACTIVE_STREAMS
-        cached = ACTIVE_STREAMS.get(stream_key)
         start_time = cached.get("start_time", now) if cached else now
         started_at = cached.get("started_at", get_current_iso_utc()) if cached else get_current_iso_utc()
         last_broadcast = cached.get("last_broadcast", 0.0) if cached else 0.0
@@ -1238,25 +1244,20 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
             if is_new_stream:
                 _trigger_ts3_talker(dst_tg, callsign)
 
-        # Broadcast live audio chunk to web clients if payload present
+        # Broadcast live audio chunk to web clients if payload present and web clients connected
         payload_b64 = event.get("payload_b64")
-        if payload_b64:
+        if payload_b64 and getattr(manager, "active_connections", None):
             try:
-                import base64
-                raw_payload = base64.b64decode(payload_b64)
-                if len(raw_payload) >= 320:
-                    even_len = len(raw_payload) - (len(raw_payload) % 2)
-                    pcm_b64_to_send = base64.b64encode(raw_payload[:even_len]).decode("ascii")
-                    await manager.broadcast({
-                        "type": "AUDIO_RX",
-                        "data": {
-                            "src_id": src_id,
-                            "callsign": callsign,
-                            "tg": dst_tg,
-                            "slot": slot,
-                            "pcm": pcm_b64_to_send
-                        }
-                    })
+                await manager.broadcast({
+                    "type": "AUDIO_RX",
+                    "data": {
+                        "src_id": src_id,
+                        "callsign": callsign,
+                        "tg": dst_tg,
+                        "slot": slot,
+                        "pcm": payload_b64
+                    }
+                })
             except Exception:
                 pass
 
