@@ -433,6 +433,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
             activeTalkerClientId = rawSenderId;
             txStartTime = now;
             lastVoiceTime = now;
+            RefreshCoreEndPoint();
             ResolveSenderIdentity(senderName);
             Console.WriteLine($"[NinjaRadioBridge] 🎙️ TX Key-Up: {currentTalkerCall} ({currentTalkerDmrId}) -> TG {targetTg} Slot {targetSlot} (RMS: {rms:F1})");
         }
@@ -490,6 +491,25 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
             SafeChangeNickname(defaultBotName);
             Console.WriteLine($"[NinjaRadioBridge] ⏱️ RX timeout: reverted to '{defaultBotName}'");
         }
+    }
+
+    private void RefreshCoreEndPoint()
+    {
+        try
+        {
+            if (System.IO.File.Exists("/app/ninja_data/core_ip.txt"))
+            {
+                string ipFromFile = System.IO.File.ReadAllText("/app/ninja_data/core_ip.txt").Trim();
+                if (!string.IsNullOrEmpty(ipFromFile) && IPAddress.TryParse(ipFromFile, out IPAddress parsedIp))
+                {
+                    if (coreEndPoint == null || !coreEndPoint.Address.Equals(parsedIp))
+                    {
+                        coreEndPoint = new IPEndPoint(parsedIp, CoreIngressPort);
+                    }
+                }
+            }
+        }
+        catch { }
     }
 
     private void SendCorePacket(bool isTx, byte[] pcmChunk)
