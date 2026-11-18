@@ -7,6 +7,16 @@ import ctypes
 import logging
 from typing import Dict, List, Tuple, Optional, Callable
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    from scipy import signal as scipy_signal
+except ImportError:
+    scipy_signal = None
+
 logger = logging.getLogger("NinjaRadio-DirectDMR")
 
 # ETSI TS 102 361-1 Annex B interleave schedule (36 dibits per AMBE frame)
@@ -732,10 +742,13 @@ def build_dmrd_packet(
 class BiquadFilter:
     """Direct Form II Transposed Biquad Filter for real-time 8kHz audio processing."""
     def __init__(self, b: list, a: list):
+        self.b = list(b)
+        self.a = list(a)
         self.b0, self.b1, self.b2 = b
         self.a1, self.a2 = a[1], a[2]
         self.z1 = 0.0
         self.z2 = 0.0
+        self.zi = np.zeros(2, dtype=np.float64) if (scipy_signal is not None and np is not None) else None
 
     def process(self, x: float) -> float:
         out = self.b0 * x + self.z1
@@ -743,9 +756,17 @@ class BiquadFilter:
         self.z2 = self.b2 * x - self.a2 * out
         return out
 
+    def process_batch(self, x: "np.ndarray") -> "np.ndarray":
+        if scipy_signal is not None and self.zi is not None:
+            out, self.zi = scipy_signal.lfilter(self.b, self.a, x, zi=self.zi)
+            return out
+        return np.array([self.process(val) for val in x], dtype=np.float32)
+
     def reset(self):
         self.z1 = 0.0
         self.z2 = 0.0
+        if self.zi is not None:
+            self.zi.fill(0.0)
 
 
 # 160Hz High-pass filter (2nd order Butterworth, fs=8000Hz) - eliminates DC offset & sub-audible rumble while preserving natural voice bass & warmth
@@ -769,14 +790,25 @@ class DeemphasisFilter:
     def __init__(self, alpha: float = 0.82):
         self.alpha = alpha
         self.prev = 0.0
+        self.b = [1.0 - alpha]
+        self.a = [1.0, -alpha]
+        self.zi = np.zeros(1, dtype=np.float64) if (scipy_signal is not None and np is not None) else None
 
     def process(self, x: float) -> float:
         y = (1.0 - self.alpha) * x + self.alpha * self.prev
         self.prev = y
         return y
 
+    def process_batch(self, x: "np.ndarray") -> "np.ndarray":
+        if scipy_signal is not None and self.zi is not None:
+            out, self.zi = scipy_signal.lfilter(self.b, self.a, x, zi=self.zi)
+            return out
+        return np.array([self.process(val) for val in x], dtype=np.float32)
+
     def reset(self):
         self.prev = 0.0
+        if self.zi is not None:
+            self.zi.fill(0.0)
 
 
 class DirectDmrEngine:
@@ -872,6 +904,18 @@ class DirectDmrEngine:
         """
         h_filt = hpf or self.hpf
         l_filt = lpf or self.lpf
+
+        if np is not None:
+            samples_arr = np.frombuffer(burst_pcm[:BURST_PCM_BYTES], dtype=np.int16).astype(np.float32)
+            f_val = l_filt.process_batch(h_filt.process_batch(samples_arr))
+            abs_val = np.abs(f_val)
+            sign = np.where(f_val >= 0, 1.0, -1.0)
+            overshoot = np.maximum(0.0, abs_val - 16000.0)
+            y = np.where(abs_val <= 16000.0, abs_val, 16000.0 + 6000.0 * np.tanh(overshoot / 8000.0))
+            processed = np.clip(sign * y, -32767.0, 32767.0).astype(np.int16)
+            peak = int(np.max(np.abs(processed))) if len(processed) > 0 else 0
+            return processed.tobytes(), peak
+
         samples = struct.unpack("<480h", burst_pcm[:BURST_PCM_BYTES])
         processed = []
         for s in samples:
@@ -1091,6 +1135,29 @@ class DirectDmrEngine:
                 DeemphasisFilter(alpha=0.60)
             )
         hpf, lpf, deemph = self._rx_filters[stream_key]
+
+        if np is not None:
+            samples_arr = np.frombuffer(raw_pcm[:BURST_PCM_BYTES], dtype=np.int16).astype(np.float32)
+            filtered_arr = deemph.process_batch(lpf.process_batch(hpf.process_batch(samples_arr)))
+
+            # Smooth per-stream RX AGC: keep peer audio warm & slightly louder without harshness
+            if not hasattr(self, "_rx_agc"):
+                self._rx_agc = {}
+            cur_gain = self._rx_agc.get(stream_key, 1.35)
+            rms = float(np.sqrt(np.mean(filtered_arr ** 2))) if len(filtered_arr) > 0 else 0.0
+            if rms >= 60.0:
+                desired_gain = min(2.6, max(0.75, 3900.0 / rms))
+                alpha = 0.30 if desired_gain < cur_gain else 0.08
+                cur_gain = (1.0 - alpha) * cur_gain + alpha * desired_gain
+                self._rx_agc[stream_key] = cur_gain
+
+            f_val = filtered_arr * cur_gain
+            abs_val = np.abs(f_val)
+            sign = np.where(f_val >= 0, 1.0, -1.0)
+            overshoot = np.maximum(0.0, abs_val - 14000.0)
+            y = np.where(abs_val <= 14000.0, abs_val, 14000.0 + 7500.0 * np.tanh(overshoot / 8500.0))
+            processed = np.clip(sign * y, -32767.0, 32767.0).astype(np.int16)
+            return processed.tobytes()
 
         import math
         samples = struct.unpack("<480h", raw_pcm[:BURST_PCM_BYTES])
