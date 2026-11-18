@@ -222,22 +222,35 @@ def get_db_path() -> Optional[str]:
     return None
 
 
-_CALLSIGN_MEM_CACHE: Dict[int, str] = {}
+_CALLSIGN_MEM_CACHE: Dict[int, Optional[str]] = {}
+_DISP_NAME_MEM_CACHE: Dict[int, Optional[str]] = {}
 
 def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optional[str]:
-    """Resolves amateur callsign for DMR ID dynamically from SQLite Callbook DB or subscriber_ids.csv."""
+    """Resolves amateur callsign for DMR ID dynamically from SQLite Callbook DB with persistent memory cache."""
     if not dmr_id or dmr_id <= 0:
         return None
     
     # Resolve base 7-digit DMR ID if dmr_id contains ESSID (e.g. 510205701 -> 5102057)
     lookup_id = dmr_id // 100 if dmr_id > 9999999 else dmr_id
 
-    if not include_name and lookup_id in _CALLSIGN_MEM_CACHE:
-        return _CALLSIGN_MEM_CACHE[lookup_id]
+    # Fast memory hit (including cached None/empty to prevent repeated disk I/O)
+    if include_name:
+        if lookup_id in _DISP_NAME_MEM_CACHE:
+            return _DISP_NAME_MEM_CACHE[lookup_id]
+        if dmr_id in _DISP_NAME_MEM_CACHE:
+            return _DISP_NAME_MEM_CACHE[dmr_id]
+    else:
+        if lookup_id in _CALLSIGN_MEM_CACHE:
+            return _CALLSIGN_MEM_CACHE[lookup_id]
+        if dmr_id in _CALLSIGN_MEM_CACHE:
+            return _CALLSIGN_MEM_CACHE[dmr_id]
 
-    # 1. Check SQLite Callbook table
+    call_result: Optional[str] = None
+    disp_result: Optional[str] = None
+
+    # 1. Check SQLite Callbook table (once per unique DMR ID)
     db_path = get_db_path()
-    if db_path:
+    if db_path and os.path.exists(db_path):
         try:
             import sqlite3
             with sqlite3.connect(db_path, timeout=1.0) as conn:
@@ -245,37 +258,41 @@ def lookup_callbook_callsign(dmr_id: int, include_name: bool = False) -> Optiona
                 cursor.execute("SELECT callsign, name FROM callbook WHERE dmr_id = ?", (lookup_id,))
                 row = cursor.fetchone()
                 if row and row[0]:
-                    call = str(row[0]).strip().upper()
-                    name = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
-                    _CALLSIGN_MEM_CACHE[lookup_id] = call
-                    _CALLSIGN_MEM_CACHE[dmr_id] = call
-                    if include_name and name and name.upper() != call:
-                        return f"{call} {name}"[:24]
-                    return call
+                    c_clean = str(row[0]).strip().upper()
+                    n_clean = str(row[1]).strip() if (len(row) > 1 and row[1]) else ""
+                    call_result = c_clean
+                    disp_result = f"{c_clean} {n_clean}"[:24] if (n_clean and n_clean.upper() != c_clean) else c_clean
         except Exception:
             pass
 
-    # 2. Dynamic Fallback: Check /var/lib/dvswitch/subscriber_ids.csv or /app/data/subscriber_ids.csv
-    for p in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv"]:
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        parts = line.strip().split(",")
-                        if len(parts) >= 2 and parts[0].strip().isdigit():
-                            pid = int(parts[0].strip())
-                            if pid == lookup_id or pid == dmr_id:
-                                call = parts[1].strip().upper()
-                                name = parts[2].strip() if len(parts) > 2 else ""
-                                _CALLSIGN_MEM_CACHE[lookup_id] = call
-                                _CALLSIGN_MEM_CACHE[dmr_id] = call
-                                if include_name and name and name.upper() != call:
-                                    return f"{call} {name}"[:24]
-                                return call
-            except Exception:
-                pass
+    # 2. Dynamic Fallback: Check subscriber_ids.csv if not found in SQLite
+    if not call_result:
+        for p in ["/var/lib/dvswitch/subscriber_ids.csv", "/app/data/subscriber_ids.csv"]:
+            if os.path.exists(p) and os.path.getsize(p) > 0:
+                try:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            parts = line.strip().split(",")
+                            if len(parts) >= 2 and parts[0].strip().isdigit():
+                                pid = int(parts[0].strip())
+                                if pid == lookup_id or pid == dmr_id:
+                                    c_clean = parts[1].strip().upper()
+                                    n_clean = parts[2].strip() if len(parts) > 2 else ""
+                                    call_result = c_clean
+                                    disp_result = f"{c_clean} {n_clean}"[:24] if (n_clean and n_clean.upper() != c_clean) else c_clean
+                                    break
+                    if call_result:
+                        break
+                except Exception:
+                    pass
 
-    return None
+    # Cache both results (including None to prevent repeated SQLite opens)
+    _CALLSIGN_MEM_CACHE[lookup_id] = call_result
+    _CALLSIGN_MEM_CACHE[dmr_id] = call_result
+    _DISP_NAME_MEM_CACHE[lookup_id] = disp_result
+    _DISP_NAME_MEM_CACHE[dmr_id] = disp_result
+
+    return disp_result if include_name else call_result
 
 
 def lookup_callbook_dmr_id(callsign: str) -> Optional[int]:
@@ -3296,6 +3313,11 @@ usrpAGC = -20,10,100
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
                     # Forward direct PCM frames to Mumble & SvxLink Bridge
+                    disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
+                    call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                    ts3_ports = get_ts3_bridge_ports(r_tg)
+                    docker_host_ip = get_docker_host_ip() if ts3_ports else ""
+
                     for offset in range(0, len(decoded_pcm), 320):
                         chunk_320 = decoded_pcm[offset:offset + 320]
                         if len(chunk_320) == 320:
@@ -3304,17 +3326,13 @@ usrpAGC = -20,10,100
                             send_bridge_packet(self.bridge_sock, mumble_pkt, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
                             send_bridge_packet(self.bridge_sock, mumble_pkt, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
                             send_bridge_packet(self.bridge_sock, mumble_pkt, "zello-bridge", ZELLO_BRIDGE_PORT)
-                            try:
-                                disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
-                                call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                            if ts3_ports:
                                 ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
-                                for p in get_ts3_bridge_ports(r_tg):
+                                for p in ts3_ports:
                                     try:
-                                        self.bridge_sock.sendto(ts3_pkt, (get_docker_host_ip(), p))
+                                        self.bridge_sock.sendto(ts3_pkt, (docker_host_ip, p))
                                     except Exception:
                                         pass
-                            except Exception:
-                                pass
                 elif data_type == 2:
                     # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
@@ -3576,6 +3594,11 @@ usrpAGC = -20,10,100
                 if decoded_pcm:
                     traffic_event["payload"] = decoded_pcm
                     # Forward direct PCM frames to Mumble & SvxLink Bridge
+                    disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
+                    call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                    ts3_ports = get_ts3_bridge_ports(r_tg)
+                    docker_host_ip = get_docker_host_ip() if ts3_ports else ""
+
                     for offset in range(0, len(decoded_pcm), 320):
                         chunk_320 = decoded_pcm[offset:offset + 320]
                         if len(chunk_320) == 320:
@@ -3584,17 +3607,13 @@ usrpAGC = -20,10,100
                             send_bridge_packet(self.bridge_sock, mumble_pkt, "mumble-bridge", MUMBLE_BRIDGE_PORT, fallback_hostname="bridge-mumble")
                             send_bridge_packet(self.bridge_sock, mumble_pkt, "svxlink-bridge", SVXLINK_BRIDGE_PORT)
                             send_bridge_packet(self.bridge_sock, mumble_pkt, "zello-bridge", ZELLO_BRIDGE_PORT)
-                            try:
-                                disp_name = lookup_callbook_callsign(src_id, include_name=True) or callsign or f"ID-{src_id}"
-                                call_b = disp_name.encode("ascii", errors="ignore")[:23].ljust(24, b"\x00")
+                            if ts3_ports:
                                 ts3_pkt = struct.pack(">4sIIIIIII24s", b"USRP", self.ab_tx_seq, 0, 1, r_tg, src_id, r_slot, 0, call_b) + chunk_320
-                                for p in get_ts3_bridge_ports(r_tg):
+                                for p in ts3_ports:
                                     try:
-                                        self.bridge_sock.sendto(ts3_pkt, (get_docker_host_ip(), p))
+                                        self.bridge_sock.sendto(ts3_pkt, (docker_host_ip, p))
                                     except Exception:
                                         pass
-                            except Exception:
-                                pass
                 elif data_type == 2:
                     # Forward unkey frame (keyup=0) to Mumble, SvxLink, and Zello Bridges to close squelch immediately
                     self.ab_tx_seq = (self.ab_tx_seq + 1) & 0x7FFFFFFF
