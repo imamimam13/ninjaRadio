@@ -254,22 +254,25 @@ SUBJECT_ALT_NAME={alt_names}
 [USERS]
 """
 
+user_map = {}
 for u in sorted_users:
-    # Self-Care users get their own individual password key
-    base_u = re.sub(r"-[A-Z0-9]{1,2}$", "", u).strip().upper()
+    base_u = re.sub(r"-[A-Z0-9]{1,4}$", "", u).strip().upper()
     if u in selfcare_users:
-        conf_content += f"{u} = KEY_{u}\n"
+        user_map[u] = f"KEY_{u}"
     elif base_u in selfcare_users:
-        conf_content += f"{u} = KEY_{base_u}\n"
+        user_map[u] = f"KEY_{base_u}"
     else:
-        conf_content += f"{u} = NinjaReflectorNodes\n"
+        user_map[u] = "NinjaReflectorNodes"
 
-for sc_call, sc_pwd in sorted(selfcare_users.items()):
-    conf_content += f"{sc_call} = KEY_{sc_call}\n"
-    conf_content += f"{sc_call.lower()} = KEY_{sc_call}\n"
-    for sfx in ["-M", "-L", "-R", "-P", "-ND", "-1", "-2", "-3"]:
-        conf_content += f"{sc_call}{sfx} = KEY_{sc_call}\n"
-        conf_content += f"{sc_call.lower()}{sfx.lower()} = KEY_{sc_call}\n"
+for sc_call, sc_pwd in selfcare_users.items():
+    user_map[sc_call] = f"KEY_{sc_call}"
+    user_map[sc_call.lower()] = f"KEY_{sc_call}"
+    for sfx in ["-M", "-L", "-R", "-P", "-ND", "-GW", "-HS", "-HOTSPOT", "-ROIP", "-1", "-2", "-3", "-4", "-5"]:
+        user_map[f"{sc_call}{sfx}"] = f"KEY_{sc_call}"
+        user_map[f"{sc_call.lower()}{sfx.lower()}"] = f"KEY_{sc_call}"
+
+for u_k, key_v in sorted(user_map.items()):
+    conf_content += f"{u_k} = {key_v}\n"
 
 # Wildcard fallback MUST be placed AFTER specific callsigns so individual passwords match first
 if not strict_mode:
@@ -280,7 +283,8 @@ conf_content += f"""
 NinjaReflectorNodes = "{auth_key}"
 """
 for sc_call, sc_pwd in sorted(selfcare_users.items()):
-    conf_content += f'KEY_{sc_call} = "{sc_pwd}"\n'
+    clean_pwd = str(sc_pwd).strip()
+    conf_content += f'KEY_{sc_call} = "{clean_pwd}"\n'
 
 with open(conf_path, "w", encoding="utf-8") as f:
     f.write(conf_content)

@@ -160,14 +160,20 @@ async def check_org_prefix(session: AsyncSession, callsign: str, org_code: str) 
 
 def trigger_protocol_reload() -> None:
     """Writes reload marker files so SvxReflector / Mumble bridge can pick up updates."""
-    for marker_dir in ["/app/data", "./data"]:
+    marker_dirs = ["/app/data", "./data", "/home/ubuntu/ninjaRadio/data"]
+    for marker_dir in marker_dirs:
         if os.path.isdir(marker_dir):
             try:
-                with open(os.path.join(marker_dir, ".svxlink_reload"), "w", encoding="utf-8") as f:
+                svx_reload = os.path.join(marker_dir, ".svxlink_reload")
+                with open(svx_reload, "w", encoding="utf-8") as f:
                     f.write(str(time.time()))
-                with open(os.path.join(marker_dir, ".mumble_sync"), "w", encoding="utf-8") as f:
+                    f.flush()
+                    os.fsync(f.fileno())
+                mum_sync = os.path.join(marker_dir, ".mumble_sync")
+                with open(mum_sync, "w", encoding="utf-8") as f:
                     f.write(str(time.time()))
-                break
+                    f.flush()
+                    os.fsync(f.fileno())
             except Exception:
                 pass
 

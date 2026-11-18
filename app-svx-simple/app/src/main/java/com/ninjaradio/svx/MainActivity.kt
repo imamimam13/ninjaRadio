@@ -258,8 +258,8 @@ class MainActivity : Activity(), SvxReflectorClient.Listener, UsbSerialControlle
     private fun doConnect() {
         val host = etHost.text.toString().trim()
         val port = etPort.text.toString().toIntOrNull() ?: 5300
-        val cs = etCallsign.text.toString().trim()
-        val pw = etPassword.text.toString()
+        val cs = etCallsign.text.toString().trim().uppercase()
+        val pw = etPassword.text.toString().trim()
         val tg = etTg.text.toString().toLongOrNull() ?: 0L
         if (host.isEmpty() || cs.isEmpty() || pw.isEmpty()) {
             log("Host, callsign dan password wajib diisi"); return
