@@ -208,6 +208,7 @@ services:
     network_mode: host
     volumes:
       - ./bridge-teamspeak/data:/app/data
+      - ./bridge-teamspeak/plugins:/app/plugins:ro
       - ninjaradio_data:/app/ninja_data:ro
     depends_on:
       - teamspeak-server
