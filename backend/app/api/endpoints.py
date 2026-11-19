@@ -1201,6 +1201,25 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
             callsign = custom_call
             name = f"Zello User ({custom_call[3:]})"
             category = "Zello"
+        elif custom_call:
+            # Smart Callsign & Name separation for VoIP / TS3 / SvxLink nicknames
+            c_clean = custom_call.strip()
+            if " - " in c_clean:
+                parts = c_clean.split(" - ", 1)
+                callsign = parts[0].strip().upper()
+                name = parts[1].strip()
+            elif "/" in c_clean:
+                parts = c_clean.split("/", 1)
+                callsign = parts[0].strip().upper()
+                name = parts[1].strip()
+            elif " " in c_clean:
+                parts = c_clean.split(None, 1)
+                callsign = parts[0].strip().upper()
+                name = parts[1].strip()
+            else:
+                callsign = c_clean.upper()
+                name = c_clean
+            category = "VoIP Gateway"
 
     tg_name = TG_NAMES.get(dst_tg, f"Talkgroup {dst_tg}")
 
@@ -1269,6 +1288,11 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         now = time.time()
         start_ts = cached.get("start_time", now - 3.5) if cached else (now - 3.5)
         dur = round(max(0.5, now - start_ts), 1)
+
+        if cached:
+            callsign = cached.get("callsign") or callsign
+            name = cached.get("name") or name
+            category = cached.get("category") or category
 
         lh_rssi = str(event.get("rssi") or (cached.get("rssi") if cached else None) or "Digital IP")
         lh_loss = str(event.get("loss") or (cached.get("loss") if cached else None) or "0.0%")
