@@ -10,9 +10,13 @@ import re
 import time
 import subprocess
 import signal
+import cProfile
+import pstats
+import io
 from typing import Dict, List, Optional, Tuple
 import aiohttp
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
 import uvicorn
 from dmr_server import HomeBrewMasterServer
 from dmr_client import HomeBrewClient
@@ -3809,6 +3813,26 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     await engine_mgr.shutdown()
+
+@app.get("/api/profile", response_class=PlainTextResponse)
+async def profile_cpu(seconds: int = 4):
+    """Profiles live Python CPU execution for N seconds using built-in cProfile."""
+    sec = min(10, max(1, seconds))
+    pr = cProfile.Profile()
+    pr.enable()
+    await asyncio.sleep(sec)
+    pr.disable()
+
+    out = io.StringIO()
+    out.write(f"=== TOP 25 CUMULATIVE TIME ({sec}s sampling) ===\n")
+    ps_cum = pstats.Stats(pr, stream=out).sort_stats("cumulative")
+    ps_cum.print_stats(25)
+
+    out.write(f"\n=== TOP 25 INTERNAL TIME (TOTTIME) ({sec}s sampling) ===\n")
+    ps_tot = pstats.Stats(pr, stream=out).sort_stats("tottime")
+    ps_tot.print_stats(25)
+
+    return out.getvalue()
 
 @app.get("/api/status")
 async def get_core_status():
