@@ -153,6 +153,8 @@ slot={b_slot}
 rx_port={rx_p}
 name={b_name_upper}
 server={target_server}
+channel={target_ch}
+channel_password={channel_pw}
 static_name={"true" if b_static else "false"}
 """
         with open(os.path.join(b_dir, "target.cfg"), "w", encoding="utf-8") as f:

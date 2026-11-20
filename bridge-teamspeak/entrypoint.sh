@@ -24,19 +24,54 @@ chmod -R 777 /app/data
             echo "[TS3-Bridge] Web API is up! Waiting 2s for bots to settle..."
             sleep 2
             python3 -c "
-import urllib.request, json
+import urllib.request, json, urllib.parse, os, time
+
+bot_targets = {}
+bots_dir = '/app/data/bots'
+if os.path.exists(bots_dir):
+    for bfolder in os.listdir(bots_dir):
+        cfg_p = os.path.join(bots_dir, bfolder, 'target.cfg')
+        if os.path.exists(cfg_p):
+            ch = ''
+            pw = ''
+            for line in open(cfg_p, encoding='utf-8', errors='ignore'):
+                if '=' in line:
+                    k, v = line.strip().split('=', 1)
+                    if k.lower() == 'channel': ch = v
+                    elif k.lower() == 'channel_password': pw = v
+            if ch:
+                bot_targets[bfolder.lower()] = (ch, pw)
+
 try:
     data = json.loads(urllib.request.urlopen('http://127.0.0.1:58913/api/bot/list').read().decode())
     for b in data:
         bid = b.get('Id')
         bname = b.get('Name')
         if bid is not None:
+            # 1. Load NinjaRadioBridge plugin
             try:
                 url = f'http://127.0.0.1:58913/api/bot/use/{bid}/(/plugin/load/NinjaRadioBridge.cs)'
                 urllib.request.urlopen(url)
                 print(f'[TS3-Bridge] ✓ Loaded NinjaRadioBridge on bot {bid} ({bname})')
             except Exception as ex:
                 print(f'[TS3-Bridge] Note loading on bot {bid}: {ex}')
+
+            # 2. Enforce moving bot into target channel
+            clean_bname = (bname or '').lower().replace(' ', '_')
+            ch_info = bot_targets.get(str(bid).lower()) or bot_targets.get(clean_bname)
+            if ch_info:
+                ch, pw = ch_info
+                ch_param = ch if (ch.startswith('/') or not ch.isdigit()) else f'/{ch}'
+                ch_enc = urllib.parse.quote(ch_param, safe='/')
+                move_url = f'http://127.0.0.1:58913/api/bot/use/{bid}/(/bot/move/{ch_enc})'
+                if pw:
+                    pw_enc = urllib.parse.quote(pw, safe='')
+                    move_url = f'http://127.0.0.1:58913/api/bot/use/{bid}/(/bot/move/{ch_enc}/{pw_enc})'
+                try:
+                    urllib.request.urlopen(move_url, timeout=3)
+                    print(f'[TS3-Bridge] ✓ Sent move command to channel \'{ch_param}\' for bot {bid} ({bname})')
+                except Exception as ex:
+                    print(f'[TS3-Bridge] Note moving bot {bid} to \'{ch}\': {ex}')
 except Exception as e:
     print('[TS3-Bridge] Plugin autoload error:', e)
 "
