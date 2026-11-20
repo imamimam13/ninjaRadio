@@ -210,6 +210,7 @@ services:
       - ./bridge-teamspeak/data:/app/data
       - ./bridge-teamspeak/plugins:/app/plugins:ro
       - ./bridge-teamspeak/sync_bots.py:/app/sync_bots.py:ro
+      - ./bridge-teamspeak/entrypoint.sh:/app/entrypoint.sh:ro
       - ninjaradio_data:/app/ninja_data:ro
     depends_on:
       - teamspeak-server

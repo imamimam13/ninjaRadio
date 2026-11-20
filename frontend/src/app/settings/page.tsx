@@ -3947,7 +3947,7 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   type="text"
                   required
                   list="ts3_rooms_datalist"
-                  placeholder="Contoh: TG 1025 - BRIDISV atau Nama Channel di Server Luar"
+                  placeholder="Contoh: 15 (Channel ID) atau TG 1025 - BRIDISV"
                   value={newTs3BotChannel}
                   onChange={(e) => {
                     const sel = e.target.value;
@@ -3967,8 +3967,8 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                     </option>
                   ))}
                 </datalist>
-                <p className="text-[10px] text-slate-500 mt-1">
-                  Pilih dari daftar channel lokal atau ketik nama channel server luar yang ingin dituju.
+                <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                  💡 <strong>Tips:</strong> Jika channel di server luar berada di dalam subchannel/folder, masukkan <strong>Channel ID</strong> (angka ID channel dari TS3, misal: <code className="text-cyan-300">15</code> atau <code className="text-cyan-300">/15</code>) atau nama path lengkap (<code className="text-cyan-300">Parent/Child</code>) agar bot dijamin 100% langsung masuk ke channel tersebut.
                 </p>
               </div>
 
