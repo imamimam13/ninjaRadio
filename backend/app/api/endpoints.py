@@ -231,19 +231,30 @@ async def get_connected_clients():
             for hs in hotspots:
                 h_call = str(hs.get("callsign") or "HOTSPOT").upper()
                 h_id = hs.get("dmr_id") or 0
+                h_hardware = hs.get("hardware") or hs.get("device_type") or "MMDVM Modem"
+                h_firmware = hs.get("firmware") or hs.get("software") or "MMDVM_Host"
+                h_brand = hs.get("brand") or "MMDVM"
                 all_clients.append({
                     "id": f"mmdvm_{hs.get('addr', h_call)}",
                     "protocol": "MMDVM",
-                    "type": "MMDVM Hotspot / Repeater",
+                    "type": hs.get("device_type") or "MMDVM Hotspot / Repeater",
+                    "brand": h_brand,
+                    "hardware": h_hardware,
+                    "firmware": h_firmware,
                     "callsign": h_call,
                     "name": f"DMR ID: {h_id}",
+                    "dmr_id": h_id,
                     "ip": str(hs.get("addr", "remote")),
                     "target": str(hs.get("subscribed_tg", "TS1/TS2")),
                     "connected_at": str(hs.get("uptime", "Active")),
                     "status": "ONLINE" if hs.get("status") in ("ONLINE", "CONNECTED") or hs.get("state") == "CONNECTED" else "CONNECTING",
-                    "details": str(hs.get("software", "MMDVM_Host")),
-                    "app": f"MMDVM ({h_call})",
-                    "device": str(hs.get("software", "MMDVM Modem"))
+                    "details": f"{h_hardware} · {h_firmware}",
+                    "rx_freq": str(hs.get("rx_freq", "")),
+                    "tx_freq": str(hs.get("tx_freq", "")),
+                    "location": str(hs.get("location", "")),
+                    "description": str(hs.get("description", "")),
+                    "app": f"{h_brand} ({h_call})",
+                    "device": h_hardware
                 })
                 
             # DVSwitch USRP Clients

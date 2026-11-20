@@ -1015,28 +1015,90 @@ export default function DashboardPage() {
                   }
                 };
 
+                const getCountryFlag = (dmrId: number | string | undefined): string => {
+                  if (!dmrId) return "🌐";
+                  const idStr = String(dmrId).trim();
+                  if (idStr.startsWith("510")) return "🇮🇩";
+                  if (idStr.startsWith("202")) return "🇬🇷";
+                  if (idStr.startsWith("204")) return "🇳🇱";
+                  if (idStr.startsWith("525")) return "🇸🇬";
+                  if (idStr.startsWith("502")) return "🇲🇾";
+                  if (idStr.startsWith("520")) return "🇹🇭";
+                  if (idStr.startsWith("505")) return "🇦🇺";
+                  if (idStr.startsWith("302")) return "🇨🇦";
+                  if (/^31[0-6]/.test(idStr)) return "🇺🇸";
+                  if (/^23[45]/.test(idStr)) return "🇬🇧";
+                  if (/^26[23]/.test(idStr)) return "🇩🇪";
+                  if (idStr.startsWith("208")) return "🇫🇷";
+                  if (idStr.startsWith("222")) return "🇮🇹";
+                  if (idStr.startsWith("214")) return "🇪🇸";
+                  if (idStr.startsWith("440")) return "🇯🇵";
+                  if (idStr.startsWith("460")) return "🇨🇳";
+                  if (idStr.startsWith("454")) return "🇭🇰";
+                  if (idStr.startsWith("416")) return "🇸🇦";
+                  if (idStr.startsWith("250")) return "🇷🇺";
+                  if (idStr.startsWith("260")) return "🇵🇱";
+                  if (idStr.startsWith("228")) return "🇨🇭";
+                  if (idStr.startsWith("232")) return "🇦🇹";
+                  if (idStr.startsWith("206")) return "🇧🇪";
+                  if (idStr.startsWith("724")) return "🇧🇷";
+                  return "🌐";
+                };
+
+                const getHardwareBadge = (brand: string = "", hardware: string = "") => {
+                  const combined = `${brand} ${hardware}`.toUpperCase();
+                  if (combined.includes("HYTERA")) {
+                    return "bg-rose-950/70 text-rose-300 border-rose-800";
+                  }
+                  if (combined.includes("MOTOROLA")) {
+                    return "bg-blue-950/70 text-blue-300 border-blue-800";
+                  }
+                  if (combined.includes("OPENSPOT") || combined.includes("SHARKRF")) {
+                    return "bg-amber-950/70 text-amber-300 border-amber-800";
+                  }
+                  if (combined.includes("PI-STAR")) {
+                    return "bg-pink-950/70 text-pink-300 border-pink-800";
+                  }
+                  if (combined.includes("WPSD")) {
+                    return "bg-cyan-950/70 text-cyan-300 border-cyan-800";
+                  }
+                  if (combined.includes("DROIDSTAR")) {
+                    return "bg-emerald-950/70 text-emerald-300 border-emerald-800";
+                  }
+                  if (combined.includes("BLUEDV")) {
+                    return "bg-sky-950/70 text-sky-300 border-sky-800";
+                  }
+                  return "bg-slate-800 text-slate-300 border-slate-700";
+                };
+
                 return (
                   <table className="w-full text-left text-xs font-mono">
                     <thead>
                       <tr className="border-b border-slate-800 text-slate-400 text-[11px]">
                         <th className="py-2 px-2">Protokol</th>
                         <th className="py-2 px-2">Identitas / Callsign</th>
+                        <th className="py-2 px-2">Hardware (BrandMeister)</th>
+                        <th className="py-2 px-2">Firmware / Software</th>
                         <th className="py-2 px-2">Target / Saluran</th>
-                        <th className="py-2 px-2">Host / IP Address</th>
-                        <th className="py-2 px-2">Perangkat / Info</th>
+                        <th className="py-2 px-2">Host / Endpoint</th>
                         <th className="py-2 px-2">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 text-slate-300">
                       {filteredClients.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="py-6 text-center text-slate-500">
+                          <td colSpan={7} className="py-6 text-center text-slate-500">
                             Tidak ada sesi aktif untuk kategori protokol ini.
                           </td>
                         </tr>
                       ) : (
                         filteredClients.map((client, idx) => {
                           const proto = client.protocol || "Web";
+                          const flag = getCountryFlag(client.dmr_id || client.callsign);
+                          const hwName = client.hardware || client.device || client.type || "-";
+                          const fwName = client.firmware || client.software || "-";
+                          const brand = client.brand || "";
+
                           return (
                             <tr key={client.id || idx} className="hover:bg-slate-800/30">
                               <td className="py-2.5 px-2">
@@ -1044,22 +1106,32 @@ export default function DashboardPage() {
                                   {proto === "Outgoing" ? "🔗 Outgoing" : proto}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-2 font-bold text-white">
-                                {client.callsign || client.name || "-"}
+                              <td className="py-2.5 px-2 font-bold">
+                                <div className="flex items-center gap-1.5">
+                                  {proto === "MMDVM" && <span className="text-sm select-none">{flag}</span>}
+                                  <span className={proto === "MMDVM" ? "text-rose-400 font-black text-sm" : "text-white text-sm"}>
+                                    {client.callsign || client.name || "-"}
+                                  </span>
+                                </div>
                                 {client.name && client.name !== client.callsign && (
                                   <div className="text-[10px] text-slate-400 font-normal">
                                     {client.name}
                                   </div>
                                 )}
                               </td>
+                              <td className="py-2.5 px-2">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${getHardwareBadge(brand, hwName)}`}>
+                                  {hwName}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-2 font-mono text-slate-300 text-[11px]">
+                                <code>{fwName}</code>
+                              </td>
                               <td className="py-2.5 px-2 font-bold text-cyan-300">
                                 {client.target || client.app || "-"}
                               </td>
                               <td className="py-2.5 px-2 font-mono text-slate-400">
                                 <code>{client.ip || "-"}</code>
-                              </td>
-                              <td className="py-2.5 px-2 text-slate-300 text-[11px]">
-                                {client.details || client.device || client.type || "-"}
                               </td>
                               <td className="py-2.5 px-2">
                                 {client.status === "ONLINE" ? (

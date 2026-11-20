@@ -137,7 +137,136 @@ def lookup_callbook_callsign(dmr_id: int) -> Optional[str]:
     _CALLSIGN_MEM_CACHE[dmr_id] = ""
     return None
 
-    return None
+def classify_mmdvm_device(
+    soft_id: str = "",
+    pkg_id: str = "",
+    desc: str = "",
+    loc: str = "",
+    slots_mode: int = 2,
+    rx_freq: str = "",
+    tx_freq: str = ""
+) -> dict:
+    """
+    BrandMeister-standard DMR Hotspot & Repeater Classifier.
+    Extracts Hardware model and Firmware string identically to BrandMeister DMR Master.
+    """
+    s = (soft_id or "").strip()
+    p = (pkg_id or "").strip()
+    d = (desc or "").strip()
+    l = (loc or "").strip()
+    combined = f"{s} {p} {d} {l}".upper()
+
+    is_duplex = (slots_mode in (3, 4)) or (bool(rx_freq and tx_freq and rx_freq != tx_freq))
+    mode_label = "Repeater" if is_duplex else "Hotspot"
+
+    brand = "MMDVM"
+    hardware = ""
+    firmware = s or p or "MMDVM_Host"
+
+    # 1. Hytera Commercial Repeaters & Mobiles (RD625, RD985, RD982, MD785, HR1065)
+    if "HYTERA" in combined or "RD62" in combined or "RD98" in combined or "MD78" in combined or "HR106" in combined:
+        brand = "Hytera"
+        if "RD625" in combined or "RD62" in combined:
+            hardware = "Hytera RD625"
+        elif "RD985" in combined or "RD982" in combined or "RD98" in combined:
+            hardware = "Hytera RD985"
+        elif "MD785" in combined or "MD78" in combined:
+            hardware = "Hytera MD785"
+        elif "HR106" in combined:
+            hardware = "Hytera HR1065"
+        else:
+            hardware = p or "Hytera DMR Repeater"
+        firmware = s or "Official Hytera Firmware"
+
+    # 2. Motorola MOTOTRBO Repeaters & Base Stations (DR3000, MTR3000, SLR5500)
+    elif "MOTOROLA" in combined or "MOTOTRBO" in combined or "DR3000" in combined or "MTR3000" in combined or "SLR" in combined:
+        brand = "Motorola"
+        if "DR3000" in combined:
+            hardware = "Motorola DR3000"
+        elif "MTR3000" in combined:
+            hardware = "Motorola MTR3000"
+        elif "SLR5500" in combined or "SLR" in combined:
+            hardware = "Motorola SLR5500"
+        else:
+            hardware = p or "Motorola MOTOTRBO"
+        firmware = s or "MOTOTRBO Firmware"
+
+    # 3. SharkRF openSPOT Series
+    elif "OPENSPOT" in combined or "SHARKRF" in combined:
+        brand = "openSPOT"
+        if "OPENSPOT4" in combined or "OS4" in combined:
+            hardware = "openSPOT4 Pro"
+        elif "OPENSPOT3" in combined or "OS3" in combined:
+            hardware = "openSPOT3"
+        elif "OPENSPOT2" in combined or "OS2" in combined:
+            hardware = "openSPOT2"
+        elif "OPENSPOT1" in combined or "OS1" in combined:
+            hardware = "openSPOT1"
+        else:
+            hardware = "SharkRF openSPOT"
+        firmware = s or p or "openSPOT OS"
+
+    # 4. Mobile / Software AMBE Clients (DroidStar, BlueDV)
+    elif "DROIDSTAR" in combined:
+        brand = "DroidStar"
+        hardware = "DroidStar (App)"
+        firmware = s or "DroidStar Mobile"
+    elif "BLUEDV" in combined:
+        brand = "BlueDV"
+        hardware = "BlueDV (Client)"
+        firmware = s or "BlueDV AMBE"
+
+    # 5. Pi-Star / WPSD Distributions
+    elif "WPSD" in combined:
+        brand = "WPSD"
+        hardware = f"WPSD ({mode_label})"
+        firmware = s or "WPSD Dashboard"
+    elif "PI-STAR" in combined:
+        brand = "Pi-Star"
+        hardware = f"Pi-Star ({mode_label})"
+        firmware = s or "MMDVMHost"
+
+    # 6. Specific Hardware Modems (ZUMspot, DVMEGA, Nano-Hotspot, MMDVM_HS, STM32)
+    elif "ZUMSPOT" in combined:
+        brand = "ZUMspot"
+        hardware = "ZUMspot (Hotspot)"
+        firmware = s or "MMDVM_Host"
+    elif "DVMEGA" in combined:
+        brand = "DVMEGA"
+        hardware = f"DVMEGA ({mode_label})"
+        firmware = s or "MMDVM_Host"
+    elif "NANO" in combined:
+        brand = "Nano-Hotspot"
+        hardware = "Nano-Hotspot (OLED)"
+        firmware = s or "MMDVM_Host"
+    elif "MMDVM_HS" in combined or "HS_HAT" in combined or "MMDVM_DUPLEX" in combined:
+        brand = "MMDVM_HS"
+        hardware = f"MMDVM_HS ({mode_label})"
+        firmware = s or "MMDVM_Host"
+    elif "STM32" in combined:
+        brand = "MMDVM"
+        hardware = f"STM32-DVM ({mode_label})"
+        firmware = s or "MMDVM_Host"
+
+    # 7. Default MMDVM
+    else:
+        brand = "MMDVM"
+        if p and p not in ("MMDVM", "MMDVMHost"):
+            hardware = f"{p} ({mode_label})"
+        elif d and d not in ("MMDVM", "MMDVMHost"):
+            hardware = f"{d} ({mode_label})"
+        else:
+            hardware = f"MMDVM ({mode_label})"
+        firmware = s or "MMDVM_Host"
+
+    return {
+        "brand": brand,
+        "hardware": hardware,
+        "firmware": firmware,
+        "software": firmware,
+        "device_type": hardware,
+        "mode_label": mode_label
+    }
 
 class HomeBrewMasterServer:
     """
@@ -516,18 +645,34 @@ class HomeBrewMasterServer:
             dmr_id = struct.unpack(">I", data[4:8])[0]
             config_payload = data[8:]
             callsign = config_payload[:8].decode("utf-8", errors="ignore").strip()
-            software_str = "MMDVMHost"
             slots_mode = 3
             options_str = ""
+            rx_f = ""
+            tx_f = ""
+            pwr = ""
+            cc = ""
+            loc = ""
+            desc = ""
+            soft_id = ""
+            pkg_id = ""
 
             # Standard HomeBrew RPTC layout:
             # 0..8 callsign, 8..17 rx_freq, 17..26 tx_freq, 26..28 pwr, 28..30 cc,
             # 30..38 lat, 38..47 lon, 47..50 height, 50..70 loc, 70..89 desc, 89..90 slots,
             # 90..214 url, 214..254 soft_id, 254..294 pkg_id, 294.. options
+            if len(config_payload) >= 30:
+                try:
+                    rx_f = config_payload[8:17].decode("ascii", errors="ignore").strip("\x00 ")
+                    tx_f = config_payload[17:26].decode("ascii", errors="ignore").strip("\x00 ")
+                    pwr = config_payload[26:28].decode("ascii", errors="ignore").strip("\x00 ")
+                    cc = config_payload[28:30].decode("ascii", errors="ignore").strip("\x00 ")
+                except Exception:
+                    pass
+
             if len(config_payload) >= 90:
                 try:
-                    rx_f = config_payload[8:17].decode("ascii", errors="ignore").strip()
-                    tx_f = config_payload[17:26].decode("ascii", errors="ignore").strip()
+                    loc = config_payload[50:70].decode("ascii", errors="ignore").strip("\x00 ")
+                    desc = config_payload[70:89].decode("ascii", errors="ignore").strip("\x00 ")
                     slots_ch = config_payload[89:90].decode("ascii", errors="ignore").strip()
                     if slots_ch in ("1", "2", "4"):
                         slots_mode = int(slots_ch)
@@ -535,18 +680,23 @@ class HomeBrewMasterServer:
                         slots_mode = 2
                 except Exception:
                     pass
+
             if len(config_payload) >= 254:
                 try:
-                    s_id = config_payload[214:254].decode("ascii", errors="ignore").strip("\x00 ")
-                    if s_id:
-                        software_str = s_id[:30]
+                    soft_id = config_payload[214:254].decode("ascii", errors="ignore").strip("\x00 ")
                 except Exception:
                     pass
             elif len(config_payload) > 8:
                 try:
-                    extra = config_payload[8:].decode("ascii", errors="ignore").strip()
+                    extra = config_payload[8:].decode("ascii", errors="ignore").strip("\x00 ")
                     if extra:
-                        software_str = extra[:30]
+                        soft_id = extra[:40]
+                except Exception:
+                    pass
+
+            if len(config_payload) >= 294:
+                try:
+                    pkg_id = config_payload[254:294].decode("ascii", errors="ignore").strip("\x00 ")
                 except Exception:
                     pass
 
@@ -564,6 +714,9 @@ class HomeBrewMasterServer:
                 except Exception:
                     pass
 
+            # BrandMeister-style Hardware & Software Recognition
+            dev_info = classify_mmdvm_device(soft_id, pkg_id, desc, loc, slots_mode, rx_f, tx_f)
+
             if addr not in self.clients:
                 self._update_client_seen(dmr_id, addr)
 
@@ -571,7 +724,19 @@ class HomeBrewMasterServer:
                 resolved = lookup_callbook_callsign(dmr_id)
                 final_call = callsign if (callsign and callsign not in ["HOTSPOT", "DVSWITCH"]) else (resolved or self.clients[addr].get("callsign", "HOTSPOT"))
                 self.clients[addr]["callsign"] = final_call
-                self.clients[addr]["software"] = software_str
+                self.clients[addr]["software"] = dev_info["software"]
+                self.clients[addr]["firmware"] = dev_info["firmware"]
+                self.clients[addr]["brand"] = dev_info["brand"]
+                self.clients[addr]["device_type"] = dev_info["device_type"]
+                self.clients[addr]["hardware"] = dev_info["hardware"]
+                self.clients[addr]["software_id"] = soft_id
+                self.clients[addr]["package_id"] = pkg_id
+                self.clients[addr]["description"] = desc
+                self.clients[addr]["location"] = loc
+                self.clients[addr]["rx_freq"] = rx_f
+                self.clients[addr]["tx_freq"] = tx_f
+                self.clients[addr]["color_code"] = cc
+                self.clients[addr]["power"] = pwr
                 self.clients[addr]["slots_mode"] = slots_mode
                 self.clients[addr]["state"] = "CONNECTED"
                 self.clients[addr]["last_seen"] = time.time()
@@ -582,7 +747,7 @@ class HomeBrewMasterServer:
                     self.parse_mmdvm_options(self.clients[addr], options_str)
                 logger.info(
                     f"[DMR-Master] ✓ Hotspot {callsign} ({dmr_id}) CONNECTED from {addr} "
-                    f"[{software_str}, slots={slots_mode}, TS1={self.clients[addr].get('ts1_tgs')}, TS2={self.clients[addr].get('ts2_tgs')}]"
+                    f"[{dev_info['device_type']} · {dev_info['hardware']} ({dev_info['software']}), slots={slots_mode}, TS1={self.clients[addr].get('ts1_tgs')}, TS2={self.clients[addr].get('ts2_tgs')}]"
                 )
 
             # Send RPTACK acknowledgment
@@ -1469,6 +1634,14 @@ class HomeBrewMasterServer:
                 "essid": essid,
                 "callsign": c.get("callsign", "HOTSPOT"),
                 "software": c.get("software", "MMDVMHost"),
+                "firmware": c.get("firmware") or c.get("software", "MMDVMHost"),
+                "brand": c.get("brand", "MMDVM"),
+                "device_type": c.get("device_type", "MMDVM Hotspot"),
+                "hardware": c.get("hardware", "MMDVM Modem"),
+                "rx_freq": c.get("rx_freq", ""),
+                "tx_freq": c.get("tx_freq", ""),
+                "location": c.get("location", ""),
+                "description": c.get("description", ""),
                 "state": c.get("state", "CONNECTED"),
                 "connected_at": conn_time,
                 "uptime": uptime_str,

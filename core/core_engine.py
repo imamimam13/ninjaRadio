@@ -18,7 +18,7 @@ import aiohttp
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 import uvicorn
-from dmr_server import HomeBrewMasterServer
+from dmr_server import HomeBrewMasterServer, classify_mmdvm_device
 from dmr_client import HomeBrewClient
 from direct_dmr import DirectDmrEngine, build_dmr_header_burst, build_dmr_terminator_burst, rewrite_voice_burst_emblc
 
@@ -3879,6 +3879,14 @@ async def get_core_status():
                     "addr": f"{addr[0]}:{addr[1]}",
                     "callsign": c.get("callsign", "HOTSPOT"),
                     "dmr_id": c.get("dmr_id", 0),
+                    "brand": c.get("brand", "MMDVM"),
+                    "device_type": c.get("device_type", "MMDVM Hotspot"),
+                    "hardware": c.get("hardware", "MMDVM Modem"),
+                    "software": c.get("software", "MMDVMHost"),
+                    "rx_freq": c.get("rx_freq", ""),
+                    "tx_freq": c.get("tx_freq", ""),
+                    "location": c.get("location", ""),
+                    "description": c.get("description", ""),
                     "state": c.get("state", "UNKNOWN")
                 }
                 for addr, c in (engine_mgr.dmr_master_server.clients.items() if engine_mgr.dmr_master_server else [])
@@ -3944,9 +3952,23 @@ async def get_serverdmr_status():
                             c_id = int(pdata.get("RADIO_ID", 0) or 0)
                             if c_call in ("N1NJA", "FreeDMR-Master") and (c_id == int(engine_mgr.config.get("server_dmr_id", 5109999)) or c_id == 5109999):
                                 continue
-                            c_soft = pdata.get("PACKAGE_ID") or pdata.get("SOFTWARE_ID") or "MMDVM"
+                            c_soft = pdata.get("SOFTWARE_ID") or ""
                             if isinstance(c_soft, bytes):
                                 c_soft = c_soft.decode("ascii", errors="ignore").strip()
+                            c_pkg = pdata.get("PACKAGE_ID") or ""
+                            if isinstance(c_pkg, bytes):
+                                c_pkg = c_pkg.decode("ascii", errors="ignore").strip()
+                            c_desc = pdata.get("DESCRIPTION") or pdata.get("HARDWARE") or ""
+                            if isinstance(c_desc, bytes):
+                                c_desc = c_desc.decode("ascii", errors="ignore").strip()
+                            c_loc = pdata.get("LOCATION") or ""
+                            if isinstance(c_loc, bytes):
+                                c_loc = c_loc.decode("ascii", errors="ignore").strip()
+                            c_rx = pdata.get("RX_FREQ") or ""
+                            c_tx = pdata.get("TX_FREQ") or ""
+
+                            dev_info = classify_mmdvm_device(c_soft, c_pkg, c_desc, c_loc, rx_freq=str(c_rx), tx_freq=str(c_tx))
+
                             c_opt = pdata.get("OPTIONS", "TS1/TS2")
                             if isinstance(c_opt, bytes):
                                 c_opt = c_opt.decode("ascii", errors="ignore").strip()
@@ -3957,7 +3979,15 @@ async def get_serverdmr_status():
                                 "callsign": c_call or f"ID-{c_id}",
                                 "dmr_id": c_id,
                                 "addr": f"{pdata.get('IP', 'remote')}:{pdata.get('PORT', 62031)}",
-                                "software": c_soft,
+                                "brand": dev_info["brand"],
+                                "device_type": dev_info["device_type"],
+                                "hardware": dev_info["hardware"],
+                                "software": dev_info["software"],
+                                "firmware": dev_info["firmware"],
+                                "rx_freq": str(c_rx),
+                                "tx_freq": str(c_tx),
+                                "location": str(c_loc),
+                                "description": str(c_desc),
                                 "subscribed_tg": c_opt or "TS1/TS2",
                                 "status": "ONLINE" if pdata.get("CONNECTION") == "YES" else "CONNECTING",
                                 "uptime": f"{uh}h {um}m" if uh else f"{um}m",
