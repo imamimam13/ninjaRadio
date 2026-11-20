@@ -4011,28 +4011,29 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                     </option>
                   ))}
                 </datalist>
-                <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                  <span className="text-[10px] text-slate-400 font-semibold">Pilih Cepat:</span>
-                  {[
-                    { name: "INDONESIA", icon: "🇮🇩" },
-                    { name: "INDONESIA RX", icon: "🎧" },
-                    { name: "AUDIO TEST", icon: "🔊" },
-                    { name: "BERANDA", icon: "🏠" },
-                  ].map((preset) => (
-                    <button
-                      key={preset.name}
-                      type="button"
-                      onClick={() => setNewTs3BotChannel(preset.name)}
-                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition-all cursor-pointer ${
-                        newTs3BotChannel === preset.name
-                          ? "bg-purple-900/80 border-purple-400 text-purple-200 ring-1 ring-purple-400"
-                          : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border-slate-700"
-                      }`}
-                    >
-                      {preset.icon} {preset.name}
-                    </button>
-                  ))}
-                </div>
+                {ts3Rooms && ts3Rooms.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    <span className="text-[10px] text-slate-400 font-semibold">Pilih Cepat:</span>
+                    {ts3Rooms.map((r, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => {
+                          setNewTs3BotChannel(r.name);
+                          setNewTs3BotTg(r.targetTg || r.tg || 510);
+                          setNewTs3BotSlot(r.slot || 2);
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition-all cursor-pointer ${
+                          newTs3BotChannel === r.name
+                            ? "bg-purple-900/80 border-purple-400 text-purple-200 ring-1 ring-purple-400"
+                            : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border-slate-700"
+                        }`}
+                      >
+                        📻 {r.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
                   💡 <strong>Tips:</strong> Jika channel di server luar berada di dalam subchannel/folder, masukkan <strong>Channel ID</strong> (angka ID channel dari TS3, misal: <code className="text-cyan-300">15</code> atau <code className="text-cyan-300">/15</code>) atau nama path lengkap (<code className="text-cyan-300">Parent/Child</code>) agar bot dijamin 100% langsung masuk ke channel tersebut.
                 </p>
@@ -4196,38 +4197,37 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
 
             <div className="space-y-2">
               <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                <span>⚡ Pilih Cepat (1-Klik Langsung Pindah):</span>
+                <span>⚡ Pilih Ruangan Tersimpan (1-Klik Langsung Pindah):</span>
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { name: "INDONESIA", desc: "Ruang Utama", icon: "🇮🇩" },
-                  { name: "INDONESIA RX", desc: "Pantau / Tamu", icon: "🎧" },
-                  { name: "AUDIO TEST", desc: "Uji Suara", icon: "🔊" },
-                  { name: "BERANDA", desc: "Lobby Default", icon: "🏠" },
-                ].map((preset) => (
-                  <button
-                    key={preset.name}
-                    type="button"
-                    disabled={isMovingLive}
-                    onClick={() => handleQuickMoveTs3Bot(quickMoveBot.name, preset.name)}
-                    className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
-                      quickMoveBot.channel === preset.name
-                        ? "bg-cyan-950/80 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400"
-                        : "bg-[#05080f] border-slate-800 hover:border-cyan-500/70 hover:bg-slate-850 text-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="font-bold text-xs flex items-center gap-1.5 text-white">
-                        <span>{preset.icon}</span> {preset.name}
-                      </span>
-                      {quickMoveBot.channel === preset.name && (
-                        <span className="text-[9px] px-1 py-0.2 bg-cyan-500 text-black font-black rounded">AKTIF</span>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-slate-400 mt-1">{preset.desc}</span>
-                  </button>
-                ))}
-              </div>
+              {ts3Rooms && ts3Rooms.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                  {ts3Rooms.map((r, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      disabled={isMovingLive}
+                      onClick={() => handleQuickMoveTs3Bot(quickMoveBot.name, r.name)}
+                      className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                        quickMoveBot.channel === r.name
+                          ? "bg-cyan-950/80 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400"
+                          : "bg-[#05080f] border-slate-800 hover:border-cyan-500/70 hover:bg-slate-850 text-slate-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="font-bold text-xs flex items-center gap-1.5 text-white truncate">
+                          <span>📻</span> {r.name}
+                        </span>
+                        {quickMoveBot.channel === r.name && (
+                          <span className="text-[9px] px-1 py-0.2 bg-cyan-500 text-black font-black rounded ml-1">AKTIF</span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-slate-400 mt-1">TG {r.targetTg || r.tg} (Slot {r.slot || 2})</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-500 italic">Belum ada daftar ruangan tersimpan. Ketik nama ruangan manual di bawah.</p>
+              )}
             </div>
 
             <div className="pt-2 border-t border-slate-800 space-y-2">
