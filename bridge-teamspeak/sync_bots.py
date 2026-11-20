@@ -94,6 +94,17 @@ send_stats = false
     with open(os.path.join(DATA_DIR, "ts3audiobot.toml"), "w", encoding="utf-8") as f:
         f.write(ts3audiobot_toml)
 
+    # Write rights.toml to grant local Web API full admin rights (enables /bot/move and /server/tree)
+    rights_toml = """[[rule]]
+"+" = "*"
+
+[[rule]]
+ip = [ "127.0.0.1", "::1" ]
+"+" = "*"
+"""
+    with open(os.path.join(DATA_DIR, "rights.toml"), "w", encoding="utf-8") as f:
+        f.write(rights_toml)
+
     # Write individual bot.toml and target.cfg
     for idx, b in enumerate(bots):
         b_name = b.get("name", "").strip()

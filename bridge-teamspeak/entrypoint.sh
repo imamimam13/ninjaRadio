@@ -97,21 +97,36 @@ for attempt in range(1, 4):
                         tree_res = urllib.request.urlopen(tree_url, timeout=3).read().decode()
                         tree_data = json.loads(tree_res)
                         resolved_id = search_tree(tree_data, ch)
+                        if resolved_id is None:
+                            try:
+                                tree_res2 = urllib.request.urlopen('http://127.0.0.1:58913/api/server/tree', timeout=3).read().decode()
+                                resolved_id = search_tree(json.loads(tree_res2), ch)
+                            except Exception:
+                                pass
                         if resolved_id is not None:
                             target_cid = str(resolved_id)
                             print(f'[TS3-Bridge] 🎯 Auto-resolved channel \'{ch}\' -> Channel ID: {target_cid} for bot {bid} ({bname})')
                     except Exception as err:
                         print(f'[TS3-Bridge] Note querying server/tree on bot {bid}: {err}')
 
-                dest = f'/{target_cid}' if target_cid else ch
-                dest_enc = urllib.parse.quote(dest, safe='/')
+                dest = target_cid if target_cid else ch
+                dest_enc = urllib.parse.quote(str(dest).strip(), safe='')
                 move_url = f'http://127.0.0.1:58913/api/bot/use/{bid}/(/bot/move/{dest_enc})'
                 if pw:
-                    pw_enc = urllib.parse.quote(pw, safe='')
+                    pw_enc = urllib.parse.quote(str(pw).strip(), safe='')
                     move_url = f'http://127.0.0.1:58913/api/bot/use/{bid}/(/bot/move/{dest_enc}/{pw_enc})'
                 try:
                     urllib.request.urlopen(move_url, timeout=3)
                     print(f'[TS3-Bridge] ✓ Moved bot {bid} ({bname}) -> \'{dest}\'')
+                    # Persist resolved channel ID into bot.toml so future restarts/reconnects enter directly!
+                    if target_cid and bfolder:
+                        bot_toml_path = f'/app/data/bots/{bfolder}/bot.toml'
+                        if os.path.exists(bot_toml_path):
+                            raw_t = open(bot_toml_path, 'r', encoding='utf-8').read()
+                            new_t = re.sub(r'channel\s*=\s*"[^"]*"', f'channel = "/{target_cid}"', raw_t)
+                            if new_t != raw_t:
+                                open(bot_toml_path, 'w', encoding='utf-8').write(new_t)
+                                print(f'[TS3-Bridge] 💾 Saved permanent channel = \"/{target_cid}\" in {bfolder}/bot.toml')
                 except Exception as ex:
                     print(f'[TS3-Bridge] Note moving bot {bid} to \'{dest}\': {ex}')
     except Exception as e:
