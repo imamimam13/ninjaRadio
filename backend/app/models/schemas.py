@@ -113,6 +113,13 @@ class ServerStatus(BaseModel):
     active_bridges: int
     cpu_usage: float
     ram_usage: float
+    # Enriched protocol telemetry
+    svxlink_clients: Optional[int] = 0
+    teamspeak_clients: Optional[int] = 0
+    mumble_clients: Optional[int] = 0
+    total_clients: Optional[int] = 0
+    outgoing_peers: Optional[int] = 0
+    crisscross_bridges: Optional[int] = 0
 
 class PttTransmitRequest(BaseModel):
     callsign: Optional[str] = "WEB-OP"

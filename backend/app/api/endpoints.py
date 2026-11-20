@@ -65,19 +65,96 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
         cpu = 0.0
         ram = 0.0
 
-    # Query live Core Engine stats
     connected_hotspots = 0
     connected_peers = 0
+    svxlink_clients = 0
+    teamspeak_clients = 0
+    mumble_clients = 0
+    usrp_clients_cnt = 0
+    crisscross_bridges = active_bridges
+    outgoing_peers = 0
+
+    cfg = read_config_file()
+    
+    # 1. Count configured outgoing bots (connecting outward to external servers)
+    for b in cfg.get("teamspeak_bots", []):
+        srv = str(b.get("server") or "").strip()
+        if srv and not (srv.startswith("127.0.0.1") or srv.startswith("localhost") or srv.startswith("teamspeak-server")):
+            outgoing_peers += 1
+            
+    for b in cfg.get("mumble_bots", []):
+        srv = str(b.get("server") or "").strip()
+        if srv and not (srv.startswith("127.0.0.1") or srv.startswith("localhost") or srv.startswith("mumble")):
+            outgoing_peers += 1
+
+    for b in cfg.get("svxlink_bots", []):
+        srv = str(b.get("server") or "").strip()
+        if srv and not (srv.startswith("127.0.0.1") or srv.startswith("localhost") or srv.startswith("svxreflector")):
+            outgoing_peers += 1
+
+    # 2. Count criss-cross bridges across all protocols (SvxLink + TS3 + Mumble + Zello + DB matrix)
+    svx_bots_cnt = len(cfg.get("svxlink_bots", []))
+    ts3_bots_cnt = len(cfg.get("teamspeak_bots", []))
+    mumble_bots_cnt = len(cfg.get("mumble_bots", []))
+    zello_active = 1 if cfg.get("zello_config", {}).get("enabled", True) else 0
+    crisscross_bridges += (svx_bots_cnt + ts3_bots_cnt + mumble_bots_cnt + zello_active)
+
+    # 3. Concurrently gather live protocol telemetry
     try:
         import httpx
+        from backend.app.services.teamspeak_service import get_teamspeak_telemetry
+        
         async with httpx.AsyncClient(timeout=1.0) as client:
-            r = await client.get("http://core:5000/api/status")
-            if r.status_code == 200:
-                cinfo = r.json()
-                connected_hotspots = cinfo.get("master_server", {}).get("connected_hotspots", 0)
+            res = await asyncio.gather(
+                client.get("http://core:5000/api/serverdmr/status"),
+                client.get("http://core:5000/api/status"),
+                client.get("http://core:5000/api/dvswitch/status"),
+                client.get("http://svxlink-bridge:12349/status"),
+                client.get("http://mumble-bridge:12347/status"),
+                get_teamspeak_telemetry(),
+                return_exceptions=True
+            )
+            
+            # Hotspots count
+            if not isinstance(res[0], Exception) and res[0].status_code == 200:
+                hotspots = res[0].json().get("hotspots", [])
+                connected_hotspots = len(hotspots)
+            elif not isinstance(res[1], Exception) and res[1].status_code == 200:
+                connected_hotspots = res[1].json().get("master_server", {}).get("connected_hotspots", 0)
+
+            # Core Peers
+            if not isinstance(res[1], Exception) and res[1].status_code == 200:
+                cinfo = res[1].json()
                 connected_peers = len([p for p in cinfo.get("peers", []) if p.get("state") == "CONNECTED"])
-    except Exception:
-        pass
+            
+            # DVSwitch USRP clients
+            if not isinstance(res[2], Exception) and res[2].status_code == 200:
+                ddata = res[2].json()
+                active_usrp = [u for u in ddata.get("connected_usrp_clients", []) if u.get("is_active", True)]
+                usrp_clients_cnt = len(active_usrp)
+
+            # SvxLink reflector clients
+            if not isinstance(res[3], Exception) and res[3].status_code == 200:
+                sdata = res[3].json()
+                ref_nodes = sdata.get("reflector_nodes", {})
+                bot_names = {b.get("name") for b in sdata.get("active_bots", [])}
+                svx_ext = [k for k in ref_nodes.keys() if k not in bot_names and not str(k).startswith("SVX-GW")]
+                svxlink_clients = len(svx_ext)
+
+            # Mumble clients
+            if not isinstance(res[4], Exception) and res[4].status_code == 200:
+                mdata = res[4].json()
+                mumble_clients = len(mdata.get("users", []))
+
+            # TeamSpeak 3 clients
+            if not isinstance(res[5], Exception) and isinstance(res[5], dict):
+                teamspeak_clients = res[5].get("total_clients", 0)
+
+    except Exception as e:
+        logger.debug(f"Telemetry gather error in /status: {e}")
+
+    web_clients = len(manager.active_connections) or 1
+    total_clients = web_clients + connected_hotspots + usrp_clients_cnt + svxlink_clients + teamspeak_clients + mumble_clients
 
     return ServerStatus(
         server_name="NinjaRadio Master Core",
@@ -87,11 +164,17 @@ async def get_server_status(session: AsyncSession = Depends(get_db)):
         uptime=uptime_str,
         active_transmissions=1 if manager.current_tx else 0,
         connected_hotspots=connected_hotspots,
-        web_clients=len(manager.active_connections) or 1,
+        web_clients=web_clients,
         connected_peers=connected_peers,
         active_bridges=active_bridges,
         cpu_usage=cpu,
-        ram_usage=ram
+        ram_usage=ram,
+        svxlink_clients=svxlink_clients,
+        teamspeak_clients=teamspeak_clients,
+        mumble_clients=mumble_clients,
+        total_clients=total_clients,
+        outgoing_peers=outgoing_peers,
+        crisscross_bridges=crisscross_bridges
     )
 
 @router.get("/last-heard", response_model=List[LastHeardItem])
@@ -100,7 +183,225 @@ async def get_last_heard():
 
 @router.get("/clients")
 async def get_connected_clients():
-    return manager.get_connected_clients()
+    all_clients = []
+    
+    # 1. Web browser clients (from manager)
+    web_sessions = manager.get_connected_clients()
+    for ws in web_sessions:
+        all_clients.append({
+            "id": ws.get("id") or f"web_{abs(hash(ws.get('ip', '')))}",
+            "protocol": "Web",
+            "type": "Web Operator (PTT / Monitor)",
+            "callsign": ws.get("callsign", "Web Operator"),
+            "name": ws.get("app", "Web Dashboard"),
+            "ip": ws.get("ip", "127.0.0.1"),
+            "target": "Web Console / PTT",
+            "connected_at": ws.get("connected_at") or get_current_iso_utc(),
+            "status": "ONLINE",
+            "details": ws.get("device", "Browser Client"),
+            "app": ws.get("app", "Web Dashboard"),
+            "device": ws.get("device", "Browser Client")
+        })
+        
+    cfg = read_config_file()
+    
+    # 2. Concurrently fetch external telemetries
+    try:
+        import httpx
+        from backend.app.services.teamspeak_service import get_teamspeak_telemetry
+        
+        async with httpx.AsyncClient(timeout=1.2) as client:
+            res = await asyncio.gather(
+                client.get("http://core:5000/api/serverdmr/status"),
+                client.get("http://core:5000/api/status"),
+                client.get("http://core:5000/api/dvswitch/status"),
+                client.get("http://svxlink-bridge:12349/status"),
+                client.get("http://mumble-bridge:12347/status"),
+                get_teamspeak_telemetry(),
+                return_exceptions=True
+            )
+            
+            # MMDVM Hotspots (check serverdmr first, fallback to core status)
+            hotspots = []
+            if not isinstance(res[0], Exception) and res[0].status_code == 200:
+                hotspots = res[0].json().get("hotspots", [])
+            elif not isinstance(res[1], Exception) and res[1].status_code == 200:
+                hotspots = res[1].json().get("master_server", {}).get("hotspots", [])
+                
+            for hs in hotspots:
+                h_call = str(hs.get("callsign") or "HOTSPOT").upper()
+                h_id = hs.get("dmr_id") or 0
+                all_clients.append({
+                    "id": f"mmdvm_{hs.get('addr', h_call)}",
+                    "protocol": "MMDVM",
+                    "type": "MMDVM Hotspot / Repeater",
+                    "callsign": h_call,
+                    "name": f"DMR ID: {h_id}",
+                    "ip": str(hs.get("addr", "remote")),
+                    "target": str(hs.get("subscribed_tg", "TS1/TS2")),
+                    "connected_at": str(hs.get("uptime", "Active")),
+                    "status": "ONLINE" if hs.get("status") in ("ONLINE", "CONNECTED") or hs.get("state") == "CONNECTED" else "CONNECTING",
+                    "details": str(hs.get("software", "MMDVM_Host")),
+                    "app": f"MMDVM ({h_call})",
+                    "device": str(hs.get("software", "MMDVM Modem"))
+                })
+                
+            # DVSwitch USRP Clients
+            if not isinstance(res[2], Exception) and res[2].status_code == 200:
+                ddata = res[2].json()
+                for uc in ddata.get("connected_usrp_clients", []):
+                    if not uc.get("is_active", True):
+                        continue
+                    u_call = (uc.get("callsign") or f"DVS-{uc.get('dmr_id') or uc.get('port')}").upper()
+                    u_sid = uc.get("dmr_id") or 0
+                    u_tg = uc.get("tg") or 1025
+                    all_clients.append({
+                        "id": f"dvs_{uc.get('ip')}_{uc.get('port')}",
+                        "protocol": "DVSwitch",
+                        "type": "DVSwitch Mobile / USRP",
+                        "callsign": u_call,
+                        "name": f"DMR ID: {u_sid}",
+                        "ip": f"{uc.get('ip')}:{uc.get('port')}",
+                        "target": f"TG {u_tg}",
+                        "connected_at": f"Active ({uc.get('last_seen_seconds_ago', 0)}s ago)",
+                        "status": "TALKING" if uc.get("is_transmitting") else "ONLINE",
+                        "details": f"UDP USRP Port {uc.get('port')}",
+                        "app": f"DVSwitch Mobile ({u_call})",
+                        "device": "Android / iOS USRP"
+                    })
+                    
+            # SvxLink Nodes (SvxReflector clients)
+            if not isinstance(res[3], Exception) and res[3].status_code == 200:
+                sdata = res[3].json()
+                ref_nodes = sdata.get("reflector_nodes", {})
+                bot_names = {b.get("name") for b in sdata.get("active_bots", [])}
+                for ncall, ninfo in ref_nodes.items():
+                    if ncall in bot_names or str(ncall).startswith("SVX-GW"):
+                        continue
+                    ntg = ninfo.get("tg") or "Standby"
+                    all_clients.append({
+                        "id": f"svx_{ncall}",
+                        "protocol": "SvxLink",
+                        "type": "SvxLink Node / Repeater",
+                        "callsign": str(ncall).upper(),
+                        "name": str(ninfo.get("nodeLocation") or "SvxReflector Node"),
+                        "ip": f"{sdata.get('reflector_host', 'svxreflector:5300')}",
+                        "target": f"SvxReflector TG {ntg}",
+                        "connected_at": "Active",
+                        "status": "TALKING" if ninfo.get("isTalker") else "ONLINE",
+                        "details": f"{ninfo.get('sw', 'SvxLink')} {ninfo.get('swVer', '')}".strip() or "SvxLink Client",
+                        "app": f"SvxLink ({ncall})",
+                        "device": str(ninfo.get("nodeLocation") or "RF Node")
+                    })
+                    
+            # Mumble Users
+            if not isinstance(res[4], Exception) and res[4].status_code == 200:
+                mdata = res[4].json()
+                for mu in mdata.get("users", []):
+                    muname = mu.get("name", "User")
+                    all_clients.append({
+                        "id": f"mum_user_{muname}",
+                        "protocol": "Mumble",
+                        "type": "Mumble Voice Client",
+                        "callsign": str(muname),
+                        "name": "Mumble / Mumla App",
+                        "ip": f"{mdata.get('murmur_host', 'mumble:64738')}",
+                        "target": f"Room ID {mu.get('channel_id', 0)}",
+                        "connected_at": "Online",
+                        "status": "ONLINE",
+                        "details": "Murmur High-Quality Opus Voice",
+                        "app": f"Mumble ({muname})",
+                        "device": "Mumble Client"
+                    })
+                    
+            # TeamSpeak 3 Users
+            if not isinstance(res[5], Exception) and isinstance(res[5], dict):
+                ts_data = res[5]
+                ts_channels = {c.get("cid"): c.get("name") for c in ts_data.get("channels", [])}
+                for tu in ts_data.get("clients", []):
+                    t_nick = tu.get("nickname", "Guest")
+                    t_cid = tu.get("cid")
+                    t_chname = ts_channels.get(t_cid, f"Channel {t_cid}")
+                    all_clients.append({
+                        "id": f"ts3_user_{tu.get('clid')}_{t_nick}",
+                        "protocol": "TeamSpeak",
+                        "type": "TeamSpeak 3 User",
+                        "callsign": str(t_nick),
+                        "name": f"TS3 Client (CLID {tu.get('clid')})",
+                        "ip": f"{ts_data.get('host', 'teamspeak')}:{ts_data.get('voice_port', 9987)}",
+                        "target": f"Channel: {t_chname}",
+                        "connected_at": "Online",
+                        "status": "ONLINE",
+                        "details": "TeamSpeak 3 Voice",
+                        "app": f"TeamSpeak 3 ({t_nick})",
+                        "device": "TS3 Client App"
+                    })
+
+    except Exception as e:
+        logger.debug(f"Error gathering external clients: {e}")
+
+    # 3. Outgoing Link Peers (External TS3, Mumble, SvxLink Bots)
+    # TS3 External Bots
+    for b in cfg.get("teamspeak_bots", []):
+        srv = str(b.get("server") or "").strip()
+        if srv and not (srv.startswith("127.0.0.1") or srv.startswith("localhost") or srv.startswith("teamspeak-server")):
+            bname = str(b.get("name") or "TS3-OUT").upper()
+            all_clients.append({
+                "id": f"out_ts3_{bname}",
+                "protocol": "Outgoing",
+                "type": "TS3 Outgoing Bot Link",
+                "callsign": bname,
+                "name": f"Remote TS3: {srv}",
+                "ip": srv,
+                "target": f"{b.get('channel', 'Room')} ➔ TG {b.get('tg', 510)}",
+                "connected_at": "Stationed Link",
+                "status": "LINKED",
+                "details": f"HoneyBBQ Cross-Link to {b.get('svx_bot', 'Local')}",
+                "app": f"HoneyBBQ ({bname})",
+                "device": f"External TS3 ({srv})"
+            })
+
+    # Mumble External Bots
+    for b in cfg.get("mumble_bots", []):
+        srv = str(b.get("server") or "").strip()
+        if srv and not (srv.startswith("127.0.0.1") or srv.startswith("localhost") or srv.startswith("mumble")):
+            bname = str(b.get("name") or "MUM-OUT").upper()
+            all_clients.append({
+                "id": f"out_mum_{bname}",
+                "protocol": "Outgoing",
+                "type": "Mumble Outgoing Bot Link",
+                "callsign": bname,
+                "name": f"Remote Mumble: {srv}",
+                "ip": srv,
+                "target": f"{b.get('channel', 'Room')} ➔ TG {b.get('tg', 510)}",
+                "connected_at": "Stationed Link",
+                "status": "LINKED",
+                "details": f"Mumble Bridge Cross-Link",
+                "app": f"Mumble Bot ({bname})",
+                "device": f"External Mumble ({srv})"
+            })
+
+    # SvxLink External Bots
+    for b in cfg.get("svxlink_bots", []):
+        srv = str(b.get("server") or "").strip()
+        if srv and not (srv.startswith("127.0.0.1") or srv.startswith("localhost") or srv.startswith("svxreflector")):
+            bname = str(b.get("name") or "SVX-OUT").upper()
+            all_clients.append({
+                "id": f"out_svx_{bname}",
+                "protocol": "Outgoing",
+                "type": "SvxLink Outgoing Bot Link",
+                "callsign": bname,
+                "name": f"Remote SvxReflector: {srv}",
+                "ip": srv,
+                "target": f"TG {b.get('tg', 510)}",
+                "connected_at": "Stationed Link",
+                "status": "LINKED",
+                "details": f"SvxLink Cross-Link",
+                "app": f"SvxLink Bot ({bname})",
+                "device": f"External Reflector ({srv})"
+            })
+
+    return all_clients
 
 # ----------------- Multi-Logbook -----------------
 
