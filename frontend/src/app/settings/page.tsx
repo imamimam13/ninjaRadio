@@ -4011,6 +4011,28 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                     </option>
                   ))}
                 </datalist>
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className="text-[10px] text-slate-400 font-semibold">Pilih Cepat:</span>
+                  {[
+                    { name: "INDONESIA", icon: "🇮🇩" },
+                    { name: "INDONESIA RX", icon: "🎧" },
+                    { name: "AUDIO TEST", icon: "🔊" },
+                    { name: "BERANDA", icon: "🏠" },
+                  ].map((preset) => (
+                    <button
+                      key={preset.name}
+                      type="button"
+                      onClick={() => setNewTs3BotChannel(preset.name)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition-all cursor-pointer ${
+                        newTs3BotChannel === preset.name
+                          ? "bg-purple-900/80 border-purple-400 text-purple-200 ring-1 ring-purple-400"
+                          : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border-slate-700"
+                      }`}
+                    >
+                      {preset.icon} {preset.name}
+                    </button>
+                  ))}
+                </div>
                 <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
                   💡 <strong>Tips:</strong> Jika channel di server luar berada di dalam subchannel/folder, masukkan <strong>Channel ID</strong> (angka ID channel dari TS3, misal: <code className="text-cyan-300">15</code> atau <code className="text-cyan-300">/15</code>) atau nama path lengkap (<code className="text-cyan-300">Parent/Child</code>) agar bot dijamin 100% langsung masuk ke channel tersebut.
                 </p>
