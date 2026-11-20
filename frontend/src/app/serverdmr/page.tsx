@@ -33,12 +33,76 @@ import {
 import { AdminGuard } from "@/components/AdminGuard";
 import { getIsAdminUnlocked, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
 
+const getCountryFlag = (dmrId: number | string | undefined): string => {
+  if (!dmrId) return "🌐";
+  const idStr = String(dmrId).trim();
+  if (idStr.startsWith("510")) return "🇮🇩";
+  if (idStr.startsWith("202")) return "🇬🇷";
+  if (idStr.startsWith("204")) return "🇳🇱";
+  if (idStr.startsWith("525")) return "🇸🇬";
+  if (idStr.startsWith("502")) return "🇲🇾";
+  if (idStr.startsWith("520")) return "🇹🇭";
+  if (idStr.startsWith("505")) return "🇦🇺";
+  if (idStr.startsWith("302")) return "🇨🇦";
+  if (/^31[0-6]/.test(idStr)) return "🇺🇸";
+  if (/^23[45]/.test(idStr)) return "🇬🇧";
+  if (/^26[23]/.test(idStr)) return "🇩🇪";
+  if (idStr.startsWith("208")) return "🇫🇷";
+  if (idStr.startsWith("222")) return "🇮🇹";
+  if (idStr.startsWith("214")) return "🇪🇸";
+  if (idStr.startsWith("440")) return "🇯🇵";
+  if (idStr.startsWith("460")) return "🇨🇳";
+  if (idStr.startsWith("454")) return "🇭🇰";
+  if (idStr.startsWith("416")) return "🇸🇦";
+  if (idStr.startsWith("250")) return "🇷🇺";
+  if (idStr.startsWith("260")) return "🇵🇱";
+  if (idStr.startsWith("228")) return "🇨🇭";
+  if (idStr.startsWith("232")) return "🇦🇹";
+  if (idStr.startsWith("206")) return "🇧🇪";
+  if (idStr.startsWith("724")) return "🇧🇷";
+  return "🌐";
+};
+
+const getHardwareBadge = (brand: string = "", hardware: string = "") => {
+  const combined = `${brand} ${hardware}`.toUpperCase();
+  if (combined.includes("HYTERA")) {
+    return "bg-rose-950/70 text-rose-300 border-rose-800";
+  }
+  if (combined.includes("MOTOROLA")) {
+    return "bg-blue-950/70 text-blue-300 border-blue-800";
+  }
+  if (combined.includes("OPENSPOT") || combined.includes("SHARKRF")) {
+    return "bg-amber-950/70 text-amber-300 border-amber-800";
+  }
+  if (combined.includes("PI-STAR")) {
+    return "bg-pink-950/70 text-pink-300 border-pink-800";
+  }
+  if (combined.includes("WPSD")) {
+    return "bg-cyan-950/70 text-cyan-300 border-cyan-800";
+  }
+  if (combined.includes("DROIDSTAR")) {
+    return "bg-emerald-950/70 text-emerald-300 border-emerald-800";
+  }
+  if (combined.includes("BLUEDV")) {
+    return "bg-sky-950/70 text-sky-300 border-sky-800";
+  }
+  return "bg-slate-800 text-slate-300 border-slate-700";
+};
+
 interface HotspotClient {
   ip: string;
   port: number;
   dmr_id: number;
   callsign: string;
   software: string;
+  hardware?: string;
+  firmware?: string;
+  brand?: string;
+  device_type?: string;
+  rx_freq?: string;
+  tx_freq?: string;
+  location?: string;
+  description?: string;
   state: string;
   connected_at: number;
   uptime: string;
@@ -481,56 +545,74 @@ export default function ServerDmrPage() {
             <table className="w-full text-left border-collapse text-xs font-mono">
               <thead>
                 <tr className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
-                  <th className="p-3 font-bold">CALLSIGN</th>
-                  <th className="p-3 font-bold">DMR ID</th>
+                  <th className="p-3 font-bold">NUMBER</th>
+                  <th className="p-3 font-bold">NAME</th>
+                  <th className="p-3 font-bold">HARDWARE</th>
+                  <th className="p-3 font-bold">FIRMWARE</th>
                   <th className="p-3 font-bold">REMOTE ENDPOINT</th>
-                  <th className="p-3 font-bold">SOFTWARE</th>
                   <th className="p-3 font-bold">SUBSCRIBED TG</th>
                   <th className="p-3 font-bold">STATUS</th>
                   <th className="p-3 font-bold">UPTIME</th>
-                  <th className="p-3 font-bold">LAST SEEN</th>
                   <th className="p-3 font-bold text-right">RX / TX PKTS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {telemetry?.hotspots && telemetry.hotspots.length > 0 ? (
-                  telemetry.hotspots.map((hs, idx) => (
-                    <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="p-3 font-bold text-white flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                        <span className="text-cyan-300 font-black text-sm">{hs.callsign}</span>
-                      </td>
-                      <td className="p-3 text-slate-300 font-bold">
-                        {hs.dmr_id > 9999999 ? (
+                  telemetry.hotspots.map((hs, idx) => {
+                    const hwName = hs.hardware || hs.device_type || "MMDVM (Hotspot)";
+                    const fwName = hs.firmware || hs.software || "MMDVM_Host";
+                    const brand = hs.brand || "MMDVM";
+                    const flag = getCountryFlag(hs.dmr_id);
+
+                    return (
+                      <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                        <td className="p-3 text-slate-300 font-bold">
                           <div className="flex items-center gap-1.5">
-                            <span>{Math.floor(hs.dmr_id / 100)}</span>
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-cyan-950 text-cyan-400 border border-cyan-800" title={`Compound ID: ${hs.dmr_id}`}>
-                              SSID {String(hs.dmr_id % 100).padStart(2, "0")}
-                            </span>
+                            <span className="text-base select-none" title="Country Flag">{flag}</span>
+                            {hs.dmr_id > 9999999 ? (
+                              <div className="flex items-center gap-1">
+                                <span>{Math.floor(hs.dmr_id / 100)}</span>
+                                <span className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-cyan-950 text-cyan-400 border border-cyan-800">
+                                  SSID {String(hs.dmr_id % 100).padStart(2, "0")}
+                                </span>
+                              </div>
+                            ) : (
+                              <span>{hs.dmr_id}</span>
+                            )}
                           </div>
-                        ) : (
-                          hs.dmr_id
-                        )}
-                      </td>
-                      <td className="p-3 text-slate-400">{hs.ip}:{hs.port}</td>
-                      <td className="p-3 text-slate-400">{hs.software}</td>
-                      <td className="p-3">
-                        <span className="text-cyan-400 font-bold">
-                          {hs.last_tg ? `TG ${hs.last_tg} (TS${hs.last_slot || 2})` : (hs.options || "-")}
-                        </span>
-                      </td>
-                      <td className="p-3">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
-                          {hs.state}
-                        </span>
-                      </td>
-                      <td className="p-3 text-slate-400">{hs.uptime}</td>
-                      <td className="p-3 text-slate-400">{hs.last_seen_seconds_ago}s ago</td>
-                      <td className="p-3 text-right font-bold text-slate-300">
-                        <span className="text-cyan-400">{hs.rx_packets}</span> / <span className="text-emerald-400">{hs.tx_packets}</span>
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="p-3 font-black text-rose-400 hover:text-rose-300 transition-colors text-sm flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          <span>{hs.callsign}</span>
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-bold border inline-block ${getHardwareBadge(brand, hwName)}`}>
+                            {hwName}
+                          </span>
+                        </td>
+                        <td className="p-3 font-mono text-slate-300 font-medium">
+                          <code>{fwName}</code>
+                        </td>
+                        <td className="p-3 text-slate-400 font-mono">
+                          <code>{hs.ip}:{hs.port}</code>
+                        </td>
+                        <td className="p-3">
+                          <span className="text-cyan-400 font-bold">
+                            {hs.last_tg ? `TG ${hs.last_tg} (TS${hs.last_slot || 2})` : (hs.options || "-")}
+                          </span>
+                        </td>
+                        <td className="p-3">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                            {hs.state || "CONNECTED"}
+                          </span>
+                        </td>
+                        <td className="p-3 text-slate-400">{hs.uptime}</td>
+                        <td className="p-3 text-right font-bold text-slate-300">
+                          <span className="text-cyan-400">{hs.rx_packets}</span> / <span className="text-emerald-400">{hs.tx_packets}</span>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
                     <td colSpan={9} className="p-8 text-center text-slate-500">
