@@ -4008,6 +4008,7 @@ async def save_teamspeak_bot_endpoint(payload: dict):
     server = (payload.get("server") or "127.0.0.1:9987").strip()
     server_password = (payload.get("server_password") or "").strip()
     channel_password = (payload.get("channel_password") or "").strip()
+    static_name = bool(payload.get("static_name", False))
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Nama bot dan channel harus diisi.")
 
@@ -4021,6 +4022,7 @@ async def save_teamspeak_bot_endpoint(payload: dict):
         "server": server,
         "server_password": server_password,
         "channel_password": channel_password,
+        "static_name": static_name,
         "status": "STATIONED"
     }
     bots.append(bot_entry)

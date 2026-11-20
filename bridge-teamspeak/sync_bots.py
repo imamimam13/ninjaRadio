@@ -111,6 +111,7 @@ send_stats = false
         b_tg = int(b.get("tg") if b.get("tg") is not None else 1025)
         b_slot = int(b.get("slot") if b.get("slot") is not None else (1 if b_tg in [510, 5108, 91] else 2))
         rx_p = int(b.get("rx_port", 12352 + idx))
+        b_static = bool(b.get("static_name", False) or b.get("static", False) or b.get("is_static", False))
 
         # Format channel parameter for TS3AudioBot:
         # - Always use the channel name directly if a text name is provided (100% portable across any TS3 server/VPS without hardcoded CID mismatch).
@@ -145,6 +146,7 @@ slot={b_slot}
 rx_port={rx_p}
 name={b_name}
 server={target_server}
+static_name={"true" if b_static else "false"}
 """
         with open(os.path.join(b_dir, "target.cfg"), "w", encoding="utf-8") as f:
             f.write(target_cfg)

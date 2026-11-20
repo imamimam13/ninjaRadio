@@ -41,6 +41,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     private string defaultBotName = "TS3-GW-BRIDISV";
 
     // Callsign Carry-Over & Nickname Morphing State
+    private bool staticNickname = false;
     private string currentMorphedCall = null;
     private DateTime lastRxAudioTime = DateTime.MinValue;
     private DateTime lastRxLogTime = DateTime.MinValue;
@@ -144,7 +145,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         if (rxPort <= 0) rxPort = GetRxPortForTg(targetTg);
         StartRxListener();
 
-        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}, ClientId={fullClient?.ClientId}");
+        Console.WriteLine($"[NinjaRadioBridge] ✓ Bot '{defaultBotName}' initialized for TG {targetTg} (TS{targetSlot}) -> Core {coreEndPoint}, listening on UDP {rxPort}, ClientId={fullClient?.ClientId}, StaticMode={staticNickname}");
     }
 
     private int GetRxPortForTg(int tg)
@@ -189,6 +190,10 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                             if (k == "tg" && int.TryParse(v, out int parsedTg)) { targetTg = parsedTg; foundCfg = true; }
                             else if (k == "slot" && int.TryParse(v, out int parsedSlot)) targetSlot = parsedSlot;
                             else if (k == "rx_port" && int.TryParse(v, out int parsedPort)) rxPort = parsedPort;
+                            else if (k == "static_name" || k == "static_nickname" || k == "static")
+                            {
+                                staticNickname = v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1";
+                            }
                         }
                     }
                     if (foundCfg)
@@ -328,8 +333,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
             {
                 lastRxAudioTime = DateTime.UtcNow;
 
-                // Callsign Carry-Over: dynamically morph bot nickname to active caller
-                if (!string.IsNullOrEmpty(callsign) && currentMorphedCall != callsign)
+                // Callsign Carry-Over: dynamically morph bot nickname to active caller (if dynamic morphing enabled)
+                if (!staticNickname && !string.IsNullOrEmpty(callsign) && currentMorphedCall != callsign)
                 {
                     currentMorphedCall = callsign;
                     string newName = $"[DMR] {callsign}";
@@ -362,7 +367,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
             else
             {
                 // Unkey: Revert bot nickname back to standard gateway identity
-                if (currentMorphedCall != null)
+                if (!staticNickname && currentMorphedCall != null)
                 {
                     currentMorphedCall = null;
                     SafeChangeNickname(defaultBotName);
@@ -485,7 +490,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
 
         // 2. RX Callsign Carry-Over Watchdog: Revert nickname if no RX packet received for 1200ms
-        if (currentMorphedCall != null && (now - lastRxAudioTime).TotalMilliseconds >= 1200)
+        if (!staticNickname && currentMorphedCall != null && (now - lastRxAudioTime).TotalMilliseconds >= 1200)
         {
             currentMorphedCall = null;
             SafeChangeNickname(defaultBotName);
