@@ -3906,8 +3906,8 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   required
                   placeholder="Contoh: TS3-GW-BRIDISV"
                   value={newTs3BotName}
-                  onChange={(e) => setNewTs3BotName(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                  onChange={(e) => setNewTs3BotName(e.target.value.toUpperCase())}
+                  className="w-full px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none uppercase"
                 />
               </div>
 
