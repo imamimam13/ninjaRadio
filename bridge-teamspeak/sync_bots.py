@@ -148,14 +148,36 @@ ip = [ "127.0.0.1", "::1" ]
         # Outgoing bot name: enforce ALL CAPITAL LETTERS across TeamSpeak
         b_name_upper = b_name.upper()
 
+        # Preserve existing cryptographic identity from bot.toml (CRITICAL: prevents losing Sysop Server Group/permissions on restart/rebuild)
+        existing_identity = ""
+        bot_toml_path = os.path.join(b_dir, "bot.toml")
+        if os.path.exists(bot_toml_path):
+            try:
+                with open(bot_toml_path, "r", encoding="utf-8") as f:
+                    old_toml = f.read()
+                if "[connect.identity]" in old_toml:
+                    existing_identity = "\n" + old_toml[old_toml.find("[connect.identity]"):].strip() + "\n"
+                elif "identity" in old_toml.lower():
+                    ident_blocks = []
+                    capture = False
+                    for line in old_toml.splitlines():
+                        if "identity" in line.lower():
+                            capture = True
+                        if capture:
+                            ident_blocks.append(line)
+                    if ident_blocks:
+                        existing_identity = "\n" + "\n".join(ident_blocks).strip() + "\n"
+            except Exception as ex:
+                print(f"[TS3-Bridge] Note checking old bot.toml identity: {ex}")
+
         bot_toml = f"""run = true
 
 [connect]
 address = "{target_server}"
 name = "{b_name_upper}"
 channel = "{channel_setting}"
-{server_pw_line}{channel_pw_line}"""
-        with open(os.path.join(b_dir, "bot.toml"), "w", encoding="utf-8") as f:
+{server_pw_line}{channel_pw_line}{existing_identity}"""
+        with open(bot_toml_path, "w", encoding="utf-8") as f:
             f.write(bot_toml)
 
         # Write target.cfg for NinjaRadioBridge.cs plugin
