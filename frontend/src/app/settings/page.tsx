@@ -903,6 +903,11 @@ export default function SettingsPage() {
   const [newTs3BotStaticName, setNewTs3BotStaticName] = useState(false);
   const [availableSvxBots, setAvailableSvxBots] = useState<any[]>([]);
 
+  // 1-Click Live Room Switcher
+  const [quickMoveBot, setQuickMoveBot] = useState<TeamSpeakBotBridge | null>(null);
+  const [quickMoveCustomRoom, setQuickMoveCustomRoom] = useState("");
+  const [isMovingLive, setIsMovingLive] = useState(false);
+
   const fetchAvailableSvxBots = async () => {
     try {
       const res = await fetch("/api/svxlink/bots");
@@ -1040,6 +1045,34 @@ export default function SettingsPage() {
       }
     } catch {
       fetchTs3Bots();
+    }
+  };
+
+  const handleQuickMoveTs3Bot = async (botName: string, channelName: string, password: string = "") => {
+    if (!botName || !channelName) return;
+    setIsMovingLive(true);
+    // Optimistic UI update so room reflects immediately on screen
+    setTs3Bots((prev) =>
+      prev.map((b) => ((b.name || "").toUpperCase() === botName.toUpperCase() ? { ...b, channel: channelName } : b))
+    );
+    try {
+      const res = await fetch(`/api/teamspeak/bots/${encodeURIComponent(botName)}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: channelName, password }),
+      });
+      if (res.ok) {
+        beepPlayer?.playTalkGrant();
+        setQuickMoveBot(null);
+        setQuickMoveCustomRoom("");
+        fetchTs3Bots();
+      } else {
+        fetchTs3Bots();
+      }
+    } catch {
+      fetchTs3Bots();
+    } finally {
+      setIsMovingLive(false);
     }
   };
 
@@ -2374,6 +2407,17 @@ export default function SettingsPage() {
                               <Radio className="w-2.5 h-2.5 text-cyan-400" /> Paired: {b.svx_bot}
                             </span>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuickMoveBot(b);
+                              setQuickMoveCustomRoom(b.channel || "");
+                            }}
+                            className="px-2 py-0.5 rounded text-[9px] font-mono font-bold bg-cyan-950/90 text-cyan-300 border border-cyan-600 hover:bg-cyan-800 transition-all flex items-center gap-1 cursor-pointer select-none shadow-sm"
+                            title="Pindah Ruangan Live (1-Klik)"
+                          >
+                            🚀 Pindah Room
+                          </button>
                           <button
                             type="button"
                             onClick={() => handleToggleTs3BotStatic(b)}
@@ -4088,6 +4132,107 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL LIVE ROOM SWITCHER (1-KLIK PINDAH ROOM) */}
+      {quickMoveBot && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-[#0b121e] border border-cyan-500/50 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/50 flex items-center justify-center text-cyan-400 font-bold">
+                  🚀
+                </div>
+                <div>
+                  <h3 className="font-heading font-bold text-white text-base">Live Switcher: Pindah Room</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">
+                    Bot: <span className="text-cyan-300 font-bold">{quickMoveBot.name}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuickMoveBot(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-900/60 rounded-xl p-3 border border-slate-800 text-xs space-y-1">
+              <div className="flex justify-between text-slate-400">
+                <span>Server TS3:</span>
+                <span className="font-mono text-purple-300 font-semibold">{quickMoveBot.server || "127.0.0.1:9987"}</span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Room Aktif Saat Ini:</span>
+                <span className="font-mono text-emerald-400 font-bold">{quickMoveBot.channel}</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <span>⚡ Pilih Cepat (1-Klik Langsung Pindah):</span>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { name: "INDONESIA", desc: "Ruang Utama", icon: "🇮🇩" },
+                  { name: "INDONESIA RX", desc: "Pantau / Tamu", icon: "🎧" },
+                  { name: "AUDIO TEST", desc: "Uji Suara", icon: "🔊" },
+                  { name: "BERANDA", desc: "Lobby Default", icon: "🏠" },
+                ].map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    disabled={isMovingLive}
+                    onClick={() => handleQuickMoveTs3Bot(quickMoveBot.name, preset.name)}
+                    className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                      quickMoveBot.channel === preset.name
+                        ? "bg-cyan-950/80 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400"
+                        : "bg-[#05080f] border-slate-800 hover:border-cyan-500/70 hover:bg-slate-850 text-slate-300"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="font-bold text-xs flex items-center gap-1.5 text-white">
+                        <span>{preset.icon}</span> {preset.name}
+                      </span>
+                      {quickMoveBot.channel === preset.name && (
+                        <span className="text-[9px] px-1 py-0.2 bg-cyan-500 text-black font-black rounded">AKTIF</span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1">{preset.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 space-y-2">
+              <label className="text-xs font-semibold text-slate-300">
+                ✏️ Atau Ketik Nama / Channel ID Manual:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Contoh: INDONESIA, 24, atau Nama/Subchannel"
+                  value={quickMoveCustomRoom}
+                  onChange={(e) => setQuickMoveCustomRoom(e.target.value)}
+                  className="flex-1 px-3 py-2 bg-[#05080f] border border-slate-700 focus:border-cyan-400 rounded-xl text-white font-mono text-xs outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={isMovingLive || !quickMoveCustomRoom.trim()}
+                  onClick={() => handleQuickMoveTs3Bot(quickMoveBot.name, quickMoveCustomRoom.trim())}
+                  className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-bold text-xs rounded-xl transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
+                >
+                  {isMovingLive ? "Pindah..." : "Pindah"}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                Bot akan langsung melompat ke channel yang dipilih secara instan tanpa perlu restart daemon.
+              </p>
+            </div>
           </div>
         </div>
       )}

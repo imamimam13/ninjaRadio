@@ -4054,6 +4054,76 @@ async def delete_teamspeak_bot_endpoint(bot_name: str):
     return {"status": "SUCCESS", "bots": bots}
 
 
+@router.post("/teamspeak/bots/{bot_name}/move")
+async def move_teamspeak_bot_endpoint(bot_name: str, payload: dict):
+    """Instantly moves an active TeamSpeak 3 bot to target channel and persists config."""
+    import json, urllib.request, urllib.parse
+    cfg = read_config_file()
+    bots = list(cfg.get("teamspeak_bots", DEFAULT_TEAMSPEAK_BOTS))
+    clean_name = bot_name.strip().upper()
+    target_channel = (payload.get("channel") or "").strip()
+    target_password = (payload.get("password") or "").strip()
+
+    if not target_channel:
+        raise HTTPException(status_code=400, detail="Target channel tidak boleh kosong.")
+
+    matched_bot = None
+    for b in bots:
+        if (b.get("name") or "").strip().upper() == clean_name:
+            b["channel"] = target_channel
+            if target_password:
+                b["channel_password"] = target_password
+            matched_bot = b
+            break
+
+    if not matched_bot:
+        raise HTTPException(status_code=404, detail=f"Bot '{bot_name}' tidak ditemukan.")
+
+    # Save to config.json
+    cfg["teamspeak_bots"] = bots
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to update config.json: {e}")
+
+    # Dispatch live move command to TS3AudioBot Web API on localhost:58913
+    api_result = "Config updated"
+    try:
+        list_url = "http://127.0.0.1:58913/api/bot/list"
+        req = urllib.request.Request(list_url, headers={"User-Agent": "NinjaRadio-Backend"})
+        resp = json.loads(urllib.request.urlopen(req, timeout=2).read().decode())
+
+        target_bid = None
+        for b_inst in resp:
+            inst_name = str(b_inst.get("Name") or "").strip().upper()
+            inst_id = b_inst.get("Id")
+            if inst_name == clean_name or str(inst_id) == clean_name.lower():
+                target_bid = inst_id
+                break
+        if target_bid is None and len(resp) == 1:
+            target_bid = resp[0].get("Id", 0)
+
+        if target_bid is not None:
+            # If target_channel is a numeric CID like '24' or '/24', pass clean integer
+            dest = target_channel.lstrip("/") if (target_channel.isdigit() or (target_channel.startswith("/") and target_channel[1:].isdigit())) else target_channel
+            dest_enc = urllib.parse.quote(str(dest).strip(), safe="")
+            move_url = f"http://127.0.0.1:58913/api/bot/use/{target_bid}/(/bot/move/{dest_enc})"
+            if target_password:
+                pw_enc = urllib.parse.quote(str(target_password).strip(), safe="")
+                move_url = f"http://127.0.0.1:58913/api/bot/use/{target_bid}/(/bot/move/{dest_enc}/{pw_enc})"
+
+            move_req = urllib.request.Request(move_url, headers={"User-Agent": "NinjaRadio-Backend"})
+            move_res = urllib.request.urlopen(move_req, timeout=3).read().decode()
+            api_result = f"Live moved via Web API (Bot {target_bid}): {move_res}"
+            logger.info(f"[TS3 Live Move] {clean_name} -> '{target_channel}' (result: {move_res})")
+    except Exception as ex:
+        api_result = f"Config saved, note live move: {ex}"
+        logger.warning(f"[TS3 Live Move Note] {ex}")
+
+    return {"status": "SUCCESS", "channel": target_channel, "detail": api_result, "bots": bots}
+
+
 async def run_callbook_autosync_loop():
     """Periodically syncs enabled CallbookSyncSource URLs in the background."""
     from backend.app.core.database import async_session_maker
