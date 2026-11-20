@@ -134,11 +134,14 @@ send_stats = false
         server_pw_line = f'server_password = {{ pw = "{server_pw}" }}\n' if server_pw else ""
         channel_pw_line = f'channel_password = {{ pw = "{channel_pw}" }}\n' if channel_pw else ""
 
+        # Outgoing bot name: enforce ALL CAPITAL LETTERS across TeamSpeak
+        b_name_upper = b_name.upper()
+
         bot_toml = f"""run = true
 
 [connect]
 address = "{target_server}"
-name = "{b_name}"
+name = "{b_name_upper}"
 channel = "{channel_setting}"
 {server_pw_line}{channel_pw_line}"""
         with open(os.path.join(b_dir, "bot.toml"), "w", encoding="utf-8") as f:
@@ -148,7 +151,7 @@ channel = "{channel_setting}"
         target_cfg = f"""tg={b_tg}
 slot={b_slot}
 rx_port={rx_p}
-name={b_name}
+name={b_name_upper}
 server={target_server}
 static_name={"true" if b_static else "false"}
 """

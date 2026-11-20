@@ -39,6 +39,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     private int targetSlot = 2;
     private string botName = "";
     private string defaultBotName = "TS3-GW-BRIDISV";
+    private string configuredBotName = null;
 
     // Callsign Carry-Over & Nickname Morphing State
     private bool staticNickname = false;
@@ -94,9 +95,13 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
         catch { }
 
-        if (!string.IsNullOrEmpty(bot.Name))
+        if (!string.IsNullOrEmpty(configuredBotName))
         {
-            defaultBotName = bot.Name;
+            defaultBotName = configuredBotName.ToUpper().Trim();
+        }
+        else if (!string.IsNullOrEmpty(bot.Name))
+        {
+            defaultBotName = bot.Name.ToUpper().Trim();
         }
         else if (targetTg == 1025) defaultBotName = "TS3-GW-BRIDISV";
         else if (targetTg == 510990) defaultBotName = "TS3-GW-NINJA";
@@ -104,7 +109,9 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         else if (targetTg == 5109) defaultBotName = "TS3-GW-NUSANTARA";
         else defaultBotName = $"TS3-GW-TG{targetTg}";
 
-        // Ensure bot is set to clean default name initially
+        defaultBotName = defaultBotName.ToUpper().Trim();
+
+        // Ensure bot is set to clean default name initially (enforcing uppercase)
         SafeChangeNickname(defaultBotName);
 
         decoder = OpusDecoder.Create(8000, 1);
@@ -190,6 +197,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                             if (k == "tg" && int.TryParse(v, out int parsedTg)) { targetTg = parsedTg; foundCfg = true; }
                             else if (k == "slot" && int.TryParse(v, out int parsedSlot)) targetSlot = parsedSlot;
                             else if (k == "rx_port" && int.TryParse(v, out int parsedPort)) rxPort = parsedPort;
+                            else if (k == "name" && !string.IsNullOrEmpty(v)) configuredBotName = v.ToUpper().Trim();
                             else if (k == "static_name" || k == "static_nickname" || k == "static")
                             {
                                 staticNickname = v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1";
@@ -297,6 +305,10 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
     private void SafeChangeNickname(string newName)
     {
+        // Enforce ALL CAPITAL LETTERS for outgoing TeamSpeak 3 bot
+        newName = (newName ?? "").ToUpper().Trim();
+        if (string.IsNullOrEmpty(newName)) return;
+
         // Absolute Static Mode Guardrail: If static mode is enabled, never allow morphing to any caller name
         if (staticNickname && newName != defaultBotName)
         {
