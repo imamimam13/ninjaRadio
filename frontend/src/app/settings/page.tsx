@@ -1007,6 +1007,42 @@ export default function SettingsPage() {
     } catch {}
   };
 
+  const handleToggleTs3BotStatic = async (bot: TeamSpeakBotBridge) => {
+    if (!isAdminUnlocked) {
+      handleToggleAdminMode();
+      return;
+    }
+    const targetStatic = !Boolean(bot.static_name);
+    // Optimistic UI update so button flips immediately
+    setTs3Bots(prev => prev.map(x => (x.name || "").toUpperCase() === (bot.name || "").toUpperCase() ? { ...x, static_name: targetStatic } : x));
+    try {
+      const res = await fetch("/api/teamspeak/bots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: bot.name,
+          channel: bot.channel,
+          tg: bot.tg,
+          slot: bot.slot,
+          svx_bot: bot.svx_bot || "",
+          server: bot.server || "127.0.0.1:9987",
+          server_password: bot.server_password || "",
+          channel_password: bot.channel_password || "",
+          static_name: targetStatic
+        }),
+      });
+      if (res.ok) {
+        fetchTs3Bots();
+        beepPlayer?.playTalkGrant();
+      } else {
+        // Rollback on failure
+        fetchTs3Bots();
+      }
+    } catch {
+      fetchTs3Bots();
+    }
+  };
+
   useEffect(() => {
     if (!isListeningKey) return;
 
@@ -2338,15 +2374,18 @@ export default function SettingsPage() {
                               <Radio className="w-2.5 h-2.5 text-cyan-400" /> Paired: {b.svx_bot}
                             </span>
                           )}
-                          {b.static_name ? (
-                            <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800 text-[9px] font-mono font-semibold" title="Mode Nama Statis: nama bot tidak berubah saat transmit dari DMR/radio">
-                              🔒 Statis
-                            </span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-800 text-[9px] font-mono font-semibold" title="Mode Dinamis: nama bot berubah mengikuti callsign pemanggil">
-                              🔄 Dinamis
-                            </span>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleTs3BotStatic(b)}
+                            title={b.static_name ? "Klik untuk ubah ke Dinamis (Nama berganti saat transmit)" : "Klik untuk ubah ke Statis (Nama tetap permanen)"}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border transition-all flex items-center gap-1 cursor-pointer select-none ${
+                              b.static_name
+                                ? "bg-emerald-950/90 text-emerald-300 border-emerald-600 hover:bg-emerald-800 shadow-sm"
+                                : "bg-indigo-950/90 text-indigo-300 border-indigo-600 hover:bg-indigo-800 shadow-sm"
+                            }`}
+                          >
+                            {b.static_name ? "🔒 Statis (Klik Ubah)" : "🔄 Dinamis (Klik Ubah)"}
+                          </button>
                         </div>
                       </div>
                       {isAdminUnlocked && (

@@ -4008,11 +4008,15 @@ async def save_teamspeak_bot_endpoint(payload: dict):
     server = (payload.get("server") or "127.0.0.1:9987").strip()
     server_password = (payload.get("server_password") or "").strip()
     channel_password = (payload.get("channel_password") or "").strip()
-    static_name = bool(payload.get("static_name", False))
+    raw_static = payload.get("static_name", False)
+    if isinstance(raw_static, str):
+        static_name = raw_static.strip().lower() in ["true", "1", "yes"]
+    else:
+        static_name = bool(raw_static)
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Nama bot dan channel harus diisi.")
 
-    bots = [b for b in bots if b.get("name") != name]
+    bots = [b for b in bots if (b.get("name") or "").strip().upper() != name]
     bot_entry = {
         "name": name,
         "channel": channel,

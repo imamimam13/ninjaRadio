@@ -297,6 +297,12 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
     private void SafeChangeNickname(string newName)
     {
+        // Absolute Static Mode Guardrail: If static mode is enabled, never allow morphing to any caller name
+        if (staticNickname && newName != defaultBotName)
+        {
+            return;
+        }
+
         try
         {
             if (botScheduler != null)
