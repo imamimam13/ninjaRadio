@@ -877,6 +877,7 @@ export default function SettingsPage() {
     server_password?: string;
     channel_password?: string;
     svx_bot?: string;
+    static_name?: boolean;
     status: string;
   }
 
@@ -899,6 +900,7 @@ export default function SettingsPage() {
   const [newTs3BotTg, setNewTs3BotTg] = useState(1025);
   const [newTs3BotSlot, setNewTs3BotSlot] = useState(2);
   const [newTs3BotSvx, setNewTs3BotSvx] = useState("");
+  const [newTs3BotStaticName, setNewTs3BotStaticName] = useState(false);
   const [availableSvxBots, setAvailableSvxBots] = useState<any[]>([]);
 
   const fetchAvailableSvxBots = async () => {
@@ -982,7 +984,8 @@ export default function SettingsPage() {
           svx_bot: newTs3BotSvx,
           server: newTs3BotServer || "127.0.0.1:9987",
           server_password: newTs3BotServerPw,
-          channel_password: newTs3BotChannelPw
+          channel_password: newTs3BotChannelPw,
+          static_name: newTs3BotStaticName
         }),
       });
       if (res.ok) {
@@ -2301,6 +2304,7 @@ export default function SettingsPage() {
                         setNewTs3BotTg(1025);
                         setNewTs3BotSlot(2);
                         setNewTs3BotSvx("");
+                        setNewTs3BotStaticName(false);
                         fetchAvailableSvxBots();
                         setShowAddTs3BotModal(true);
                       }}
@@ -2334,6 +2338,15 @@ export default function SettingsPage() {
                               <Radio className="w-2.5 h-2.5 text-cyan-400" /> Paired: {b.svx_bot}
                             </span>
                           )}
+                          {b.static_name ? (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800 text-[9px] font-mono font-semibold" title="Mode Nama Statis: nama bot tidak berubah saat transmit dari DMR/radio">
+                              🔒 Statis
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-800 text-[9px] font-mono font-semibold" title="Mode Dinamis: nama bot berubah mengikuti callsign pemanggil">
+                              🔄 Dinamis
+                            </span>
+                          )}
                         </div>
                       </div>
                       {isAdminUnlocked && (
@@ -2349,6 +2362,7 @@ export default function SettingsPage() {
                               setNewTs3BotTg(b.tg || 1025);
                               setNewTs3BotSlot(b.slot || 2);
                               setNewTs3BotSvx(b.svx_bot || "");
+                              setNewTs3BotStaticName(Boolean(b.static_name));
                               fetchAvailableSvxBots();
                               setShowAddTs3BotModal(true);
                             }}
@@ -3999,6 +4013,24 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                     <option value={2}>Slot 2</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="p-3 bg-purple-950/30 border border-purple-800/40 rounded-xl space-y-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={newTs3BotStaticName}
+                    onChange={(e) => setNewTs3BotStaticName(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-700 text-purple-600 focus:ring-purple-500 bg-[#05080f] accent-purple-500"
+                  />
+                  <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                    <span>🔒 Mode Nama Statis</span>
+                    <span className="text-[10px] text-purple-300 font-normal">(Anti Berubah-ubah)</span>
+                  </span>
+                </label>
+                <p className="text-[10px] text-slate-400 pl-6 leading-relaxed">
+                  Jika diaktifkan, bot akan tetap menggunakan nama aslinya (misal: <code>{newTs3BotName || "TS3-GW-..."}</code>) dan tidak berubah menjadi <code>[DMR] CALLSIGN</code> saat ada yang berbicara dari radio, mencegah suara notifikasi / spam di TS3.
+                </p>
               </div>
 
               <div className="flex gap-2 pt-2 border-t border-slate-800">
