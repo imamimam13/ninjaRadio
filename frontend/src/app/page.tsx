@@ -365,12 +365,20 @@ export default function DashboardPage() {
     connected_peers: 0,
     active_bridges: 0,
     cpu_usage: 0,
-    ram_usage: 0
+    ram_usage: 0,
+    web_clients: 1,
+    svxlink_clients: 0,
+    teamspeak_clients: 0,
+    mumble_clients: 0,
+    total_clients: 0,
+    outgoing_peers: 0,
+    crisscross_bridges: 0,
   });
 
   const [showClientsModal, setShowClientsModal] = useState(false);
   const [clientList, setClientList] = useState<any[]>([]);
   const [isLoadingClients, setIsLoadingClients] = useState(false);
+  const [clientProtocolFilter, setClientProtocolFilter] = useState<string>("ALL");
 
   const fetchClients = () => {
     setIsLoadingClients(true);
@@ -643,17 +651,19 @@ export default function DashboardPage() {
             className="bg-[#0c1322] border border-cyan-900/40 hover:border-cyan-400 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all cursor-pointer group"
           >
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span className="font-bold group-hover:text-cyan-300 transition-colors">KLIEN WEB & HOTSPOT</span>
+              <span className="font-bold group-hover:text-cyan-300 transition-colors">KLIEN & PERANGKAT TERHUBUNG</span>
               <Wifi className="w-4 h-4 text-cyan-400 group-hover:animate-pulse" />
             </div>
             <div className="mt-3 flex items-baseline justify-between">
-              <span className="text-3xl font-black text-white font-mono">{(stats as any).web_clients || stats.connected_hotspots || 1}</span>
+              <span className="text-3xl font-black text-white font-mono">
+                {(stats as any).total_clients || (stats as any).web_clients || stats.connected_hotspots || 1}
+              </span>
               <span className="text-[10px] text-cyan-300 font-mono font-bold px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-800 flex items-center gap-1 group-hover:bg-cyan-900 transition-colors">
                 🔍 Cek Detail
               </span>
             </div>
             <div className="text-[10px] text-slate-500 font-mono mt-1">
-              {(stats as any).web_clients || 1} Sesi Terhubung (Klik untuk Lihat)
+              {(stats as any).total_clients || (stats as any).web_clients || 1} Sesi (Web, MMDVM, SVX, TS3, Mumble)
             </div>
           </div>
 
@@ -663,26 +673,32 @@ export default function DashboardPage() {
               <Layers className="w-4 h-4 text-purple-400" />
             </div>
             <div className="mt-3 flex items-baseline justify-between">
-              <span className="text-3xl font-black text-white font-mono">{stats.active_bridges}</span>
+              <span className="text-3xl font-black text-white font-mono">
+                {(stats as any).crisscross_bridges || stats.active_bridges}
+              </span>
               <span className="text-[11px] text-purple-400 font-mono font-bold px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-800">
                 ACTIVE
               </span>
             </div>
-            <div className="text-[10px] text-slate-500 font-mono mt-1">YSF / P25 / ASL / CB / Mumble</div>
+            <div className="text-[10px] text-slate-500 font-mono mt-1">SvxLink · TS3 · Mumble · Zello · DMR</div>
           </div>
 
           <div className="bg-[#0c1322] border border-cyan-900/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-cyan-500/50 transition-all">
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span className="font-bold">OPENBRIDGE PEERS</span>
+              <span className="font-bold">PEERS & OUTGOING LINKS</span>
               <Globe className="w-4 h-4 text-amber-400" />
             </div>
             <div className="mt-3 flex items-baseline justify-between">
-              <span className="text-3xl font-black text-white font-mono">{stats.connected_peers}</span>
+              <span className="text-3xl font-black text-white font-mono">
+                {(stats.connected_peers || 0) + ((stats as any).outgoing_peers || 0)}
+              </span>
               <span className="text-[11px] text-amber-400 font-mono font-bold px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800">
                 LINKED
               </span>
             </div>
-            <div className="text-[10px] text-slate-500 font-mono mt-1">FreeDMR & BrandMeister</div>
+            <div className="text-[10px] text-slate-500 font-mono mt-1">
+              FreeDMR ({stats.connected_peers || 0}) · Outgoing ({ (stats as any).outgoing_peers || 0})
+            </div>
           </div>
 
           <div className="bg-[#0c1322] border border-cyan-900/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-cyan-500/50 transition-all">
@@ -911,16 +927,16 @@ export default function DashboardPage() {
       {/* CONNECTED CLIENTS & HOTSPOTS MODAL */}
       {showClientsModal && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0e1626] border-2 border-cyan-500/60 rounded-3xl max-w-2xl w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+          <div className="bg-[#0e1626] border-2 border-cyan-500/60 rounded-3xl max-w-4xl w-full p-5 sm:p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-cyan-900/40 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-cyan-500/20 border border-cyan-500 flex items-center justify-center">
                   <Wifi className="w-5 h-5 text-cyan-400" />
                 </div>
                 <div>
-                  <h3 className="font-heading font-black text-sm text-white">Daftar Klien & Perangkat Terhubung</h3>
+                  <h3 className="font-heading font-black text-sm text-white">Daftar Klien & Perangkat Terhubung (Multi-Protocol)</h3>
                   <p className="text-[11px] font-mono text-slate-400">
-                    {clientList.length} sesi browser & client aktif memantau server
+                    {clientList.length} sesi & link terhubung (Web, MMDVM, SvxLink, TeamSpeak, Mumble, DVSwitch, Outgoing)
                   </p>
                 </div>
               </div>
@@ -943,55 +959,140 @@ export default function DashboardPage() {
               </div>
             </div>
 
+            {/* Protocol Filter Tabs */}
+            <div className="flex flex-wrap gap-1.5 pb-1">
+              {[
+                { id: "ALL", label: `Semua (${clientList.length})` },
+                { id: "Web", label: `🌐 Web (${clientList.filter(c => (c.protocol || "Web") === "Web").length})` },
+                { id: "MMDVM", label: `📡 MMDVM (${clientList.filter(c => c.protocol === "MMDVM").length})` },
+                { id: "SvxLink", label: `📻 SvxLink (${clientList.filter(c => c.protocol === "SvxLink").length})` },
+                { id: "TeamSpeak", label: `🎧 TeamSpeak (${clientList.filter(c => c.protocol === "TeamSpeak").length})` },
+                { id: "Mumble", label: `🎙️ Mumble (${clientList.filter(c => c.protocol === "Mumble").length})` },
+                { id: "DVSwitch", label: `📱 DVSwitch (${clientList.filter(c => c.protocol === "DVSwitch").length})` },
+                { id: "Outgoing", label: `🔗 Outgoing Link (${clientList.filter(c => c.protocol === "Outgoing").length})` },
+              ].map((tab) => {
+                const isActive = clientProtocolFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setClientProtocolFilter(tab.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono transition-all ${
+                      isActive
+                        ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/60 font-bold shadow"
+                        : "bg-slate-900/60 text-slate-400 hover:text-slate-200 border border-slate-800"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Client List Table */}
-            <div className="overflow-x-auto max-h-72 overflow-y-auto">
-              <table className="w-full text-left text-xs font-mono">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400 text-[11px]">
-                    <th className="py-2 px-2">Aplikasi / Halaman</th>
-                    <th className="py-2 px-2">Perangkat / OS</th>
-                    <th className="py-2 px-2">IP Address</th>
-                    <th className="py-2 px-2">Waktu Konek</th>
-                    <th className="py-2 px-2">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                  {clientList.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="py-6 text-center text-slate-500">
-                        Tidak ada sesi aktif saat ini.
-                      </td>
-                    </tr>
-                  ) : (
-                    clientList.map((client, idx) => (
-                      <tr key={idx} className="hover:bg-slate-800/30">
-                        <td className="py-2.5 px-2 font-bold text-cyan-300">
-                          {client.app}
-                        </td>
-                        <td className="py-2.5 px-2 text-slate-300">
-                          {client.device}
-                        </td>
-                        <td className="py-2.5 px-2 font-mono text-slate-400">
-                          <code>{client.ip}</code>
-                        </td>
-                        <td className="py-2.5 px-2 text-slate-400">
-                          {formatLastHeardTime(client.connected_at)}
-                        </td>
-                        <td className="py-2.5 px-2">
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
-                            🟢 Online
-                          </span>
-                        </td>
+            <div className="overflow-x-auto max-h-80 overflow-y-auto">
+              {(() => {
+                const filteredClients = clientProtocolFilter === "ALL"
+                  ? clientList
+                  : clientList.filter(c => (c.protocol || "Web") === clientProtocolFilter);
+
+                const getProtocolBadge = (proto: string = "Web") => {
+                  switch (proto) {
+                    case "MMDVM":
+                      return "bg-emerald-950/80 text-emerald-300 border-emerald-800";
+                    case "SvxLink":
+                      return "bg-indigo-950/80 text-indigo-300 border-indigo-800";
+                    case "TeamSpeak":
+                      return "bg-purple-950/80 text-purple-300 border-purple-800";
+                    case "Mumble":
+                      return "bg-pink-950/80 text-pink-300 border-pink-800";
+                    case "DVSwitch":
+                      return "bg-blue-950/80 text-blue-300 border-blue-800";
+                    case "Outgoing":
+                      return "bg-amber-950/80 text-amber-300 border-amber-800";
+                    default:
+                      return "bg-cyan-950/80 text-cyan-300 border-cyan-800";
+                  }
+                };
+
+                return (
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 text-[11px]">
+                        <th className="py-2 px-2">Protokol</th>
+                        <th className="py-2 px-2">Identitas / Callsign</th>
+                        <th className="py-2 px-2">Target / Saluran</th>
+                        <th className="py-2 px-2">Host / IP Address</th>
+                        <th className="py-2 px-2">Perangkat / Info</th>
+                        <th className="py-2 px-2">Status</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                      {filteredClients.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-6 text-center text-slate-500">
+                            Tidak ada sesi aktif untuk kategori protokol ini.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredClients.map((client, idx) => {
+                          const proto = client.protocol || "Web";
+                          return (
+                            <tr key={client.id || idx} className="hover:bg-slate-800/30">
+                              <td className="py-2.5 px-2">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getProtocolBadge(proto)}`}>
+                                  {proto === "Outgoing" ? "🔗 Outgoing" : proto}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-2 font-bold text-white">
+                                {client.callsign || client.name || "-"}
+                                {client.name && client.name !== client.callsign && (
+                                  <div className="text-[10px] text-slate-400 font-normal">
+                                    {client.name}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-2 font-bold text-cyan-300">
+                                {client.target || client.app || "-"}
+                              </td>
+                              <td className="py-2.5 px-2 font-mono text-slate-400">
+                                <code>{client.ip || "-"}</code>
+                              </td>
+                              <td className="py-2.5 px-2 text-slate-300 text-[11px]">
+                                {client.details || client.device || client.type || "-"}
+                              </td>
+                              <td className="py-2.5 px-2">
+                                {client.status === "ONLINE" ? (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                                    🟢 Online
+                                  </span>
+                                ) : client.status === "TALKING" ? (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800 animate-pulse">
+                                    🔴 PTT TX
+                                  </span>
+                                ) : client.status === "LINKED" ? (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-800">
+                                    🔵 Linked
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                                    🟡 {client.status || "Standby"}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                );
+              })()}
             </div>
 
             <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
               <span className="text-[10px] font-mono text-slate-500">
-                Data diperbarui secara real-time via WebSocket
+                Multi-protocol aggregated telemetry (Live DMR · SvxLink · TS3 · Mumble · Web · Outgoing Links)
               </span>
               <button
                 type="button"

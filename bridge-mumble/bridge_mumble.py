@@ -464,7 +464,7 @@ class BridgeApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path in ("/channels", "/channels/"):
+        if parsed.path in ("/channels", "/channels/", "/status", "/status/"):
             live_chs = get_live_murmur_channels()
             persist_live_channels_cache(live_chs)
             mappings = load_room_mappings()
@@ -486,10 +486,39 @@ class BridgeApiHandler(BaseHTTPRequestHandler):
                     "description": f"Murmur Channel {cname} (TG {tg})",
                     "isActive": True
                 })
+            active_bots = [
+                {
+                    "name": bot.bot_user,
+                    "channel": bot.room_name,
+                    "tg": bot.tg,
+                    "slot": bot.slot,
+                    "connected": bool(bot.mumble and bot.mumble.is_alive())
+                }
+                for bot in GATEWAY_POOL.values()
+            ]
+            mumble_users = []
+            for b in GATEWAY_POOL.values():
+                if getattr(b, "mumble", None) and getattr(b.mumble, "users", None):
+                    for u in list(b.mumble.users.values()):
+                        uname = u.get("name") if (isinstance(u, dict) or hasattr(u, "__getitem__")) else getattr(u, "name", None)
+                        if uname and not str(uname).startswith("NinjaBot-") and not any(bot.bot_user == uname for bot in GATEWAY_POOL.values()):
+                            if not any(mu["name"] == uname for mu in mumble_users):
+                                u_cid = u.get("channel_id") if (isinstance(u, dict) or hasattr(u, "__getitem__")) else getattr(u, "channel_id", 0)
+                                mumble_users.append({
+                                    "name": str(uname),
+                                    "channel_id": int(u_cid or 0)
+                                })
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "SUCCESS", "channels": result, "raw_channels": live_chs}).encode("utf-8"))
+            self.wfile.write(json.dumps({
+                "status": "SUCCESS",
+                "murmur_host": f"{MUMBLE_HOST}:{MUMBLE_PORT}",
+                "channels": result,
+                "raw_channels": live_chs,
+                "active_bots": active_bots,
+                "users": mumble_users
+            }).encode("utf-8"))
             return
 
         elif parsed.path in ("/logs", "/logs/"):
