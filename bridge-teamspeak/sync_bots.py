@@ -115,6 +115,8 @@ ip = [ "127.0.0.1", "::1" ]
         os.makedirs(b_dir, exist_ok=True)
 
         target_server = (b.get("server") or b.get("address") or "127.0.0.1:9987").strip()
+        if ":" not in target_server and target_server:
+            target_server = f"{target_server}:9987"
         is_local = (
             target_server.startswith("127.0.0.1")
             or "localhost" in target_server
