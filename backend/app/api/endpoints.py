@@ -4308,8 +4308,10 @@ async def get_teamspeak_bots_endpoint():
 
 @router.post("/teamspeak/bots")
 async def save_teamspeak_bot_endpoint(payload: dict):
-    """Adds a new stationed bot to TeamSpeak 3."""
+    """Adds a new stationed bot to TeamSpeak 3 and automatically provisions/links companion SvxLink Bot."""
     import json
+    import re
+    import httpx
     cfg = read_config_file()
     bots = list(cfg.get("teamspeak_bots", DEFAULT_TEAMSPEAK_BOTS))
     name = (payload.get("name") or "").strip().upper()
@@ -4328,13 +4330,54 @@ async def save_teamspeak_bot_endpoint(payload: dict):
     if not name or not channel:
         raise HTTPException(status_code=400, detail="Nama bot dan channel harus diisi.")
 
+    # Auto-Provision Companion SvxLink Bot (Multi-TG & Cross-Bridge Invariant)
+    svx_list = list(cfg.get("svxlink_bots", DEFAULT_SVXLINK_BOTS))
+    target_svx_name = svx_bot if (svx_bot and svx_bot != "auto") else None
+
+    # Check if a matching SvxLink bot already exists for this TG
+    existing_svx = None
+    if target_svx_name:
+        existing_svx = next((sb for sb in svx_list if str(sb.get("name", "")).upper() == target_svx_name.upper()), None)
+    if not existing_svx:
+        existing_svx = next((sb for sb in svx_list if int(sb.get("tg") or 0) == tg), None)
+
+    if existing_svx:
+        final_svx_bot = existing_svx.get("name", "")
+    else:
+        # Automatically generate a clean companion SvxLink bot name
+        clean_ch_tag = re.sub(r"[^A-Z0-9]", "", channel.upper())[:8] or str(tg)
+        candidate_name = f"SVX-{clean_ch_tag}"
+        idx = 1
+        while any(str(sb.get("name", "")).upper() == candidate_name for sb in svx_list):
+            candidate_name = f"SVX-{clean_ch_tag[:6]}-{idx}"
+            idx += 1
+        new_svx_entry = {
+            "name": candidate_name,
+            "channel": channel or f"TG {tg}",
+            "tg": tg,
+            "slot": slot,
+            "status": "ONLINE"
+        }
+        svx_list.append(new_svx_entry)
+        cfg["svxlink_bots"] = svx_list
+        final_svx_bot = candidate_name
+
+        # Trigger live sync to svxlink-bridge daemon
+        async def _notify_svxlink_sync():
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as cl:
+                    await cl.post("http://svxlink-bridge:12349/sync")
+            except Exception:
+                pass
+        asyncio.create_task(_notify_svxlink_sync())
+
     bots = [b for b in bots if (b.get("name") or "").strip().upper() != name]
     bot_entry = {
         "name": name,
         "channel": channel,
         "tg": tg,
         "slot": slot,
-        "svx_bot": svx_bot,
+        "svx_bot": final_svx_bot,
         "server": server,
         "server_password": server_password,
         "channel_password": channel_password,
@@ -4348,7 +4391,7 @@ async def save_teamspeak_bot_endpoint(payload: dict):
             json.dump(cfg, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to update config.json: {e}")
-    return {"status": "SUCCESS", "bots": bots}
+    return {"status": "SUCCESS", "bots": bots, "linked_svx_bot": final_svx_bot}
 
 
 @router.delete("/teamspeak/bots/{bot_name}")

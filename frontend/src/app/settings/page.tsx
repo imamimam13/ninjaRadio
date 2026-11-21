@@ -2372,7 +2372,7 @@ export default function SettingsPage() {
                         setNewTs3BotChannel(ts3Rooms[0]?.name || "TG 1025 - BRIDISV");
                         setNewTs3BotTg(1025);
                         setNewTs3BotSlot(2);
-                        setNewTs3BotSvx("");
+                        setNewTs3BotSvx("auto");
                         setNewTs3BotStaticName(false);
                         fetchAvailableSvxBots();
                         setShowAddTs3BotModal(true);
@@ -4067,7 +4067,7 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   <span className="flex items-center gap-1.5 text-cyan-400 font-bold">
                     <Radio className="w-3.5 h-3.5" /> Pasangkan ke Bot SvxLink
                   </span>
-                  <span className="text-[10px] text-slate-500 font-normal">Sinkronisasi TG Otomatis</span>
+                  <span className="text-[10px] text-emerald-400 font-mono font-bold">Auto-Sync TG 2 Arah</span>
                 </label>
                 <select
                   value={newTs3BotSvx}
@@ -4085,7 +4085,8 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   }}
                   className="w-full px-3 py-2 bg-[#05080f] border border-cyan-800/80 focus:border-cyan-400 rounded-xl text-cyan-300 font-bold outline-none"
                 >
-                  <option value="">-- Manual (Tanpa Pairing Otomatis) --</option>
+                  <option value="auto">✨ Otomatis Buat &amp; Pasangkan Bot SvxLink (Sinkron TG {newTs3BotTg})</option>
+                  <option value="">-- Manual (Tanpa Pairing SvxLink) --</option>
                   {availableSvxBots.map((sb, i) => (
                     <option key={i} value={sb.name}>
                       📡 {sb.name} (TG {sb.tg} · Slot {sb.slot} · Reflector: {sb.channel})
@@ -4093,7 +4094,7 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                   ))}
                 </select>
                 <p className="text-[10px] text-slate-500 mt-1">
-                  Pilih bot SvxLink yang ingin dipasangkan dengan room TS3 ini. Target TG &amp; Slot akan terisi otomatis.
+                  Pilih bot SvxLink yang ada, atau biarkan <strong>Otomatis</strong> agar sistem membuatkan bot SvxLink baru secara instan.
                 </p>
               </div>
 
@@ -4119,6 +4120,32 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
                     <option value={2}>Slot 2</option>
                   </select>
                 </div>
+              </div>
+
+              {/* LIVE CROSS-BRIDGE VISUAL ROUTE PREVIEW */}
+              <div className="p-3 rounded-xl bg-[#05080f] border border-cyan-900/60 space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold font-mono">
+                  <span className="text-cyan-400 flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-cyan-400" /> JALUR CROSS-BRIDGE (PREVIEW)
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+                    SINKRON OTOMATIS
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] font-mono bg-slate-900/70 p-2.5 rounded-lg border border-slate-800">
+                  <div className="text-purple-300 font-bold truncate">
+                    🎧 TS3: <span className="text-white">{newTs3BotChannel || "Room"}</span>
+                  </div>
+                  <div className="text-cyan-400 font-black flex items-center gap-1">
+                    ⇆ <span className="px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">DMR TG {newTs3BotTg} (S{newTs3BotSlot})</span> ⇆
+                  </div>
+                  <div className="text-emerald-300 font-bold truncate">
+                    📡 SvxLink: <span className="text-white">{newTs3BotSvx && newTs3BotSvx !== "auto" ? newTs3BotSvx : `SVX-${(newTs3BotChannel || `${newTs3BotTg}`).replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase() || "AUTO"}`}</span>
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-relaxed font-mono">
+                  💡 <strong>Jalur Jelas:</strong> Anda tidak perlu membuat bot SvxLink manual lagi. Bot SvxLink pendamping akan otomatis dibuat dan langsung tersambung 2 arah di TG {newTs3BotTg}.
+                </p>
               </div>
 
               <div className="p-3 bg-purple-950/30 border border-purple-800/40 rounded-xl space-y-1">
