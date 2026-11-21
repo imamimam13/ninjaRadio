@@ -892,6 +892,7 @@ export default function SettingsPage() {
   const [ts3RoomTopic, setTs3RoomTopic] = useState("");
 
   const [showAddTs3BotModal, setShowAddTs3BotModal] = useState(false);
+  const [editingTs3BotOriginalName, setEditingTs3BotOriginalName] = useState<string | null>(null);
   const [newTs3BotName, setNewTs3BotName] = useState("");
   const [newTs3BotServer, setNewTs3BotServer] = useState("127.0.0.1:9987");
   const [newTs3BotServerPw, setNewTs3BotServerPw] = useState("");
@@ -983,6 +984,7 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: newTs3BotName,
+          original_name: editingTs3BotOriginalName || newTs3BotName,
           channel: newTs3BotChannel,
           tg: newTs3BotTg,
           slot: newTs3BotSlot,
@@ -2365,6 +2367,7 @@ export default function SettingsPage() {
                     <button
                       type="button"
                       onClick={() => {
+                        setEditingTs3BotOriginalName(null);
                         setNewTs3BotName("");
                         setNewTs3BotServer("127.0.0.1:9987");
                         setNewTs3BotServerPw("");
@@ -2437,6 +2440,7 @@ export default function SettingsPage() {
                           <button
                             type="button"
                             onClick={() => {
+                              setEditingTs3BotOriginalName(b.name || "");
                               setNewTs3BotName(b.name || "");
                               setNewTs3BotServer(b.server || "127.0.0.1:9987");
                               setNewTs3BotServerPw(b.server_password || "");
@@ -3926,250 +3930,253 @@ PASSPHRASE: ${newPeerPassword || "password"}`}
 
       {/* ADD TS3 BOT MODAL */}
       {showAddTs3BotModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-[#0b121e] border-2 border-purple-500/50 rounded-2xl w-full max-w-lg max-h-[88vh] flex flex-col p-4 sm:p-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0b121e] border-2 border-purple-500/50 rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col p-4 shadow-2xl">
             {/* FIXED HEADER */}
             <div className="flex items-center justify-between border-b border-purple-900/30 pb-2.5 shrink-0">
               <h3 className="font-heading font-black text-sm text-white flex items-center gap-2">
                 <Bot className="w-4 h-4 text-purple-400" />
-                Tambah Bot Stationed TeamSpeak 3
+                {editingTs3BotOriginalName ? "Edit Bot Stationed TeamSpeak 3" : "Tambah Bot Stationed TeamSpeak 3"}
               </h3>
               <button
                 type="button"
                 onClick={() => setShowAddTs3BotModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* SCROLLABLE FORM BODY */}
-            <form onSubmit={handleAddTs3Bot} className="overflow-y-auto pr-1.5 space-y-3 text-xs font-mono flex-1 my-2">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {/* FORM CONTAINER (HEADER & FOOTER ARE PINNED, ONLY BODY SCROLLS) */}
+            <form onSubmit={handleAddTs3Bot} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              {/* SCROLLABLE FORM BODY */}
+              <div className="overflow-y-auto pr-1.5 space-y-3 text-xs font-mono flex-1 min-h-0 py-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Nama Bot TS3</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Contoh: TS3-GW-BRIDISV"
+                      value={newTs3BotName}
+                      onChange={(e) => setNewTs3BotName(e.target.value.toUpperCase())}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none uppercase"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                      <span>Server (Host:Port)</span>
+                      <button
+                        type="button"
+                        onClick={() => setNewTs3BotServer("127.0.0.1:9987")}
+                        className="text-[10px] text-cyan-400 hover:underline cursor-pointer"
+                        title="Set ke Server Lokal"
+                      >
+                        [Lokal]
+                      </button>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="127.0.0.1:9987 atau domain:port"
+                      value={newTs3BotServer}
+                      onChange={(e) => setNewTs3BotServer(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
+                    />
+                  </div>
+                </div>
+
                 <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">Nama Bot TS3</label>
+                  <label className="block text-slate-400 mb-1 font-semibold">Channel Standby</label>
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: TS3-GW-BRIDISV"
-                    value={newTs3BotName}
-                    onChange={(e) => setNewTs3BotName(e.target.value.toUpperCase())}
-                    className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none uppercase"
+                    list="ts3_rooms_datalist"
+                    placeholder="Contoh: 15 (Channel ID) atau Nama Channel"
+                    value={newTs3BotChannel}
+                    onChange={(e) => {
+                      const sel = e.target.value;
+                      setNewTs3BotChannel(sel);
+                      const r = ts3Rooms.find((x) => x.name === sel);
+                      if (r) {
+                        setNewTs3BotTg(r.targetTg || r.tg || 510);
+                        setNewTs3BotSlot(r.slot || 2);
+                      }
+                    }}
+                    className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
                   />
+                  <datalist id="ts3_rooms_datalist">
+                    {ts3Rooms.map((r, i) => (
+                      <option key={i} value={r.name}>
+                        TG {r.targetTg || r.tg} (Slot {r.slot || 2})
+                      </option>
+                    ))}
+                  </datalist>
+                  {ts3Rooms && ts3Rooms.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                      <span className="text-[10px] text-slate-400 font-semibold">Cepat:</span>
+                      {ts3Rooms.slice(0, 6).map((r, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => {
+                            setNewTs3BotChannel(r.name);
+                            setNewTs3BotTg(r.targetTg || r.tg || 510);
+                            setNewTs3BotSlot(r.slot || 2);
+                          }}
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition-all cursor-pointer ${
+                            newTs3BotChannel === r.name
+                              ? "bg-purple-900/80 border-purple-400 text-purple-200 ring-1 ring-purple-400"
+                              : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border-slate-700"
+                          }`}
+                        >
+                          📻 {r.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    💡 Tips: Masukkan <strong>Channel ID</strong> (angka, misal: <code>15</code>) jika channel berada di dalam subchannel/folder.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Password Server (Opsional)</label>
+                    <input
+                      type="password"
+                      placeholder="Kosongkan jika publik"
+                      value={newTs3BotServerPw}
+                      onChange={(e) => setNewTs3BotServerPw(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-slate-300 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Password Channel (Opsional)</label>
+                    <input
+                      type="password"
+                      placeholder="Kosongkan jika tanpa pw"
+                      value={newTs3BotChannelPw}
+                      onChange={(e) => setNewTs3BotChannelPw(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-slate-300 outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
-                    <span>Server (Host:Port)</span>
-                    <button
-                      type="button"
-                      onClick={() => setNewTs3BotServer("127.0.0.1:9987")}
-                      className="text-[10px] text-cyan-400 hover:underline cursor-pointer"
-                      title="Set ke Server Lokal"
-                    >
-                      [Lokal]
-                    </button>
+                    <span className="flex items-center gap-1.5 text-cyan-400 font-bold">
+                      <Radio className="w-3.5 h-3.5" /> Pasangkan ke Bot SvxLink
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-mono font-bold">Auto-Sync TG 2 Arah</span>
                   </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="127.0.0.1:9987 atau domain:port"
-                    value={newTs3BotServer}
-                    onChange={(e) => setNewTs3BotServer(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-400 mb-1 font-semibold">Channel Standby</label>
-                <input
-                  type="text"
-                  required
-                  list="ts3_rooms_datalist"
-                  placeholder="Contoh: 15 (Channel ID) atau Nama Channel"
-                  value={newTs3BotChannel}
-                  onChange={(e) => {
-                    const sel = e.target.value;
-                    setNewTs3BotChannel(sel);
-                    const r = ts3Rooms.find((x) => x.name === sel);
-                    if (r) {
-                      setNewTs3BotTg(r.targetTg || r.tg || 510);
-                      setNewTs3BotSlot(r.slot || 2);
-                    }
-                  }}
-                  className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-white outline-none"
-                />
-                <datalist id="ts3_rooms_datalist">
-                  {ts3Rooms.map((r, i) => (
-                    <option key={i} value={r.name}>
-                      TG {r.targetTg || r.tg} (Slot {r.slot || 2})
-                    </option>
-                  ))}
-                </datalist>
-                {ts3Rooms && ts3Rooms.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                    <span className="text-[10px] text-slate-400 font-semibold">Cepat:</span>
-                    {ts3Rooms.slice(0, 6).map((r, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onClick={() => {
-                          setNewTs3BotChannel(r.name);
-                          setNewTs3BotTg(r.targetTg || r.tg || 510);
-                          setNewTs3BotSlot(r.slot || 2);
-                        }}
-                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition-all cursor-pointer ${
-                          newTs3BotChannel === r.name
-                            ? "bg-purple-900/80 border-purple-400 text-purple-200 ring-1 ring-purple-400"
-                            : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border-slate-700"
-                        }`}
-                      >
-                        📻 {r.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <p className="text-[10px] text-slate-500 mt-1">
-                  💡 Tips: Masukkan <strong>Channel ID</strong> (angka, misal: <code>15</code>) jika channel berada di dalam subchannel/folder.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">Password Server (Opsional)</label>
-                  <input
-                    type="password"
-                    placeholder="Kosongkan jika publik"
-                    value={newTs3BotServerPw}
-                    onChange={(e) => setNewTs3BotServerPw(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-slate-300 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">Password Channel (Opsional)</label>
-                  <input
-                    type="password"
-                    placeholder="Kosongkan jika tanpa pw"
-                    value={newTs3BotChannelPw}
-                    onChange={(e) => setNewTs3BotChannelPw(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-slate-300 outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-400 mb-1 font-semibold flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-cyan-400 font-bold">
-                    <Radio className="w-3.5 h-3.5" /> Pasangkan ke Bot SvxLink
-                  </span>
-                  <span className="text-[10px] text-emerald-400 font-mono font-bold">Auto-Sync TG 2 Arah</span>
-                </label>
-                <select
-                  value={newTs3BotSvx}
-                  onChange={(e) => {
-                    const selBot = e.target.value;
-                    setNewTs3BotSvx(selBot);
-                    const b = availableSvxBots.find((x) => x.name === selBot);
-                    if (b) {
-                      setNewTs3BotTg(b.tg || 1025);
-                      setNewTs3BotSlot(b.slot || 2);
-                      if (!newTs3BotName || newTs3BotName.startsWith("TS3-GW-")) {
-                        setNewTs3BotName(`TS3-GW-${b.name.replace("SVX-GW-", "").replace("SVX-", "")}`);
-                      }
-                    }
-                  }}
-                  className="w-full px-3 py-1.5 bg-[#05080f] border border-cyan-800/80 focus:border-cyan-400 rounded-xl text-cyan-300 font-bold outline-none"
-                >
-                  <option value="auto">✨ Otomatis Buat &amp; Pasangkan Bot SvxLink (Sinkron TG {newTs3BotTg})</option>
-                  <option value="">-- Manual (Tanpa Pairing SvxLink) --</option>
-                  {availableSvxBots.map((sb, i) => (
-                    <option key={i} value={sb.name}>
-                      📡 {sb.name} (TG {sb.tg} · Slot {sb.slot} · Reflector: {sb.channel})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">Target Talkgroup (TG)</label>
-                  <input
-                    type="number"
-                    required
-                    value={newTs3BotTg}
-                    onChange={(e) => setNewTs3BotTg(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1 font-semibold">Timeslot DMR</label>
                   <select
-                    value={newTs3BotSlot}
-                    onChange={(e) => setNewTs3BotSlot(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-amber-300 font-bold outline-none"
+                    value={newTs3BotSvx}
+                    onChange={(e) => {
+                      const selBot = e.target.value;
+                      setNewTs3BotSvx(selBot);
+                      const b = availableSvxBots.find((x) => x.name === selBot);
+                      if (b) {
+                        setNewTs3BotTg(b.tg || 1025);
+                        setNewTs3BotSlot(b.slot || 2);
+                        if (!newTs3BotName || newTs3BotName.startsWith("TS3-GW-")) {
+                          setNewTs3BotName(`TS3-GW-${b.name.replace("SVX-GW-", "").replace("SVX-", "")}`);
+                        }
+                      }
+                    }}
+                    className="w-full px-3 py-1.5 bg-[#05080f] border border-cyan-800/80 focus:border-cyan-400 rounded-xl text-cyan-300 font-bold outline-none"
                   >
-                    <option value={1}>Slot 1</option>
-                    <option value={2}>Slot 2</option>
+                    <option value="auto">✨ Otomatis Buat &amp; Pasangkan Bot SvxLink (Sinkron TG {newTs3BotTg})</option>
+                    <option value="">-- Manual (Tanpa Pairing SvxLink) --</option>
+                    {availableSvxBots.map((sb, i) => (
+                      <option key={i} value={sb.name}>
+                        📡 {sb.name} (TG {sb.tg} · Slot {sb.slot} · Reflector: {sb.channel})
+                      </option>
+                    ))}
                   </select>
                 </div>
-              </div>
 
-              {/* LIVE CROSS-BRIDGE VISUAL ROUTE PREVIEW */}
-              <div className="p-2.5 rounded-xl bg-[#05080f] border border-cyan-900/60 space-y-1.5">
-                <div className="flex items-center justify-between text-[11px] font-bold font-mono">
-                  <span className="text-cyan-400 flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-cyan-400" /> JALUR CROSS-BRIDGE
-                  </span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800">
-                    SINKRON OTOMATIS
-                  </span>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Target Talkgroup (TG)</label>
+                    <input
+                      type="number"
+                      required
+                      value={newTs3BotTg}
+                      onChange={(e) => setNewTs3BotTg(Number(e.target.value))}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-cyan-300 font-bold outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-semibold">Timeslot DMR</label>
+                    <select
+                      value={newTs3BotSlot}
+                      onChange={(e) => setNewTs3BotSlot(Number(e.target.value))}
+                      className="w-full px-3 py-1.5 bg-[#05080f] border border-slate-700 focus:border-purple-400 rounded-xl text-amber-300 font-bold outline-none"
+                    >
+                      <option value={1}>Slot 1</option>
+                      <option value={2}>Slot 2</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-mono bg-slate-900/70 p-2 rounded-lg border border-slate-800">
-                  <div className="text-purple-300 font-bold truncate">
-                    🎧 TS3: <span className="text-white">{newTs3BotChannel || "Room"}</span>
+
+                {/* LIVE CROSS-BRIDGE VISUAL ROUTE PREVIEW */}
+                <div className="p-2.5 rounded-xl bg-[#05080f] border border-cyan-900/60 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-bold font-mono">
+                    <span className="text-cyan-400 flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-cyan-400" /> JALUR CROSS-BRIDGE
+                    </span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+                      SINKRON OTOMATIS
+                    </span>
                   </div>
-                  <div className="text-cyan-400 font-black flex items-center gap-1">
-                    ⇆ <span className="px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">TG {newTs3BotTg} (S{newTs3BotSlot})</span> ⇆
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-mono bg-slate-900/70 p-2 rounded-lg border border-slate-800">
+                    <div className="text-purple-300 font-bold truncate">
+                      🎧 TS3: <span className="text-white">{newTs3BotChannel || "Room"}</span>
+                    </div>
+                    <div className="text-cyan-400 font-black flex items-center gap-1">
+                      ⇆ <span className="px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">TG {newTs3BotTg} (S{newTs3BotSlot})</span> ⇆
+                    </div>
+                    <div className="text-emerald-300 font-bold truncate">
+                      📡 SvxLink: <span className="text-white">{newTs3BotSvx && newTs3BotSvx !== "auto" ? newTs3BotSvx : `SVX-${(newTs3BotChannel || `${newTs3BotTg}`).replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase() || "AUTO"}`}</span>
+                    </div>
                   </div>
-                  <div className="text-emerald-300 font-bold truncate">
-                    📡 SvxLink: <span className="text-white">{newTs3BotSvx && newTs3BotSvx !== "auto" ? newTs3BotSvx : `SVX-${(newTs3BotChannel || `${newTs3BotTg}`).replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase() || "AUTO"}`}</span>
-                  </div>
+                </div>
+
+                <div className="p-2.5 bg-purple-950/30 border border-purple-800/40 rounded-xl space-y-1">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={newTs3BotStaticName}
+                      onChange={(e) => setNewTs3BotStaticName(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-700 text-purple-600 focus:ring-purple-500 bg-[#05080f] accent-purple-500"
+                    />
+                    <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                      <span>🔒 Mode Nama Statis</span>
+                      <span className="text-[10px] text-purple-300 font-normal">(Anti Berubah-ubah)</span>
+                    </span>
+                  </label>
+                  <p className="text-[10px] text-slate-400 pl-6 leading-relaxed">
+                    Bot tetap memakai nama aslinya dan tidak berubah menjadi <code>[DMR] CALLSIGN</code> saat ada yang berbicara.
+                  </p>
                 </div>
               </div>
 
-              <div className="p-2.5 bg-purple-950/30 border border-purple-800/40 rounded-xl space-y-1">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={newTs3BotStaticName}
-                    onChange={(e) => setNewTs3BotStaticName(e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-700 text-purple-600 focus:ring-purple-500 bg-[#05080f] accent-purple-500"
-                  />
-                  <span className="font-bold text-white text-xs flex items-center gap-1.5">
-                    <span>🔒 Mode Nama Statis</span>
-                    <span className="text-[10px] text-purple-300 font-normal">(Anti Berubah-ubah)</span>
-                  </span>
-                </label>
-                <p className="text-[10px] text-slate-400 pl-6 leading-relaxed">
-                  Bot tetap memakai nama aslinya dan tidak berubah menjadi <code>[DMR] CALLSIGN</code> saat ada yang berbicara.
-                </p>
-              </div>
-
-              {/* FIXED MODAL FOOTER */}
-              <div className="flex gap-2 pt-2 border-t border-slate-800 shrink-0">
+              {/* ALWAYS VISIBLE PINNED FOOTER (NEVER CUT OFF) */}
+              <div className="flex gap-2 pt-3 border-t border-purple-900/40 shrink-0 bg-[#0b121e]">
                 <button
                   type="button"
                   onClick={() => setShowAddTs3BotModal(false)}
-                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 text-xs"
+                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 text-xs transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-purple-500 hover:bg-purple-400 text-white font-heading font-black rounded-xl shadow-lg shadow-purple-500/25 transition-all text-xs"
+                  className="flex-1 py-2 bg-purple-600 hover:bg-purple-500 text-white font-heading font-black rounded-xl shadow-lg shadow-purple-500/25 transition-all text-xs cursor-pointer"
                 >
-                  Simpan Bot
+                  {editingTs3BotOriginalName ? "Simpan Perubahan" : "Simpan Bot"}
                 </button>
               </div>
             </form>

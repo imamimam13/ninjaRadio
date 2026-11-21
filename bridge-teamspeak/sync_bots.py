@@ -62,14 +62,13 @@ def main():
         active_bot_ids.add(b_id)
         bots_dict_lines.append(f'{b_id} = {{ run = true }}')
 
-    # Remove stale bot config folders that are no longer in config.json
+    # Identify stale bot config folders that are no longer in config.json
+    stale_bot_dirs = []
     if os.path.exists(BOTS_DIR):
         for item in os.listdir(BOTS_DIR):
             item_path = os.path.join(BOTS_DIR, item)
             if os.path.isdir(item_path) and item not in active_bot_ids:
-                print(f"[TS3-Bridge] Removing stale bot folder: {item}")
-                import shutil
-                shutil.rmtree(item_path, ignore_errors=True)
+                stale_bot_dirs.append(item)
 
     bots_block = "\n".join(bots_dict_lines)
     ts3audiobot_toml = f"""[bot]
@@ -159,6 +158,26 @@ ip = [ "127.0.0.1", "::1" ]
         # Preserve existing cryptographic identity from bot.toml (CRITICAL: prevents losing Sysop Server Group/permissions on restart/rebuild)
         existing_identity = ""
         bot_toml_path = os.path.join(b_dir, "bot.toml")
+        if not os.path.exists(bot_toml_path) and stale_bot_dirs:
+            # Bot was renamed: adopt identity from old bot folder so permissions on remote server are preserved!
+            for old_stale in list(stale_bot_dirs):
+                old_toml_p = os.path.join(BOTS_DIR, old_stale, "bot.toml")
+                if os.path.exists(old_toml_p):
+                    try:
+                        with open(old_toml_p, "r", encoding="utf-8") as f:
+                            stale_content = f.read()
+                        if "[connect.identity]" in stale_content:
+                            existing_identity = "\n" + stale_content[stale_content.find("[connect.identity]"):].strip() + "\n"
+                        elif "identity" in stale_content.lower():
+                            ident_blocks = [l for l in stale_content.splitlines() if "identity" in l.lower()]
+                            if ident_blocks:
+                                existing_identity = "\n" + "\n".join(ident_blocks).strip() + "\n"
+                        if existing_identity:
+                            print(f"[TS3-Bridge] 🔑 Migrated existing identity from renamed bot '{old_stale}' -> '{b_id}'")
+                            break
+                    except Exception:
+                        pass
+
         if os.path.exists(bot_toml_path):
             try:
                 with open(bot_toml_path, "r", encoding="utf-8") as f:
@@ -202,6 +221,15 @@ static_name={"true" if b_static else "false"}
             f.write(target_cfg)
 
         print(f"[TS3-Bridge] Configured bot '{b_name}' ({b_id}) -> TG {b_tg} (Slot {b_slot}, Port {rx_p}), channel {channel_setting} on {target_server}")
+
+    # Remove stale bot config folders that were replaced or deleted
+    if os.path.exists(BOTS_DIR):
+        for item in os.listdir(BOTS_DIR):
+            item_path = os.path.join(BOTS_DIR, item)
+            if os.path.isdir(item_path) and item not in active_bot_ids:
+                print(f"[TS3-Bridge] Removing stale bot folder: {item}")
+                import shutil
+                shutil.rmtree(item_path, ignore_errors=True)
 
     print(f"[TS3-Bridge] Generated config for {len(bots)} TeamSpeak 3 bot(s) successfully.")
 

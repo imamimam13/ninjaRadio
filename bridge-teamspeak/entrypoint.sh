@@ -16,14 +16,15 @@ fi
 chown -R 9999:9999 /app/data
 chmod -R 777 /app/data
 
-# Background loader for plugins once web API is ready
-(
-    echo "[TS3-Bridge] Waiting for TS3AudioBot Web API on port 58913..."
-    for i in $(seq 1 30); do
-        if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:58913/api/bot/list', timeout=1)" 2>/dev/null; then
-            echo "[TS3-Bridge] Web API is up! Waiting 2s for bots to settle..."
-            sleep 2
-            python3 -c "
+# Function to run background loader for plugins and channel mover once web API is up
+run_post_startup_tasks() {
+    (
+        echo "[TS3-Bridge] Waiting for TS3AudioBot Web API on port 58913..."
+        for i in $(seq 1 30); do
+            if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:58913/api/bot/list', timeout=1)" 2>/dev/null; then
+                echo "[TS3-Bridge] Web API is up! Waiting 2s for bots to settle..."
+                sleep 2
+                python3 -c "
 import urllib.request, json, urllib.parse, os, time, re
 
 def search_tree(node, target):
@@ -123,7 +124,7 @@ for attempt in range(1, 4):
                         bot_toml_path = f'/app/data/bots/{bfolder}/bot.toml'
                         if os.path.exists(bot_toml_path):
                             raw_t = open(bot_toml_path, 'r', encoding='utf-8').read()
-                            new_t = re.sub(r'channel\s*=\s*"[^"]*"', f'channel = "/{target_cid}"', raw_t)
+                            new_t = re.sub(r'channel\s*=\s*\"[^\"]*\"', f'channel = \"/{target_cid}\"', raw_t)
                             if new_t != raw_t:
                                 open(bot_toml_path, 'w', encoding='utf-8').write(new_t)
                                 print(f'[TS3-Bridge] 💾 Saved permanent channel = \"/{target_cid}\" in {bfolder}/bot.toml')
@@ -134,16 +135,16 @@ for attempt in range(1, 4):
     if attempt < 3:
         time.sleep(3)
 "
-            break
-        fi
-        sleep 1
-    done
-) &
+                break
+            fi
+            sleep 1
+        done
+    ) &
+}
 
-# Background watcher for config.json changes (auto-reloads bots when edited in Web UI)
-(
-    get_cfg_hash() {
-        python3 -c "
+# Function to calculate hash of TS3 bots and rooms config
+get_cfg_hash() {
+    python3 -c "
 import json, hashlib
 try:
     with open('/app/ninja_data/config.json', 'r', encoding='utf-8') as f:
@@ -153,18 +154,60 @@ try:
 except Exception:
     print('0')
 " 2>/dev/null
-    }
+}
+
+# Graceful shutdown handler for Docker container stop/restart
+BOT_PID=""
+cleanup() {
+    echo "[TS3-Bridge] Termination received. Gracefully shutting down TS3AudioBot..."
+    if [ -n "$BOT_PID" ] && kill -0 "$BOT_PID" 2>/dev/null; then
+        kill -TERM "$BOT_PID" 2>/dev/null || true
+        wait "$BOT_PID" 2>/dev/null || true
+    fi
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
+echo "[TS3-Bridge] Starting supervisor loop for TS3AudioBot..."
+cd /app/data
+
+while true; do
+    # 1. Sync bot configurations and identities
+    python3 /app/sync_bots.py || true
+    chown -R 9999:9999 /app/data 2>/dev/null || true
+
+    # 2. Launch post-startup auto-mover and plugin loader in background
+    run_post_startup_tasks
+
+    # 3. Launch headless bot engine in background under supervisor
+    echo "[TS3-Bridge] Launching headless bot engine (PID supervisor)..."
+    su-exec ts3bot dotnet /app/TS3AudioBot.dll --non-interactive --stats-disabled &
+    BOT_PID=$!
+
     LAST_HASH=$(get_cfg_hash)
-    while sleep 3; do
+
+    # 4. Monitor loop: check bot process health & detect config changes every 2s
+    while kill -0 "$BOT_PID" 2>/dev/null; do
+        sleep 2
         CUR_HASH=$(get_cfg_hash)
         if [ "$CUR_HASH" != "0" ] && [ "$CUR_HASH" != "$LAST_HASH" ]; then
-            echo "[TS3-Bridge] 🔄 Detected TS3 bot/room config change! Auto-reloading TS3AudioBot..."
-            kill -TERM 1 2>/dev/null || pkill -f TS3AudioBot.dll
+            echo "[TS3-Bridge] 🔄 Detected TS3 bot/room config change! Auto-reloading TS3AudioBot in-place..."
+            kill -TERM "$BOT_PID" 2>/dev/null || true
+            for wait_cnt in $(seq 1 15); do
+                if ! kill -0 "$BOT_PID" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.2
+            done
+            if kill -0 "$BOT_PID" 2>/dev/null; then
+                kill -9 "$BOT_PID" 2>/dev/null || true
+            fi
             break
         fi
     done
-) &
 
-echo "[TS3-Bridge] Launching headless bot engine from /app/data..."
-cd /app/data
-exec su-exec ts3bot dotnet /app/TS3AudioBot.dll --non-interactive --stats-disabled
+    wait "$BOT_PID" 2>/dev/null || true
+    BOT_PID=""
+    echo "[TS3-Bridge] TS3AudioBot exited. Reloading in 1s..."
+    sleep 1
+done

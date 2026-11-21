@@ -4373,7 +4373,11 @@ async def save_teamspeak_bot_endpoint(payload: dict):
                 pass
         asyncio.create_task(_notify_svxlink_sync())
 
-    bots = [b for b in bots if (b.get("name") or "").strip().upper() != name]
+    original_name = (payload.get("original_name") or "").strip().upper()
+    remove_names = {name}
+    if original_name:
+        remove_names.add(original_name)
+    bots = [b for b in bots if (b.get("name") or "").strip().upper() not in remove_names]
     bot_entry = {
         "name": name,
         "channel": channel,
