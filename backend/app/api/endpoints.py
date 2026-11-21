@@ -4320,6 +4320,8 @@ async def save_teamspeak_bot_endpoint(payload: dict):
     slot = int(payload.get("slot") or 2)
     svx_bot = (payload.get("svx_bot") or "").strip()
     server = (payload.get("server") or "127.0.0.1:9987").strip()
+    if ":" not in server and server:
+        server = f"{server}:9987"
     server_password = (payload.get("server_password") or "").strip()
     channel_password = (payload.get("channel_password") or "").strip()
     raw_static = payload.get("static_name", False)
