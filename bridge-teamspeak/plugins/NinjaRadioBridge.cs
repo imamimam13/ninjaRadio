@@ -375,7 +375,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
                         Array.Copy(pcm8k, 0, pcmToEncode, 0, pcm8k.Length);
                     }
                     Span<byte> opusOut = stackalloc byte[500];
-                    var encoded = encoder.Encode(pcmToEncode, 320, opusOut);
+                    // 160 samples per channel at 8000 Hz = 20ms frame (320 bytes S16_LE)
+                    var encoded = encoder.Encode(pcmToEncode, 160, opusOut);
                     if (encoded.Length > 0)
                     {
                         fullClient.SendAudio(encoded, Codec.OpusVoice);
@@ -449,8 +450,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
         DateTime now = DateTime.UtcNow;
 
-        // VOX Schmitt Trigger: Attack >= 90.0, Release < 35.0 (GEMINI.md Section 7.3)
-        if (!isVoiceActive && rms >= 90.0)
+        // VOX Schmitt Trigger: Attack >= 45.0, Release < 20.0 (GEMINI.md Section 7.3)
+        if (!isVoiceActive && rms >= 45.0)
         {
             isVoiceActive = true;
             activeTalkerClientId = rawSenderId;
@@ -462,7 +463,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
         else if (isVoiceActive && rawSenderId == activeTalkerClientId)
         {
-            if (rms >= 35.0)
+            if (rms >= 20.0)
             {
                 lastVoiceTime = now;
             }

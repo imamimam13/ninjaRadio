@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private var headsetPlugReceiver: BroadcastReceiver? = null
     private var pttCalibDialog: AlertDialog? = null
     private var pendingLearnedKey: Triple<Int, Int, String>? = null
+    private var updateCalibTargetUi: (() -> Unit)? = null
 
     private lateinit var layoutLcdPanel: LinearLayout
     private var layoutCallerCard: LinearLayout? = null
@@ -1183,6 +1184,13 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         val btnSave = view.findViewById<Button>(R.id.btnSaveLearnedKey)
         val btnReset = view.findViewById<Button>(R.id.btnResetPttDefault)
         val btnCancel = view.findViewById<Button>(R.id.btnCancelPttCalib)
+        val btnPresetKnob = view.findViewById<Button>(R.id.btnPresetKnob)
+        val btnPresetVol = view.findViewById<Button>(R.id.btnPresetVol)
+        val btnPresetPage = view.findViewById<Button>(R.id.btnPresetPage)
+
+        btnTargetPtt.isFocusable = false
+        btnTargetChNext.isFocusable = false
+        btnTargetChPrev.isFocusable = false
 
         learningTarget = PttManager.KeyTarget.PTT
         pendingLearnedKey = null
@@ -1197,20 +1205,26 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
         fun updateTargetUi() {
             updateSummaryText()
-            btnTargetPtt.alpha = if (learningTarget == PttManager.KeyTarget.PTT) 1.0f else 0.50f
-            btnTargetChNext.alpha = if (learningTarget == PttManager.KeyTarget.CH_NEXT) 1.0f else 0.50f
-            btnTargetChPrev.alpha = if (learningTarget == PttManager.KeyTarget.CH_PREV) 1.0f else 0.50f
+            btnTargetPtt.alpha = if (learningTarget == PttManager.KeyTarget.PTT) 1.0f else 0.55f
+            btnTargetChNext.alpha = if (learningTarget == PttManager.KeyTarget.CH_NEXT) 1.0f else 0.55f
+            btnTargetChPrev.alpha = if (learningTarget == PttManager.KeyTarget.CH_PREV) 1.0f else 0.55f
+
+            btnTargetPtt.setBackgroundResource(if (learningTarget == PttManager.KeyTarget.PTT) R.drawable.btn_ptt_active else R.drawable.btn_dpad)
+            btnTargetChNext.setBackgroundResource(if (learningTarget == PttManager.KeyTarget.CH_NEXT) R.drawable.item_channel_active else R.drawable.btn_dpad)
+            btnTargetChPrev.setBackgroundResource(if (learningTarget == PttManager.KeyTarget.CH_PREV) R.drawable.item_channel_active else R.drawable.btn_dpad)
 
             val targetLabel = when (learningTarget) {
                 PttManager.KeyTarget.PTT -> "1. TOMBOL PTT (TX)"
                 PttManager.KeyTarget.CH_NEXT -> "2. TOMBOL CH+ (NEXT)"
                 PttManager.KeyTarget.CH_PREV -> "3. TOMBOL CH- (PREV)"
             }
-            tvDetect.text = "TARGET: $targetLabel\nTekan tombol fisik HT untuk simpan otomatis..."
+            tvDetect.text = "TARGET: $targetLabel\nTekan tombol fisik HT atau putar knob..."
             tvDetect.setTextColor(Color.parseColor("#F8FAFC"))
             btnSave.isEnabled = false
             pendingLearnedKey = null
         }
+
+        updateCalibTargetUi = { updateTargetUi() }
 
         btnTargetPtt.setOnClickListener {
             learningTarget = PttManager.KeyTarget.PTT
@@ -1225,21 +1239,80 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             updateTargetUi()
         }
 
+        btnPresetKnob?.setOnClickListener {
+            PttManager.saveTargetKey(this, PttManager.KeyTarget.CH_NEXT, 166, 0, "Rotary Knob CH+ (166)")
+            PttManager.saveTargetKey(this, PttManager.KeyTarget.CH_PREV, 167, 0, "Rotary Knob CH- (167)")
+            updateTargetUi()
+            tvDetect.text = "✓ PRESET KNOB BERHASIL DITERAPKAN (166/167)"
+            tvDetect.setTextColor(Color.parseColor("#34D399"))
+            Toast.makeText(this, "Preset Knob diterapkan: CH+ (166), CH- (167)", Toast.LENGTH_SHORT).show()
+        }
+
+        btnPresetVol?.setOnClickListener {
+            PttManager.saveTargetKey(this, PttManager.KeyTarget.CH_NEXT, KeyEvent.KEYCODE_VOLUME_UP, 0, "Volume Up (+)")
+            PttManager.saveTargetKey(this, PttManager.KeyTarget.CH_PREV, KeyEvent.KEYCODE_VOLUME_DOWN, 0, "Volume Down (-)")
+            updateTargetUi()
+            tvDetect.text = "✓ PRESET TOMBOL VOLUME DITERAPKAN (24/25)"
+            tvDetect.setTextColor(Color.parseColor("#34D399"))
+            Toast.makeText(this, "Preset Volume diterapkan: CH+ (Vol+), CH- (Vol-)", Toast.LENGTH_SHORT).show()
+        }
+
+        btnPresetPage?.setOnClickListener {
+            PttManager.saveTargetKey(this, PttManager.KeyTarget.CH_NEXT, KeyEvent.KEYCODE_PAGE_UP, 0, "Page Up / CH+ (92)")
+            PttManager.saveTargetKey(this, PttManager.KeyTarget.CH_PREV, KeyEvent.KEYCODE_PAGE_DOWN, 0, "Page Down / CH- (93)")
+            updateTargetUi()
+            tvDetect.text = "✓ PRESET PAGE UP/DN DITERAPKAN (92/93)"
+            tvDetect.setTextColor(Color.parseColor("#34D399"))
+            Toast.makeText(this, "Preset Page diterapkan: CH+ (92), CH- (93)", Toast.LENGTH_SHORT).show()
+        }
+
         updateTargetUi()
 
-        val dialog = AlertDialog.Builder(this)
-            .setView(view)
-            .setCancelable(true)
-            .setOnCancelListener {
-                isLearningPtt = false
-                pttCalibDialog = null
+        val dialog = object : AlertDialog(this) {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                if (isLearningPtt) {
+                    if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+                        return super.dispatchKeyEvent(event)
+                    }
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        val name = PttManager.formatKeyName(event.keyCode)
+                        onPttKeyLearned(event.keyCode, event.scanCode, name)
+                        return true
+                    }
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
             }
-            .create()
+
+            override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+                if (isLearningPtt && event.action == MotionEvent.ACTION_SCROLL) {
+                    val vScroll = event.getAxisValue(MotionEvent.AXIS_SCROLL).takeIf { it != 0f }
+                        ?: event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+                    if (vScroll > 0) {
+                        onPttKeyLearned(PttManager.KNOB_NEXT_KEY, 0, "Rotary Knob CH+ (Scroll Up)")
+                        return true
+                    } else if (vScroll < 0) {
+                        onPttKeyLearned(PttManager.KNOB_PREV_KEY, 0, "Rotary Knob CH- (Scroll Down)")
+                        return true
+                    }
+                }
+                return super.onGenericMotionEvent(event)
+            }
+        }
+
+        dialog.setView(view)
+        dialog.setCancelable(true)
+        dialog.setOnCancelListener {
+            isLearningPtt = false
+            updateCalibTargetUi = null
+            pttCalibDialog = null
+        }
 
         pttCalibDialog = dialog
 
         val closeAction = View.OnClickListener {
             isLearningPtt = false
+            updateCalibTargetUi = null
             pttCalibDialog = null
             dialog.dismiss()
         }
@@ -1259,6 +1332,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 updateSummaryText()
             }
             isLearningPtt = false
+            updateCalibTargetUi = null
             pttCalibDialog = null
             dialog.dismiss()
         }
@@ -1281,7 +1355,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             pendingLearnedKey = Triple(keyCode, scanCode, name)
             // Auto-save immediately on detection so user doesn't even lose it if they just close!
             PttManager.saveTargetKey(this, learningTarget, keyCode, scanCode, name)
-            val targetName = when (learningTarget) {
+            val currentTarget = learningTarget
+            val targetName = when (currentTarget) {
                 PttManager.KeyTarget.PTT -> "PTT"
                 PttManager.KeyTarget.CH_NEXT -> "CH+ (Next)"
                 PttManager.KeyTarget.CH_PREV -> "CH- (Prev)"
@@ -1297,6 +1372,28 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 tv.setTextColor(Color.parseColor("#34D399"))
             }
             pttCalibDialog?.findViewById<Button>(R.id.btnSaveLearnedKey)?.isEnabled = true
+
+            // Automatically advance to next target after 900ms for smooth 1-2-3 setup
+            uiHandler.postDelayed({
+                if (isLearningPtt && pttCalibDialog != null && pttCalibDialog?.isShowing == true) {
+                    when (currentTarget) {
+                        PttManager.KeyTarget.PTT -> {
+                            learningTarget = PttManager.KeyTarget.CH_NEXT
+                            updateCalibTargetUi?.invoke()
+                        }
+                        PttManager.KeyTarget.CH_NEXT -> {
+                            learningTarget = PttManager.KeyTarget.CH_PREV
+                            updateCalibTargetUi?.invoke()
+                        }
+                        PttManager.KeyTarget.CH_PREV -> {
+                            pttCalibDialog?.findViewById<TextView>(R.id.tvPttDetectStatus)?.let { tv ->
+                                tv.text = "✓ SEMUA TOMBOL (PTT, CH+, CH-) SELESAI DISET!\nKlik SIMPAN atau KEMBALI"
+                                tv.setTextColor(Color.parseColor("#38BDF8"))
+                            }
+                        }
+                    }
+                }
+            }, 900L)
         }
     }
 
@@ -1428,6 +1525,21 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_MENU) return true
         return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_SCROLL) {
+            val vScroll = event.getAxisValue(MotionEvent.AXIS_SCROLL).takeIf { it != 0f }
+                ?: event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            if (vScroll > 0) {
+                dmrService?.switchChannel(+1)
+                return true
+            } else if (vScroll < 0) {
+                dmrService?.switchChannel(-1)
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(event)
     }
 
     // DmrService.Listener

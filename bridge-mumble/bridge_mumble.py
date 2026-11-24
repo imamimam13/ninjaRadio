@@ -1121,8 +1121,9 @@ class MumbleGatewayBot:
             if my_ch_id is None:
                 return
 
+            disp_call = (callsign or f"ID-{dmr_id}").replace("-", " ")
             msg_html = (
-                f"📻 <b>[DMR RX]</b> Transmisi masuk: <b>{callsign}</b> ({dmr_id}) "
+                f"📻 <b>[DMR]</b> Transmisi masuk: <b>{disp_call}</b> ({dmr_id}) "
                 f"di <b>TG {self.tg}</b>"
             )
 
@@ -1130,11 +1131,14 @@ class MumbleGatewayBot:
             if target_ch and hasattr(target_ch, "send_text_message"):
                 target_ch.send_text_message(msg_html)
                 return
+            elif hasattr(self.mumble, "send_text_message") and target_ch:
+                self.mumble.send_text_message(target_ch, msg_html)
+                return
         except Exception as e:
             logger.debug(f"[{self.default_bot_user}] Send text notification error: {e}")
 
     def morph_to_callsign(self, callsign: str, dmr_id: int):
-        """Displays active DMR caller in Mumble via dynamic status comment (zero TTS interruption)."""
+        """Displays active DMR caller in Mumble via dynamic status comment and channel message."""
         now_ts = time.time()
         self.last_dmr_rx_time = now_ts
         if not callsign or callsign == self.current_morphed_callsign:
@@ -1146,8 +1150,8 @@ class MumbleGatewayBot:
             new_name = f"[DMR] {disp_call}"[:25]
             self._rename(new_name)
         self._set_comment(f"🔴 <b>TX Live:</b> [DMR] {disp_call} ({dmr_id}) on TG {self.tg}")
-        # Send chat notification to Mumble channel only if explicitly enabled (disabled by default to prevent client TTS audio read-out)
-        if os.getenv("ENABLE_MUMBLE_CHAT_NOTIF", "false").lower() == "true":
+        # Send chat notification to Mumble channel containing active caller callsign
+        if os.getenv("ENABLE_MUMBLE_CHAT_NOTIF", "true").lower() == "true":
             self.send_channel_notification(callsign, dmr_id)
         logger.info(f"[{self.default_bot_user}] 💬 DMR RX Status Comment: [DMR] {disp_call} ({dmr_id}) on TG {self.tg}")
 

@@ -110,7 +110,58 @@
         android:gravity="center"
         android:background="@drawable/item_focus"
         android:padding="4dp"
-        android:layout_marginBottom="4dp" />
+        android:layout_marginBottom="3dp" />
+
+    <!-- Quick Preset Row for Channel Keys -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="24dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="4dp">
+
+        <Button
+            android:id="@+id/btnPresetKnob"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="KNOB CH (166/167)"
+            android:textSize="9sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_cyan"
+            android:background="@drawable/btn_dpad"
+            android:focusable="false"
+            android:layout_marginEnd="1dp" />
+
+        <Button
+            android:id="@+id/btnPresetVol"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="VOLUME (+/-)"
+            android:textSize="9sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_amber"
+            android:background="@drawable/btn_dpad"
+            android:focusable="false"
+            android:layout_marginStart="1dp"
+            android:layout_marginEnd="1dp" />
+
+        <Button
+            android:id="@+id/btnPresetPage"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="PAGE UP/DN (92/93)"
+            android:textSize="9sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:background="@drawable/btn_dpad"
+            android:focusable="false"
+            android:layout_marginStart="1dp" />
+    </LinearLayout>
 
     <!-- Single Compact Bottom Action Row: SIMPAN | RESET | KEMBALI -->
     <LinearLayout

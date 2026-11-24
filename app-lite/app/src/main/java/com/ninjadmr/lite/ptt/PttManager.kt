@@ -160,6 +160,7 @@ object PttManager {
             keyCode == KeyEvent.KEYCODE_PAGE_UP ||
             keyCode == 294 || // Radio Knob Up (Qualcomm / JZDMR)
             keyCode == 292 || // Knob Up alternate
+            keyCode == 141 || // Rotary Knob Up F11
             keyCode == 135    // F5 / Knob Up (ln2.java)
         ) return true
         return false
@@ -176,6 +177,7 @@ object PttManager {
             keyCode == KeyEvent.KEYCODE_PAGE_DOWN ||
             keyCode == 295 || // Radio Knob Down (Qualcomm / JZDMR)
             keyCode == 293 || // Knob Down alternate
+            keyCode == 142 || // Rotary Knob Down F12
             keyCode == 136    // F6 / Knob Down (ln2.java)
         ) return true
         return false

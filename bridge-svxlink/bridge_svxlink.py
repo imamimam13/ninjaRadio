@@ -832,9 +832,12 @@ PREEMPHASIS=0
                 if raw_talker in internal_bot_names or raw_talker == self.bot_user.upper():
                     continue
 
-                # Only transmit when a real remote callsign is active (do NOT transmit phantom trailing silence/beeps)
-                if not raw_talker or raw_talker in ("SVX", "SVX-LINK", "NONE") or raw_talker.startswith("SVX-"):
-                    continue
+                tx_tg = self.tg if self.tg > 0 else (getattr(self, "active_talker_tg", None) or 510)
+                tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
+
+                # Fallback to room/gateway talker if no explicit Tcl reflector event arrived yet
+                if not raw_talker or raw_talker in ("SVX", "SVX-LINK", "NONE", "UNKNOWN"):
+                    raw_talker = f"SVX-{tx_tg}" if tx_tg > 0 else (self.room_name or "SVX-STATION")
 
                 # Check if audio frame is non-zero (fast C-native RMS calculation)
                 if audioop:
@@ -855,8 +858,6 @@ PREEMPHASIS=0
 
                 # Resolve caller identity (Carry-Over Callsign from SvxReflector / EchoLink)
                 user_dmr_id, user_callsign = resolve_svxlink_identity(raw_talker)
-                tx_tg = self.tg if self.tg > 0 else (getattr(self, "active_talker_tg", None) or 510)
-                tx_slot = 1 if tx_tg in [510, 5108, 91, 1023] else self.slot
 
                 # Prevent Any-TG gateway (self.tg == 0) from double-transmitting a TG handled by a dedicated bot
                 if self.tg == 0 and any(b is not self and b.tg == tx_tg and b.connected for b in GATEWAY_POOL.values()):
