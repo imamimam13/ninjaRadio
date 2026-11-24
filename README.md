@@ -215,23 +215,36 @@ Jika Anda ingin mengatur port dan variabel environment sendiri sebelum menjalank
 
 ---
 
-### METODE 3: Android Non-Root Portable Server (Termux)
+### METODE 3: Android Termux Portable Server (NinjaRadio Pocket Edition - Full Stack Non-TS3)
 
-Untuk menjalankan core engine secara mandiri di lapangan tanpa VPS dan tanpa internet:
+Menjalankan **9 layanan server lengkap** (FreeDMR, Core Engine C++ Vocoder, Backend API, Frontend PWA, Mumble Server + Bridge, SvxReflector, SvxLink Bridge, dan Zello Bridge) langsung di smartphone Android tanpa memerlukan akses Root via **Termux + Proot Debian (ARM64)**:
 
-1. Pasang **Termux** dari F-Droid di HP Android Anda.
-2. Instal Python dan Git, lalu clone repositori:
+1. Unduh dan pasang aplikasi **Termux** dari [F-Droid](https://f-droid.org/en/packages/com.termux/) (jangan gunakan versi Play Store karena sudah usang).
+2. Di dalam Termux, pasang `git` dan clone repositori:
    ```bash
-   pkg update && pkg install python git -y
+   pkg update -y && pkg install git -y
    git clone https://github.com/imamimam13/ninjaRadio.git
    cd ninjaRadio
-   pip install -r core/requirements.txt
    ```
-3. Jalankan core engine:
+3. Jalankan script installer 1-klik:
    ```bash
-   python core/core_engine.py
+   bash termux/install.sh
    ```
-4. Nyalakan **Hotspot Portabel Wi-Fi** di HP Anda. Hotspot Pi-Star atau klien lain di jaringan hotspot tersebut dapat langsung terhubung ke IP gateway HP (umumnya `192.168.43.1`).
+   *Script akan otomatis menyiapkan Debian ARM64, meng-compile library vocoder `mbelib` & `libopendmr.so`, SvxLink, dan membuat perintah kontrol `ninja`.*
+
+4. Kontrol server dengan mudah dari mana saja di Termux:
+   * **Nyalakan Server**: `ninja start`
+   * **Cek Status Layanan**: `ninja status`
+   * **Lihat Live Log**: `ninja logs` (atau `ninja logs core`, `ninja logs backend`)
+   * **Hentikan Server**: `ninja stop`
+   * **Masuk ke Shell Debian**: `ninja shell`
+
+5. Buka Web PTT / Dashboard dari browser di HP atau perangkat lain yang satu Wi-Fi/Hotspot:
+   ```text
+   http://[IP-HP-ANDA]:3000
+   ```
+
+*Panduan lengkap, manajemen port, dan optimasi baterai dapat dibaca di [termux/README.md](termux/README.md).*
 
 ---
 
