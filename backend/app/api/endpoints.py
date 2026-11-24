@@ -21,7 +21,7 @@ from backend.app.models.schemas import (
     OrganizationCreateRequest, OrganizationResponse, OrganizationRuleUpdate,
     SelfCareRegisterRequest, SelfCareLoginRequest, SelfCareServiceRequest,
     SelfCareRotatePasswordRequest, AdminApprovalRequest, AdminRejectRequest,
-    UserAccountPublicResponse, UserAccountAdminResponse
+    AdminResetPasswordRequest, UserAccountPublicResponse, UserAccountAdminResponse
 )
 from backend.app.services.logbook_service import LogbookService
 from backend.app.services.callbook_service import CallbookService
@@ -4037,6 +4037,25 @@ async def admin_suspend_registration(
     if not user:
         raise HTTPException(status_code=404, detail="Pendaftaran tidak ditemukan.")
     asyncio.create_task(_notify_core_reload_subscribers())
+    items = await SelfCareService.list_registrations(session, status_filter="ALL")
+    for item in items:
+        if item.id == user.id:
+            return item
+    raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
+
+
+@router.post("/admin/registrations/{user_id}/reset-password", response_model=UserAccountAdminResponse)
+async def admin_reset_password(
+    user_id: int,
+    payload: AdminResetPasswordRequest,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    if len(payload.new_password.strip()) < 4:
+        raise HTTPException(status_code=400, detail="Password baru minimal 4 karakter.")
+    user = await SelfCareService.admin_reset_user_password(session, user_id, payload.new_password)
+    if not user:
+        raise HTTPException(status_code=404, detail="User tidak ditemukan.")
     items = await SelfCareService.list_registrations(session, status_filter="ALL")
     for item in items:
         if item.id == user.id:

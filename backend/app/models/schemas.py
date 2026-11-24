@@ -215,6 +215,10 @@ class AdminRejectRequest(BaseModel):
     reason: Optional[str] = "Data tidak valid atau belum memenuhi syarat organisasi."
 
 
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=4, max_length=64, description="Password login baru untuk user")
+
+
 class UserAccountPublicResponse(BaseModel):
     id: int
     callsign: str

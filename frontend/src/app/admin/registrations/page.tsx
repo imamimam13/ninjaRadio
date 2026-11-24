@@ -6,7 +6,7 @@ import { AdminGuard } from "@/components/AdminGuard";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import { getSavedAdminPin } from "@/lib/adminAuth";
 import {
-  UserCheck, UserX, Ban, CheckCircle2, AlertTriangle, RefreshCw, Shield
+  UserCheck, UserX, Ban, CheckCircle2, AlertTriangle, RefreshCw, Shield, KeyRound
 } from "lucide-react";
 
 interface AdminUserItem {
@@ -145,6 +145,36 @@ export default function AdminRegistrationsPage() {
     await loadData(statusFilter);
   };
 
+  const handleAdminResetPassword = async (item: AdminUserItem) => {
+    const pin = getSavedAdminPin();
+    if (!pin) return;
+    const newPwd = window.prompt(
+      `Masukkan password login baru untuk ${item.callsign} (${item.dmr_id}):\n(Minimal 4 karakter)`,
+      ""
+    );
+    if (!newPwd || !newPwd.trim()) return;
+    if (newPwd.trim().length < 4) {
+      alert("Password login minimal 4 karakter!");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/registrations/${item.id}/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Pin": pin },
+        body: JSON.stringify({ new_password: newPwd.trim() }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        alert(d.detail || "Gagal mereset password login user.");
+      } else {
+        alert(`✓ Sukses! Password login untuk ${item.callsign} telah diperbarui.`);
+        await loadData(statusFilter);
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0a0e17] text-slate-100">
       <Navbar isConnected={isConnected} />
@@ -276,6 +306,13 @@ export default function AdminRegistrationsPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => handleAdminResetPassword(item)}
+                      className="px-3 py-2 rounded-xl bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5"
+                      title="Reset Password Login User (jika user lupa password portal)"
+                    >
+                      <KeyRound className="w-4 h-4" /> Reset Login
+                    </button>
                     <button
                       onClick={() => openApproveModal(item)}
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5"

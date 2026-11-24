@@ -57,28 +57,35 @@ cp /opt/freedmr/rules.py /opt/freedmr/Rules.py 2>/dev/null || true
 echo "voiceMap = {}" > /opt/freedmr/i8n_voice_map.py
 
 # Hook dynamic SQLite Self-Care authentication into hblink.py
-python3 -c "
+python3 - <<'PYEOF' || true
 import os
+import re
 hb_path = '/opt/freedmr/hblink.py'
 if os.path.exists(hb_path):
     with open(hb_path, 'r', encoding='utf-8') as f:
         src = f.read()
-    old_block = \"_calc_hash = bhex(sha256(_salt_str+self._config['PASSPHRASE']).hexdigest())\"
-    if old_block in src and 'ninjaradio_auth' not in src:
-        new_block = '''try:
-                        from ninjaradio_auth import verify_peer_login
-                        _is_valid = verify_peer_login(int(_this_peer['RADIO_ID']), _salt_str, _sent_hash, self._config['PASSPHRASE'])
-                    except Exception as _ae:
-                        _is_valid = (_sent_hash == bhex(sha256(_salt_str+self._config['PASSPHRASE']).hexdigest()))
-                    _calc_hash = _sent_hash if _is_valid else b'INVALID_HASH_VALUE_FAIL''''
-        src = src.replace(old_block, new_block, 1)
+
+    # Pattern matches _calc_hash line with any trailing whitespace
+    pattern = r"_calc_hash\s*=\s*bhex\(sha256\(_salt_str\+self\._config\['PASSPHRASE'\]\)\.hexdigest\(\)\)"
+    if 'ninjaradio_auth' not in src and re.search(pattern, src):
+        new_block = (
+            "try:\n"
+            "                        from ninjaradio_auth import verify_peer_login\n"
+            "                        _is_valid = verify_peer_login(int(_this_peer['RADIO_ID']), _salt_str, _sent_hash, self._config['PASSPHRASE'])\n"
+            "                    except Exception as _ae:\n"
+            "                        _is_valid = (_sent_hash == bhex(sha256(_salt_str+self._config['PASSPHRASE']).hexdigest()))\n"
+            "                    _calc_hash = _sent_hash if _is_valid else b'INVALID_HASH_VALUE_FAIL'"
+        )
+        src = re.sub(pattern, new_block, src, count=1)
+        print('✓ Integrated dynamic Self-Care DMR password authentication into FreeDMR')
+
     if 'self.send_config()' in src:
         src = src.replace('self.send_config()', 'self._factory.send_config()')
         print('✓ Patched FreeDMR reporting socket handler in hblink.py')
+
     with open(hb_path, 'w', encoding='utf-8') as f:
-            f.write(src)
-        print('✓ Integrated dynamic Self-Care DMR password authentication into FreeDMR')
-" 2>/dev/null || true
+        f.write(src)
+PYEOF
 
 # Make PEER systems (CORE-BRIDGE -> NinjaRadio core:62035) an always-ACTIVE member of every
 # dynamically created TG bridge, on the same slot the bridge was created on. Without this,

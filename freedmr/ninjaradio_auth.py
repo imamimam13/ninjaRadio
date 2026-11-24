@@ -2,7 +2,13 @@ import sqlite3
 import os
 import logging
 from hashlib import sha256
-from dmr_utils3.utils import bhex
+try:
+    from binascii import a2b_hex as bhex
+except ImportError:
+    def bhex(s):
+        if isinstance(s, str):
+            return bytes.fromhex(s)
+        return bytes.fromhex(s.decode("ascii"))
 
 logger = logging.getLogger("FreeDMR-Auth")
 

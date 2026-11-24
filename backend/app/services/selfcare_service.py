@@ -339,6 +339,21 @@ class SelfCareService:
         return user
 
     @staticmethod
+    async def admin_reset_user_password(
+        session: AsyncSession, user_id: int, new_password: str
+    ) -> Optional[UserAccount]:
+        res = await session.execute(select(UserAccount).where(UserAccount.id == user_id))
+        user = res.scalar_one_or_none()
+        if not user:
+            return None
+
+        clean_pwd = new_password.strip()
+        user.password_hash = hash_password(clean_pwd)
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+    @staticmethod
     async def _sync_callbook_entry(session: AsyncSession, user: UserAccount, default_tg: int = 510) -> None:
         cb_res = await session.execute(
             select(CallbookEntry).where(
