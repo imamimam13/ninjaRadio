@@ -20,7 +20,17 @@ python3 -c "
 import sqlite3, json, os
 
 db_paths = ['/app/data/ninjaradio.db', '/data/ninjaradio.db']
-users_list = []
+users_list = [
+    {
+        'id': 5109999,
+        'callsign': 'N1NJA',
+        'fname': 'NinjaRadio Gateway',
+        'surname': '',
+        'city': 'ID',
+        'state': 'DMR',
+        'country': 'Indonesia'
+    }
+]
 for p in db_paths:
     if os.path.exists(p):
         try:
@@ -110,6 +120,20 @@ if os.path.exists(bm):
         print('✓ FreeDMR PEER-always-active patch already present')
     else:
         print('⚠ FreeDMR PEER patch anchor not found!')
+
+    # Preserve OTA Talker Alias Embedded LC (FLCO 0x04/0x05/0x06) from CORE-BRIDGE so FreeDMR does not strip it
+    if 'NINJA_PRESERVE_TALKER_ALIAS' not in src:
+        target_1 = "                    elif _dtype_vseq in [1,2,3,4]:\n                        dmrbits = dmrbits[0:116] + _target_status[_target['TS']]['TX_EMB_LC'][_dtype_vseq] + dmrbits[148:264]"
+        replace_1 = "                    elif _dtype_vseq in [1,2,3,4]:  # NINJA_PRESERVE_TALKER_ALIAS\n                        if self._system != 'CORE-BRIDGE' and not (_target['TGID'] == _dst_id and _system['TS'] == _target['TS']):\n                            dmrbits = dmrbits[0:116] + _target_status[_target['TS']]['TX_EMB_LC'][_dtype_vseq] + dmrbits[148:264]"
+        target_2 = "                        elif _dtype_vseq in [1,2,3,4]:\n                            dmrbits = dmrbits[0:116] + _target_status[_target['TS']]['TX_EMB_LC'][_dtype_vseq] + dmrbits[148:264]"
+        replace_2 = "                        elif _dtype_vseq in [1,2,3,4]:  # NINJA_PRESERVE_TALKER_ALIAS\n                            if self._system != 'CORE-BRIDGE' and not (_target['TGID'] == _dst_id and _system['TS'] == _target['TS']):\n                                dmrbits = dmrbits[0:116] + _target_status[_target['TS']]['TX_EMB_LC'][_dtype_vseq] + dmrbits[148:264]"
+        if target_1 in src:
+            src = src.replace(target_1, replace_1)
+            print('✓ Patched FreeDMR: preserved Talker Alias in bridge_master.py dmrd_received')
+        if target_2 in src:
+            src = src.replace(target_2, replace_2)
+            print('✓ Patched FreeDMR: preserved Talker Alias in bridge_master.py sendDataToHBP')
+        open(bm, 'w', encoding='utf-8').write(src)
 PYEOF
 
 # Determine FreeDMR master script
