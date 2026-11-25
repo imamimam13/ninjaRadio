@@ -6,7 +6,7 @@ import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import {
   KeyRound, Copy, Check, RefreshCw, ShieldAlert, ShieldCheck,
-  LogOut, Radio, Wifi, UserCheck, Send, Pencil
+  LogOut, Radio, Wifi, UserCheck, Send, Pencil, ArrowRightLeft, Plus, Trash2, Power
 } from "lucide-react";
 
 interface UserAccount {
@@ -41,6 +41,18 @@ interface UserAccount {
   dvswitch_allowed_ip: string;
 }
 
+interface PeerIdentityMapping {
+  id: number;
+  user_id?: number;
+  source_identifier: string;
+  source_type: string;
+  target_peer_id: string;
+  outbound_dmr_id: number;
+  outbound_callsign: string;
+  description?: string;
+  enabled: boolean;
+}
+
 export default function AccountPage() {
   const { isConnected } = useLiveMonitor();
   const [token, setToken] = useState<string>("");
@@ -61,6 +73,89 @@ export default function AccountPage() {
   const [reqZello, setReqZello] = useState(false);
   const [reqTeamspeak, setReqTeamspeak] = useState(false);
 
+  // Peer Identity Mapping (Masquerade) State
+  const [peerMappings, setPeerMappings] = useState<PeerIdentityMapping[]>([]);
+  const [newPeer, setNewPeer] = useState("");
+  const [newCallsign, setNewCallsign] = useState("");
+  const [newDmrId, setNewDmrId] = useState("");
+  const [newSourceUser, setNewSourceUser] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [isAddingMapping, setIsAddingMapping] = useState(false);
+
+  const fetchPeerMappings = async (tok: string) => {
+    try {
+      const res = await fetch("/api/selfcare/peer-identities", {
+        headers: { Authorization: `Bearer ${tok}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPeerMappings(data);
+      }
+    } catch {}
+  };
+
+  const handleCreateMapping = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPeer.trim() || !newCallsign.trim() || !newDmrId.trim()) return;
+    try {
+      const res = await fetch("/api/selfcare/peer-identities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          source_identifier: newSourceUser.trim() || user?.callsign || "",
+          source_type: "ALL",
+          target_peer_id: newPeer.trim(),
+          outbound_callsign: newCallsign.trim().toUpperCase(),
+          outbound_dmr_id: parseInt(newDmrId.trim(), 10),
+          description: newDesc.trim() || undefined,
+          enabled: true,
+        }),
+      });
+      if (res.ok) {
+        setNewPeer("");
+        setNewCallsign("");
+        setNewDmrId("");
+        setNewSourceUser("");
+        setNewDesc("");
+        setIsAddingMapping(false);
+        setActionMsg("✓ Delegasi identitas peer berhasil disimpan!");
+        fetchPeerMappings(token);
+      } else {
+        const err = await res.json();
+        setActionMsg(err.detail || "Gagal menyimpan delegasi identitas.");
+      }
+    } catch (err: any) {
+      setActionMsg(err.message || "Gagal menyimpan delegasi identitas.");
+    }
+  };
+
+  const handleToggleMapping = async (mapping: PeerIdentityMapping) => {
+    try {
+      const res = await fetch(`/api/selfcare/peer-identities/${mapping.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ enabled: !mapping.enabled }),
+      });
+      if (res.ok) {
+        fetchPeerMappings(token);
+      }
+    } catch {}
+  };
+
+  const handleDeleteMapping = async (id: number) => {
+    if (!confirm("Hapus delegasi identitas peer ini?")) return;
+    try {
+      const res = await fetch(`/api/selfcare/peer-identities/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setActionMsg("✓ Delegasi identitas berhasil dihapus.");
+        fetchPeerMappings(token);
+      }
+    } catch {}
+  };
+
   const fetchProfile = async (tok: string) => {
     setLoading(true);
     try {
@@ -77,6 +172,7 @@ export default function AccountPage() {
         setReqDvs(data.req_dvswitch);
         setReqZello(data.req_zello);
         setReqTeamspeak(data.req_teamspeak);
+        fetchPeerMappings(tok);
       } else {
         localStorage.removeItem("ninjaradio_selfcare_token");
         setToken("");
@@ -511,6 +607,166 @@ export default function AccountPage() {
                 </div>
               </div>
             )}
+
+            {/* DELEGASI IDENTITAS UPSTREAM PEER (PEER MASQUERADE) */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <ArrowRightLeft className="w-4 h-4 text-purple-400" />
+                    Delegasi Identitas Upstream Peer (Peer Masquerade)
+                  </h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Gunakan callsign & DMR ID khusus otomatis saat transmisi ke server peer tertentu (seperti <b>k2pi</b>, <b>dmrid.online</b>, dll) tanpa perlu mengubah profil di radio fisik, Pi-Star, atau aplikasi Anda.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingMapping(!isAddingMapping)}
+                  className="px-3 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 text-xs font-semibold flex items-center gap-1.5 transition"
+                >
+                  <Plus className="w-3.5 h-3.5" /> {isAddingMapping ? "Tutup Form" : "Tambah Delegasi Peer"}
+                </button>
+              </div>
+
+              {isAddingMapping && (
+                <form onSubmit={handleCreateMapping} className="bg-slate-950 border border-purple-500/30 rounded-xl p-4 space-y-3">
+                  <div className="text-xs font-bold text-purple-300">Konfigurasi Identitas Khusus Peer Baru:</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Target Server Peer</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="k2pi, dmrid.online, atau *"
+                        value={newPeer}
+                        onChange={(e) => setNewPeer(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Callsign Keluar di Peer</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Contoh: PC73BOT"
+                        value={newCallsign}
+                        onChange={(e) => setNewCallsign(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:border-purple-500 focus:outline-none uppercase font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">DMR ID Keluar di Peer</label>
+                      <input
+                        type="number"
+                        required
+                        placeholder="Contoh: 573023099"
+                        value={newDmrId}
+                        onChange={(e) => setNewDmrId(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:border-purple-500 focus:outline-none font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Username Khusus Sumber (Opsional)</label>
+                      <input
+                        type="text"
+                        placeholder="Kosongkan jika berlaku untuk semua perangkat Anda"
+                        value={newSourceUser}
+                        onChange={(e) => setNewSourceUser(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Keterangan / Catatan</label>
+                      <input
+                        type="text"
+                        placeholder="Misal: Akun resmi Room K2PI"
+                        value={newDesc}
+                        onChange={(e) => setNewDesc(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingMapping(false)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/30"
+                    >
+                      <Check className="w-3.5 h-3.5" /> Simpan Delegasi
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {peerMappings.length === 0 ? (
+                <div className="text-center py-6 text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                  Belum ada delegasi identitas peer khusus. Transmisi ke semua peer menggunakan callsign & DMR ID utama ({user.callsign} / {user.dmr_id}).
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {peerMappings.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-3 text-xs transition ${
+                        m.enabled ? "bg-slate-950/80 border-slate-800" : "bg-slate-950/40 border-slate-800/40 opacity-60"
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40 uppercase">
+                            PEER: {m.target_peer_id}
+                          </span>
+                          <span className="text-white font-bold font-mono">
+                            ➔ {m.outbound_callsign} (ID: {m.outbound_dmr_id})
+                          </span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                            m.enabled ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-800 text-slate-400"
+                          }`}>
+                            {m.enabled ? "AKTIF" : "NONAKTIF"}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                          <span>Sumber: <b>{m.source_identifier || user.callsign}</b></span>
+                          {m.source_type && m.source_type !== "ALL" && <span>• Tipe: {m.source_type}</span>}
+                          {m.description && <span>• <i>{m.description}</i></span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleMapping(m)}
+                          className={`p-1.5 rounded-lg border text-xs flex items-center gap-1 ${
+                            m.enabled
+                              ? "bg-slate-800 border-slate-700 text-slate-300 hover:text-white"
+                              : "bg-emerald-600/20 border-emerald-500/40 text-emerald-300"
+                          }`}
+                          title={m.enabled ? "Nonaktifkan" : "Aktifkan"}
+                        >
+                          <Power className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMapping(m.id)}
+                          className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 transition"
+                          title="Hapus"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <form onSubmit={handleRequestServices} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4">
               <div className="flex items-center gap-2 text-sm font-bold text-white">

@@ -134,6 +134,22 @@ class CallbookSyncSource(Base):
     last_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+
+class PeerIdentityMapping(Base):
+    __tablename__ = "peer_identity_mappings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+    source_identifier: Mapped[str] = mapped_column(String(64), index=True)
+    source_type: Mapped[str] = mapped_column(String(32), default="ALL")
+    target_peer_id: Mapped[str] = mapped_column(String(64), index=True)
+    outbound_dmr_id: Mapped[int] = mapped_column(Integer, default=5109999)
+    outbound_callsign: Mapped[str] = mapped_column(String(32), default="")
+    description: Mapped[str] = mapped_column(String(128), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

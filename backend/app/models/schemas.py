@@ -262,4 +262,41 @@ class UserAccountAdminResponse(UserAccountPublicResponse):
     prefix_hint: str = ""
 
 
+class PeerIdentityMappingCreate(BaseModel):
+    source_identifier: str
+    source_type: str = "ALL"
+    target_peer_id: str
+    outbound_dmr_id: int
+    outbound_callsign: str
+    description: Optional[str] = ""
+    enabled: bool = True
+
+
+class PeerIdentityMappingUpdate(BaseModel):
+    source_identifier: Optional[str] = None
+    source_type: Optional[str] = None
+    target_peer_id: Optional[str] = None
+    outbound_dmr_id: Optional[int] = None
+    outbound_callsign: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class PeerIdentityMappingResponse(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    source_identifier: str
+    source_type: str
+    target_peer_id: str
+    outbound_dmr_id: int
+    outbound_callsign: str
+    description: str
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 

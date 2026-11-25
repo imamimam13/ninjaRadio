@@ -6,7 +6,7 @@ import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import { usePhysicalPTT } from "@/hooks/usePhysicalPTT";
 import { beepPlayer } from "@/components/BeepPlayer";
 import { AdminGuard } from "@/components/AdminGuard";
-import { getIsAdminUnlocked, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
+import { getIsAdminUnlocked, setAdminUnlocked, verifyAdminPin, getSavedAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
 import { 
   Settings, 
   Key, 
@@ -219,6 +219,57 @@ export default function SettingsPage() {
   const [coreStatus, setCoreStatus] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Admin Peer Identity Mapping State
+  interface AdminPeerMapping {
+    id: number;
+    user_id?: number;
+    source_identifier: string;
+    source_type: string;
+    target_peer_id: string;
+    outbound_dmr_id: number;
+    outbound_callsign: string;
+    enabled: boolean;
+    description?: string;
+  }
+  const [adminPeerMappings, setAdminPeerMappings] = useState<AdminPeerMapping[]>([]);
+
+  const fetchAdminPeerMappings = async () => {
+    try {
+      const pin = getSavedAdminPin();
+      const res = await fetch("/api/admin/peer-identities", {
+        headers: { "X-Admin-Pin": pin },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminPeerMappings(data);
+      }
+    } catch {}
+  };
+
+  const handleAdminToggleMapping = async (m: AdminPeerMapping) => {
+    try {
+      const pin = getSavedAdminPin();
+      const res = await fetch(`/api/selfcare/peer-identities/${m.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Admin-Pin": pin },
+        body: JSON.stringify({ enabled: !m.enabled }),
+      });
+      if (res.ok) fetchAdminPeerMappings();
+    } catch {}
+  };
+
+  const handleAdminDeleteMapping = async (id: number) => {
+    if (!confirm("Hapus aturan delegasi peer ini?")) return;
+    try {
+      const pin = getSavedAdminPin();
+      const res = await fetch(`/api/selfcare/peer-identities/${id}`, {
+        method: "DELETE",
+        headers: { "X-Admin-Pin": pin },
+      });
+      if (res.ok) fetchAdminPeerMappings();
+    } catch {}
+  };
+
   // Helper to build standard MMDVM / FreeDMR / BrandMeister multi-TG options string
   const buildOptionsString = (ts1: string, ts2: string) => {
     const parts: string[] = [];
@@ -278,6 +329,7 @@ export default function SettingsPage() {
         if (data._core_status) {
           setCoreStatus(data._core_status);
         }
+        fetchAdminPeerMappings();
       }
     } catch (err) {
       console.warn("Failed to load /api/config:", err);
@@ -1821,6 +1873,91 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+
+              {/* ADMIN PEER IDENTITY MASQUERADE SECTION */}
+              <div className="mt-6 pt-5 border-t border-cyan-900/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-heading font-black text-xs text-white flex items-center gap-2">
+                      <ArrowRightLeft className="w-4 h-4 text-purple-400" />
+                      Delegasi Identitas Upstream Peer (Peer Masquerade) ({adminPeerMappings.length} Terdaftar)
+                    </h4>
+                    <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                      Pemetaan callsign & DMR ID dinamis per-operator saat transmisi keluar ke server peer upstream.
+                    </p>
+                  </div>
+                  {isAdminUnlocked && (
+                    <button
+                      type="button"
+                      onClick={fetchAdminPeerMappings}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono rounded-lg flex items-center gap-1 border border-slate-700"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Refresh
+                    </button>
+                  )}
+                </div>
+
+                {adminPeerMappings.length === 0 ? (
+                  <div className="text-center py-4 text-xs font-mono text-slate-500 border border-dashed border-cyan-950/60 rounded-xl">
+                    Belum ada aturan delegasi identitas upstream terdaftar.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {adminPeerMappings.map((m) => (
+                      <div
+                        key={m.id}
+                        className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 text-xs font-mono transition ${
+                          m.enabled ? "bg-slate-950/80 border-cyan-900/40" : "bg-slate-950/40 border-slate-900 opacity-60"
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950 border border-purple-700/60 text-purple-300 uppercase">
+                              PEER: {m.target_peer_id}
+                            </span>
+                            <span className="text-white font-bold">
+                              ➔ {m.outbound_callsign} (ID: {m.outbound_dmr_id})
+                            </span>
+                            <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                              m.enabled ? "bg-emerald-950 border border-emerald-700 text-emerald-300" : "bg-slate-800 text-slate-400"
+                            }`}>
+                              {m.enabled ? "AKTIF" : "NONAKTIF"}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                            <span>Sumber: <b>{m.source_identifier || "*"}</b></span>
+                            {m.source_type && m.source_type !== "ALL" && <span>• Tipe: {m.source_type}</span>}
+                            {m.description && <span>• <i>{m.description}</i></span>}
+                          </div>
+                        </div>
+                        {isAdminUnlocked && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleAdminToggleMapping(m)}
+                              className={`px-2 py-1 rounded-lg border text-[10px] font-bold ${
+                                m.enabled
+                                  ? "bg-slate-800 border-slate-700 text-slate-300 hover:text-white"
+                                  : "bg-emerald-600/20 border-emerald-500/40 text-emerald-300"
+                              }`}
+                            >
+                              {m.enabled ? "Nonaktifkan" : "Aktifkan"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAdminDeleteMapping(m.id)}
+                              className="p-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 transition"
+                              title="Hapus"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

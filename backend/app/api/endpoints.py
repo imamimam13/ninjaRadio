@@ -11,7 +11,7 @@ import logging
 
 logger = logging.getLogger("NinjaRadio-Endpoints")
 
-from backend.app.core.database import get_db, UserAccount, CallbookSyncSource
+from backend.app.core.database import get_db, UserAccount, CallbookSyncSource, PeerIdentityMapping
 from backend.app.core.config import settings
 from backend.app.models.schemas import (
     QsoLogResponse, QsoLogCreate,
@@ -21,7 +21,8 @@ from backend.app.models.schemas import (
     OrganizationCreateRequest, OrganizationResponse, OrganizationRuleUpdate,
     SelfCareRegisterRequest, SelfCareLoginRequest, SelfCareServiceRequest,
     SelfCareRotatePasswordRequest, AdminApprovalRequest, AdminRejectRequest,
-    AdminResetPasswordRequest, UserAccountPublicResponse, UserAccountAdminResponse
+    AdminResetPasswordRequest, UserAccountPublicResponse, UserAccountAdminResponse,
+    PeerIdentityMappingCreate, PeerIdentityMappingUpdate, PeerIdentityMappingResponse
 )
 from backend.app.services.logbook_service import LogbookService
 from backend.app.services.callbook_service import CallbookService
@@ -4061,6 +4062,194 @@ async def admin_reset_password(
         if item.id == user.id:
             return item
     raise HTTPException(status_code=500, detail="Gagal memuat ulang data user.")
+
+
+# ----------------- Dynamic Peer Identity Mapping (Selfcare & Admin) -----------------
+
+async def _get_current_selfcare_user_optional(
+    authorization: Optional[str] = Header(None),
+    session: AsyncSession = Depends(get_db)
+) -> Optional[UserAccount]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    try:
+        payload = verify_session_token(authorization[7:].strip())
+        if not payload or not payload.get("uid"):
+            return None
+        res = await session.execute(select(UserAccount).where(UserAccount.id == payload.get("uid")))
+        return res.scalar_one_or_none()
+    except Exception:
+        return None
+
+
+def _check_admin_pin(x_admin_pin: Optional[str]) -> bool:
+    try:
+        admin_pin = get_admin_pin()
+        return bool(x_admin_pin and x_admin_pin.strip() == admin_pin)
+    except Exception:
+        return False
+
+
+@router.get("/selfcare/peer-identities", response_model=List[PeerIdentityMappingResponse])
+async def list_peer_identities(
+    user_id: Optional[int] = None,
+    source_identifier: Optional[str] = None,
+    target_peer_id: Optional[str] = None,
+    x_admin_pin: Optional[str] = Header(None, alias="X-Admin-Pin"),
+    current_user: Optional[UserAccount] = Depends(_get_current_selfcare_user_optional),
+    session: AsyncSession = Depends(get_db)
+):
+    """
+    Returns peer identity mappings.
+    If authenticated as SelfCare user: returns mappings belonging to user (or matching their callsign/DMR ID).
+    If admin: returns all mappings (or filtered).
+    If public query: returns enabled mappings matching specified source_identifier.
+    """
+    is_adm = _check_admin_pin(x_admin_pin)
+    stmt = select(PeerIdentityMapping).order_by(PeerIdentityMapping.id.desc())
+
+    if is_adm:
+        if user_id:
+            stmt = stmt.where(PeerIdentityMapping.user_id == user_id)
+        if source_identifier:
+            stmt = stmt.where(PeerIdentityMapping.source_identifier.ilike(f"%{source_identifier}%"))
+        if target_peer_id:
+            stmt = stmt.where(PeerIdentityMapping.target_peer_id.ilike(f"%{target_peer_id}%"))
+    elif current_user:
+        stmt = stmt.where(
+            or_(
+                PeerIdentityMapping.user_id == current_user.id,
+                PeerIdentityMapping.source_identifier.ilike(current_user.callsign),
+                PeerIdentityMapping.source_identifier == str(current_user.dmr_id)
+            )
+        )
+    else:
+        if not source_identifier:
+            return []
+        stmt = stmt.where(
+            PeerIdentityMapping.enabled == True,
+            or_(
+                PeerIdentityMapping.source_identifier.ilike(source_identifier),
+                PeerIdentityMapping.source_identifier == str(source_identifier)
+            )
+        )
+
+    res = await session.execute(stmt)
+    return res.scalars().all()
+
+
+@router.post("/selfcare/peer-identities", response_model=PeerIdentityMappingResponse)
+async def create_peer_identity(
+    payload: PeerIdentityMappingCreate,
+    x_admin_pin: Optional[str] = Header(None, alias="X-Admin-Pin"),
+    current_user: Optional[UserAccount] = Depends(_get_current_selfcare_user_optional),
+    session: AsyncSession = Depends(get_db)
+):
+    """Creates a new upstream peer identity mapping."""
+    is_adm = _check_admin_pin(x_admin_pin)
+    if not is_adm and not current_user:
+        raise HTTPException(status_code=401, detail="Login SelfCare atau PIN Admin diperlukan.")
+
+    src_id_str = payload.source_identifier.strip() if payload.source_identifier else ""
+    u_id = None
+
+    if current_user and not is_adm:
+        u_id = current_user.id
+        if not src_id_str:
+            src_id_str = current_user.callsign
+
+    mapping = PeerIdentityMapping(
+        user_id=u_id,
+        source_identifier=src_id_str,
+        source_type=payload.source_type or "ALL",
+        target_peer_id=payload.target_peer_id.strip(),
+        outbound_dmr_id=int(payload.outbound_dmr_id),
+        outbound_callsign=payload.outbound_callsign.strip().upper(),
+        description=(payload.description or "").strip()[:128],
+        enabled=payload.enabled
+    )
+    session.add(mapping)
+    await session.commit()
+    await session.refresh(mapping)
+    return mapping
+
+
+@router.put("/selfcare/peer-identities/{mapping_id}", response_model=PeerIdentityMappingResponse)
+async def update_peer_identity(
+    mapping_id: int,
+    payload: PeerIdentityMappingUpdate,
+    x_admin_pin: Optional[str] = Header(None, alias="X-Admin-Pin"),
+    current_user: Optional[UserAccount] = Depends(_get_current_selfcare_user_optional),
+    session: AsyncSession = Depends(get_db)
+):
+    """Updates an existing peer identity mapping."""
+    is_adm = _check_admin_pin(x_admin_pin)
+    if not is_adm and not current_user:
+        raise HTTPException(status_code=401, detail="Login SelfCare atau PIN Admin diperlukan.")
+
+    res = await session.execute(select(PeerIdentityMapping).where(PeerIdentityMapping.id == mapping_id))
+    mapping = res.scalar_one_or_none()
+    if not mapping:
+        raise HTTPException(status_code=404, detail="Mapping tidak ditemukan.")
+
+    if not is_adm and current_user and mapping.user_id != current_user.id:
+        if mapping.source_identifier.upper() != current_user.callsign.upper() and mapping.source_identifier != str(current_user.dmr_id):
+            raise HTTPException(status_code=403, detail="Tidak memiliki akses ke mapping ini.")
+
+    if payload.source_identifier is not None:
+        mapping.source_identifier = payload.source_identifier.strip()
+    if payload.source_type is not None:
+        mapping.source_type = payload.source_type
+    if payload.target_peer_id is not None:
+        mapping.target_peer_id = payload.target_peer_id.strip()
+    if payload.outbound_dmr_id is not None:
+        mapping.outbound_dmr_id = int(payload.outbound_dmr_id)
+    if payload.outbound_callsign is not None:
+        mapping.outbound_callsign = payload.outbound_callsign.strip().upper()
+    if payload.description is not None:
+        mapping.description = payload.description.strip()[:128]
+    if payload.enabled is not None:
+        mapping.enabled = payload.enabled
+
+    await session.commit()
+    await session.refresh(mapping)
+    return mapping
+
+
+@router.delete("/selfcare/peer-identities/{mapping_id}")
+async def delete_peer_identity(
+    mapping_id: int,
+    x_admin_pin: Optional[str] = Header(None, alias="X-Admin-Pin"),
+    current_user: Optional[UserAccount] = Depends(_get_current_selfcare_user_optional),
+    session: AsyncSession = Depends(get_db)
+):
+    """Deletes an upstream peer identity mapping."""
+    is_adm = _check_admin_pin(x_admin_pin)
+    if not is_adm and not current_user:
+        raise HTTPException(status_code=401, detail="Login SelfCare atau PIN Admin diperlukan.")
+
+    res = await session.execute(select(PeerIdentityMapping).where(PeerIdentityMapping.id == mapping_id))
+    mapping = res.scalar_one_or_none()
+    if not mapping:
+        raise HTTPException(status_code=404, detail="Mapping tidak ditemukan.")
+
+    if not is_adm and current_user and mapping.user_id != current_user.id:
+        if mapping.source_identifier.upper() != current_user.callsign.upper() and mapping.source_identifier != str(current_user.dmr_id):
+            raise HTTPException(status_code=403, detail="Tidak memiliki akses ke mapping ini.")
+
+    await session.delete(mapping)
+    await session.commit()
+    return {"status": "SUCCESS"}
+
+
+@router.get("/admin/peer-identities", response_model=List[PeerIdentityMappingResponse])
+async def admin_list_peer_identities(
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin_pin)
+):
+    """Admin view: lists all peer identity mappings."""
+    res = await session.execute(select(PeerIdentityMapping).order_by(PeerIdentityMapping.id.desc()))
+    return res.scalars().all()
 
 
 # ----------------- Callbook Auto-Sync URL Sources -----------------
