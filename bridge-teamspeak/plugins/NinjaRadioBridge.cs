@@ -450,8 +450,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
 
         DateTime now = DateTime.UtcNow;
 
-        // VOX Schmitt Trigger: Attack >= 45.0, Release < 20.0 (GEMINI.md Section 7.3)
-        if (!isVoiceActive && rms >= 45.0)
+        // VOX Schmitt Trigger: Attack >= 85.0, Release < 38.0 (GEMINI.md Section 7.3)
+        if (!isVoiceActive && rms >= 85.0)
         {
             isVoiceActive = true;
             activeTalkerClientId = rawSenderId;
@@ -463,7 +463,7 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
         }
         else if (isVoiceActive && rawSenderId == activeTalkerClientId)
         {
-            if (rms >= 20.0)
+            if (rms >= 38.0)
             {
                 lastVoiceTime = now;
             }
@@ -498,8 +498,8 @@ public class NinjaRadioBridge : IBotPlugin, IAudioPassiveConsumer
     {
         DateTime now = DateTime.UtcNow;
 
-        // 1. Hangover Timer: 950ms silence threshold before unkeying (prevents stutter PTT during natural pauses between words)
-        if (isVoiceActive && (now - lastVoiceTime).TotalMilliseconds >= 950)
+        // 1. Hangover Timer: 650ms silence threshold before unkeying (prevents stutter PTT during natural pauses between words)
+        if (isVoiceActive && (now - lastVoiceTime).TotalMilliseconds >= 650)
         {
             isVoiceActive = false;
             activeTalkerClientId = 0;

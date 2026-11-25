@@ -6,7 +6,7 @@ import { Navbar } from "@/components/Navbar";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
 import {
   KeyRound, Copy, Check, RefreshCw, ShieldAlert, ShieldCheck,
-  LogOut, Radio, Wifi, UserCheck, Send, Pencil, ArrowRightLeft, Plus, Trash2, Power
+  LogOut, Radio, Wifi, UserCheck, Send, Pencil, ArrowRightLeft, Plus, Trash2, Power, Globe
 } from "lucide-react";
 
 interface UserAccount {
@@ -53,6 +53,21 @@ interface PeerIdentityMapping {
   enabled: boolean;
 }
 
+interface ConnectedPeerInfo {
+  id?: string;
+  name: string;
+  host: string;
+  port: number;
+  isActive: boolean;
+  state: string;
+  is_connected: boolean;
+  callsign: string;
+  dmr_id: number;
+  subscribed_tgs: string;
+  packets_rx?: number;
+  packets_tx?: number;
+}
+
 export default function AccountPage() {
   const { isConnected } = useLiveMonitor();
   const [token, setToken] = useState<string>("");
@@ -75,12 +90,30 @@ export default function AccountPage() {
 
   // Peer Identity Mapping (Masquerade) State
   const [peerMappings, setPeerMappings] = useState<PeerIdentityMapping[]>([]);
+  const [availablePeers, setAvailablePeers] = useState<ConnectedPeerInfo[]>([]);
+  const [loadingPeers, setLoadingPeers] = useState(false);
   const [newPeer, setNewPeer] = useState("");
   const [newCallsign, setNewCallsign] = useState("");
   const [newDmrId, setNewDmrId] = useState("");
   const [newSourceUser, setNewSourceUser] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [isAddingMapping, setIsAddingMapping] = useState(false);
+
+  const fetchAvailablePeers = async () => {
+    setLoadingPeers(true);
+    try {
+      const res = await fetch("/api/peers");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setAvailablePeers(data);
+        }
+      }
+    } catch {}
+    finally {
+      setLoadingPeers(false);
+    }
+  };
 
   const fetchPeerMappings = async (tok: string) => {
     try {
@@ -173,6 +206,7 @@ export default function AccountPage() {
         setReqZello(data.req_zello);
         setReqTeamspeak(data.req_teamspeak);
         fetchPeerMappings(tok);
+        fetchAvailablePeers();
       } else {
         localStorage.removeItem("ninjaradio_selfcare_token");
         setToken("");
@@ -186,6 +220,7 @@ export default function AccountPage() {
   };
 
   useEffect(() => {
+    fetchAvailablePeers();
     const saved = typeof window !== "undefined" ? localStorage.getItem("ninjaradio_selfcare_token") || "" : "";
     if (saved) {
       setToken(saved);
@@ -629,20 +664,150 @@ export default function AccountPage() {
                 </button>
               </div>
 
+              {/* DAFTAR PEER UPSTREAM EKSTERNAL TERKONEKSI */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-cyan-400" />
+                    <span className="text-xs font-bold text-slate-200">
+                      Status Server DMR Upstream ke Luar ({availablePeers.length} Terdaftar)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchAvailablePeers}
+                    disabled={loadingPeers}
+                    className="p-1 text-slate-400 hover:text-cyan-300 rounded transition flex items-center gap-1 text-[11px]"
+                    title="Segarkan status peer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingPeers ? "animate-spin text-cyan-400" : ""}`} />
+                    <span className="hidden sm:inline">Refresh</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  Daftar server DMR luar yang terkoneksi/terdaftar di sistem saat ini. Transmisi radio Anda akan diteruskan ke server-server ini. <span className="text-amber-400/90 font-medium">(Murni server DMR luar, tidak mencakup bot internal seperti Mumble/TS3/SvxLink lokal).</span>
+                </p>
+
+                {availablePeers.length === 0 ? (
+                  <div className="text-center py-3 text-[11px] text-slate-500 font-mono">
+                    {loadingPeers ? "Memuat status server peer..." : "Belum ada peer upstream eksternal yang terdaftar."}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {availablePeers.map((p) => {
+                      const isConnected = p.is_connected || p.state === "CONNECTED";
+                      return (
+                        <div
+                          key={p.id || p.name}
+                          className={`p-3 rounded-xl border text-xs flex flex-col justify-between gap-2 transition ${
+                            isConnected
+                              ? "bg-emerald-950/20 border-emerald-500/40"
+                              : p.state === "STANDBY"
+                              ? "bg-amber-950/20 border-amber-500/30"
+                              : "bg-slate-900/60 border-slate-800/80 opacity-75"
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-1 mb-1">
+                              <span className="font-bold text-white font-mono truncate" title={p.name}>
+                                {p.name}
+                              </span>
+                              <span
+                                className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-1 ${
+                                  isConnected
+                                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                                    : p.state === "STANDBY"
+                                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                                    : "bg-slate-800 text-slate-400 border border-slate-700"
+                                }`}
+                              >
+                                {isConnected ? (
+                                  <>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                    TERHUBUNG
+                                  </>
+                                ) : p.state === "STANDBY" ? (
+                                  "STANDBY"
+                                ) : (
+                                  "NONAKTIF"
+                                )}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              Host: {p.host}:{p.port}
+                            </div>
+                            <div className="text-[10px] text-cyan-300 font-mono mt-0.5">
+                              ID: {p.callsign} ({p.dmr_id})
+                            </div>
+                            {p.subscribed_tgs && (
+                              <div className="text-[9px] text-slate-500 font-mono truncate mt-0.5" title={p.subscribed_tgs}>
+                                TG: {p.subscribed_tgs}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewPeer(p.name);
+                              setIsAddingMapping(true);
+                            }}
+                            className="w-full py-1 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/40 text-[10px] text-purple-300 font-medium transition text-center"
+                          >
+                            + Delegasikan ke {p.name}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               {isAddingMapping && (
                 <form onSubmit={handleCreateMapping} className="bg-slate-950 border border-purple-500/30 rounded-xl p-4 space-y-3">
                   <div className="text-xs font-bold text-purple-300">Konfigurasi Identitas Khusus Peer Baru:</div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                     <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">Target Server Peer</label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] text-slate-400">Target Server Peer</label>
+                        <span className="text-[9px] text-purple-400">Pilih atau ketik:</span>
+                      </div>
                       <input
                         type="text"
                         required
-                        placeholder="k2pi, dmrid.online, atau *"
+                        placeholder="Contoh: bridi.my.id, dmrid.online, k2pi, *"
                         value={newPeer}
                         onChange={(e) => setNewPeer(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:border-purple-500 focus:outline-none"
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:border-purple-500 focus:outline-none font-mono"
                       />
+                      {availablePeers.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {availablePeers.map((ap) => (
+                            <button
+                              key={ap.name}
+                              type="button"
+                              onClick={() => setNewPeer(ap.name)}
+                              className={`px-1.5 py-0.5 rounded text-[9px] font-mono border transition ${
+                                newPeer === ap.name
+                                  ? "bg-purple-600 border-purple-400 text-white font-bold"
+                                  : "bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300"
+                              }`}
+                            >
+                              {ap.name}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => setNewPeer("*")}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-mono border transition ${
+                              newPeer === "*"
+                                ? "bg-purple-600 border-purple-400 text-white font-bold"
+                                : "bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300"
+                            }`}
+                          >
+                            * (Semua Peer)
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[11px] text-slate-400 mb-1">Callsign Keluar di Peer</label>

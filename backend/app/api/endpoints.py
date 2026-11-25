@@ -948,18 +948,86 @@ async def delete_bridge_worker(worker_id: str):
 
 @router.get("/peers")
 async def get_configured_peers():
+    """
+    Returns configured external upstream DMR peers (e.g. BRIDI, BrandMeister, FreeDMR, dmrid.online)
+    along with their live connection status from Core Engine.
+    Excludes internal bot peers (TS3, Mumble, SvxLink localhost bots).
+    """
     cfg = read_config_file()
     peers = cfg.get("peering", [])
+
+    # Query live connection telemetry from Core Engine
+    core_peers_map = {}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            resp = await client.get("http://core:5000/api/status")
+            if resp.status_code == 200:
+                for cp in resp.json().get("peers", []):
+                    c_name = str(cp.get("name", "")).strip().lower()
+                    c_host = str(cp.get("host", "")).strip().lower()
+                    if c_name:
+                        core_peers_map[c_name] = cp
+                    if c_host:
+                        core_peers_map[c_host] = cp
+    except Exception as e:
+        logger.debug(f"Unable to query core engine peer status: {e}")
+
+    INTERNAL_HOSTS = {
+        "127.0.0.1", "localhost", "teamspeak-server", "mumble", "svxreflector",
+        "freedmr", "core", "backend", "frontend", "bridge-zello", "bridge-mumble", "bridge-svxlink"
+    }
+
     result = []
     for p in peers:
         p_name = str(p.get("name") or "").strip()
+        p_host = str(p.get("host", "")).strip()
+        p_port = int(p.get("port", 62031))
+        is_active = p.get("isActive", False)
+
+        # Exclude internal / loopback bots strictly
+        h_lower = p_host.lower()
+        if (
+            h_lower in INTERNAL_HOSTS
+            or h_lower.startswith("127.")
+            or h_lower.startswith("172.")
+            or h_lower.startswith("10.")
+            or h_lower.startswith("192.168.")
+        ):
+            continue
+
         if p_name:
+            cp_info = core_peers_map.get(p_name.lower()) or core_peers_map.get(h_lower) or {}
+            if cp_info:
+                state = cp_info.get("state", "CONNECTED" if cp_info.get("is_connected") else "STANDBY")
+                is_connected = cp_info.get("is_connected", state == "CONNECTED")
+                rx = cp_info.get("packets_rx", 0)
+                tx = cp_info.get("packets_tx", 0)
+            elif not is_active:
+                state = "NONAKTIF"
+                is_connected = False
+                rx = 0
+                tx = 0
+            else:
+                state = "STANDBY"
+                is_connected = False
+                rx = 0
+                tx = 0
+
             result.append({
                 "id": p.get("id"),
                 "name": p_name,
-                "host": p.get("host", ""),
-                "port": p.get("port", 62031),
-                "isActive": p.get("isActive", True)
+                "host": p_host,
+                "port": p_port,
+                "isActive": is_active,
+                "state": state,
+                "is_connected": is_connected,
+                "callsign": p.get("callsign") or cfg.get("server_callsign", "N1NJA"),
+                "dmr_id": p.get("dmr_id") or p.get("dmrId") or cfg.get("server_dmr_id", 5109999),
+                "subscribed_tgs": p.get("subscribedTgs") or p.get("subscribed_tgs") or "",
+                "packets_rx": rx,
+                "packets_tx": tx,
+                "is_external": True
             })
     return result
 
@@ -1569,6 +1637,13 @@ async def handle_internal_dmr_traffic(event: dict, session: AsyncSession = Depen
         ACTIVE_STREAMS[stream_key] = tx_data
 
         tx_data["stream_key"] = stream_key
+        # Single-Talker per TG & Slot Invariant: Retire older stream on this exact TG & Slot when a new talker keys up
+        if is_new_stream:
+            for old_sk, old_info in list(ACTIVE_STREAMS.items()):
+                if old_sk != stream_key and old_info.get("talkgroup") == dst_tg and old_info.get("slot") == slot:
+                    ACTIVE_STREAMS.pop(old_sk, None)
+                    await manager.update_stream(old_sk, None)
+
         # Throttle TX_STATE_CHANGE to avoid flooding WebSockets 50x per sec (prevents React re-render lag)
         if is_new_stream or (now - last_broadcast > 0.5):
             tx_data["last_broadcast"] = now

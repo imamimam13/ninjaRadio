@@ -380,6 +380,26 @@ export default function DashboardPage() {
   const [isLoadingClients, setIsLoadingClients] = useState(false);
   const [clientProtocolFilter, setClientProtocolFilter] = useState<string>("ALL");
 
+  const [showPeersModal, setShowPeersModal] = useState(false);
+  const [peerList, setPeerList] = useState<any[]>([]);
+  const [isLoadingPeers, setIsLoadingPeers] = useState(false);
+
+  const fetchPeers = () => {
+    setIsLoadingPeers(true);
+    fetch("/api/peers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setPeerList(data);
+        setIsLoadingPeers(false);
+      })
+      .catch(() => setIsLoadingPeers(false));
+  };
+
+  const handleOpenPeersModal = () => {
+    setShowPeersModal(true);
+    fetchPeers();
+  };
+
   const fetchClients = () => {
     setIsLoadingClients(true);
     fetch("/api/clients")
@@ -436,8 +456,10 @@ export default function DashboardPage() {
         {activeTxList && activeTxList.length > 0 ? (
           <div className="space-y-3">
             {activeTxList.map((tx, idx) => {
+              const firstIdxForThisTg = activeTxList.findIndex(t => Number(t.talkgroup) === Number(tx.talkgroup));
               const isCardAudible =
                 !isMuted &&
+                idx === firstIdxForThisTg &&
                 (selectedTgFilter !== null
                   ? Number(selectedTgFilter) === Number(tx.talkgroup)
                   : (audibleTg !== null ? Number(audibleTg) === Number(tx.talkgroup) : idx === 0));
@@ -683,10 +705,14 @@ export default function DashboardPage() {
             <div className="text-[10px] text-slate-500 font-mono mt-1">SvxLink · TS3 · Mumble · Zello · DMR</div>
           </div>
 
-          <div className="bg-[#0c1322] border border-cyan-900/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-cyan-500/50 transition-all">
+          <div
+            onClick={handleOpenPeersModal}
+            className="bg-[#0c1322] border border-cyan-900/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-amber-500/60 cursor-pointer transition-all group"
+            title="Klik untuk melihat daftar server upstream DMR luar yang terkoneksi"
+          >
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span className="font-bold">PEERS & OUTGOING LINKS</span>
-              <Globe className="w-4 h-4 text-amber-400" />
+              <span className="font-bold group-hover:text-amber-300 transition-colors">PEERS & OUTGOING LINKS</span>
+              <Globe className="w-4 h-4 text-amber-400 group-hover:rotate-12 transition-transform" />
             </div>
             <div className="mt-3 flex items-baseline justify-between">
               <span className="text-3xl font-black text-white font-mono">
@@ -697,7 +723,7 @@ export default function DashboardPage() {
               </span>
             </div>
             <div className="text-[10px] text-slate-500 font-mono mt-1">
-              FreeDMR ({stats.connected_peers || 0}) · Outgoing ({ (stats as any).outgoing_peers || 0})
+              FreeDMR ({stats.connected_peers || 0}) · Outgoing ({ (stats as any).outgoing_peers || 0}) · Klik detail
             </div>
           </div>
 
@@ -1169,6 +1195,111 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => setShowClientsModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONNECTED EXTERNAL UPSTREAM PEERS MODAL */}
+      {showPeersModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e1626] border-2 border-amber-500/60 rounded-3xl max-w-3xl w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-amber-900/40 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500 flex items-center justify-center">
+                  <Globe className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="font-heading font-black text-sm text-white">Status Interkoneksi DMR Upstream ke Luar</h3>
+                  <p className="text-[11px] font-mono text-slate-400">
+                    {peerList.filter((p: any) => p.is_connected || p.state === "CONNECTED").length} dari {peerList.length} server luar terhubung
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchPeers}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 transition-colors"
+                  title="Refresh Daftar"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isLoadingPeers ? "animate-spin" : ""}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPeersModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed bg-amber-950/20 border border-amber-500/30 rounded-xl p-3">
+              ℹ️ Daftar ini murni menampilkan interkoneksi <b>server DMR upstream eksternal ke luar</b> (BrandMeister, FreeDMR, BRIDI, tombolptt, dmrid.online). <span className="text-amber-300 font-semibold">Tidak mencakup bot internal</span> (seperti bot Mumble, TS3, atau SvxLink lokal).
+            </p>
+
+            <div className="max-h-[60vh] overflow-y-auto space-y-2.5 pr-1">
+              {peerList.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-500 font-mono">
+                  {isLoadingPeers ? "Memuat status server peer..." : "Belum ada peer upstream eksternal yang terdaftar."}
+                </div>
+              ) : (
+                peerList.map((p: any) => {
+                  const isConn = p.is_connected || p.state === "CONNECTED";
+                  return (
+                    <div
+                      key={p.id || p.name}
+                      className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                        isConn
+                          ? "bg-[#06111f] border-emerald-500/50 shadow-md shadow-emerald-950/20"
+                          : p.state === "STANDBY"
+                          ? "bg-[#11160d] border-amber-500/40"
+                          : "bg-slate-900/50 border-slate-800 opacity-70"
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${isConn ? "bg-emerald-400 animate-pulse" : p.state === "STANDBY" ? "bg-amber-400" : "bg-slate-500"}`} />
+                          <span className="font-bold text-sm text-white font-mono">{p.name}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            isConn
+                              ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                              : p.state === "STANDBY"
+                              ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                              : "bg-slate-800 text-slate-400 border-slate-700"
+                          }`}>
+                            {isConn ? "TERHUBUNG (CONNECTED)" : p.state === "STANDBY" ? "STANDBY" : "NONAKTIF"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-400 font-mono flex flex-wrap items-center gap-3">
+                          <span>Endpoint: <strong className="text-white">{p.host}:{p.port}</strong></span>
+                          <span>Callsign Keluar: <strong className="text-cyan-300">{p.callsign}</strong> (ID: {p.dmr_id})</span>
+                        </div>
+                        {p.subscribed_tgs && (
+                          <div className="text-[11px] text-slate-400 font-mono">
+                            Talkgroups: <span className="text-amber-200/80">{p.subscribed_tgs}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right text-[11px] font-mono text-slate-400 flex sm:flex-col justify-between sm:justify-center items-end">
+                        <span>Paket RX: <strong className="text-emerald-400">{p.packets_rx || 0}</strong></span>
+                        <span>Paket TX: <strong className="text-cyan-400">{p.packets_tx || 0}</strong></span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowPeersModal(false)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl"
               >
                 Tutup
