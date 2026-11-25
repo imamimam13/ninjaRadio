@@ -108,3 +108,9 @@ Thumbs.db
 **/local.properties
 local.properties
 
+# Protected Development Source & Backups
+dev_source/
+source_backup/
+**/source_backup/
+
+
