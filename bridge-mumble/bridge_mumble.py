@@ -1264,7 +1264,13 @@ class MumbleGatewayBot:
                     except Exception:
                         pass
 
-                    if (my_sess is not None and user_sess == my_sess) or uname.startswith("NinjaBot-") or uname.startswith("[DMR]") or uname == "SuperUser":
+                    if (
+                        (my_sess is not None and user_sess == my_sess)
+                        or uname.startswith("NinjaBot-")
+                        or uname.startswith("[DMR]")
+                        or uname == "SuperUser"
+                        or (hasattr(self, "bot_user") and uname == self.bot_user)
+                    ):
                         return
 
                     # Verify user is in this bot's channel
