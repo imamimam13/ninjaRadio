@@ -133,7 +133,21 @@ if os.path.exists(bm):
         if target_2 in src:
             src = src.replace(target_2, replace_2)
             print('✓ Patched FreeDMR: preserved Talker Alias in bridge_master.py sendDataToHBP')
-        open(bm, 'w', encoding='utf-8').write(src)
+
+    # Exempt CORE-BRIDGE from aggressive PacketControl drops (out-of-order & duplicate payload)
+    if 'NINJA_CORE_BRIDGE_DROP_FIX' not in src:
+        target_ooo = "            if _seq and self.STATUS[_slot]['lastSeq']  and (_seq != 1) and (_seq < self.STATUS[_slot]['lastSeq']):"
+        replace_ooo = "            if self._system != 'CORE-BRIDGE' and _seq and self.STATUS[_slot]['lastSeq']  and (_seq != 1) and (_seq < self.STATUS[_slot]['lastSeq']):  # NINJA_CORE_BRIDGE_DROP_FIX"
+        target_crc = "            if _seq > 0 and _pkt_crc in self.STATUS[_slot]['crcs']:"
+        replace_crc = "            if self._system != 'CORE-BRIDGE' and _seq > 0 and _pkt_crc in self.STATUS[_slot]['crcs']:  # NINJA_CORE_BRIDGE_DROP_FIX"
+        if target_ooo in src:
+            src = src.replace(target_ooo, replace_ooo)
+            print('✓ Patched FreeDMR: exempt CORE-BRIDGE from out-of-order drop')
+        if target_crc in src:
+            src = src.replace(target_crc, replace_crc)
+            print('✓ Patched FreeDMR: exempt CORE-BRIDGE from duplicate payload drop')
+
+    open(bm, 'w', encoding='utf-8').write(src)
 PYEOF
 
 # Determine FreeDMR master script
