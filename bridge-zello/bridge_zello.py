@@ -545,12 +545,17 @@ def run_dmr_rx_listener(loop: asyncio.AbstractEventLoop):
             data, addr = sock.recvfrom(2048)
             if len(data) >= 32 and data[:4] == b"USRP":
                 magic, seq, mem, key_flag, tg, src_id, slot, res = struct.unpack(">4sIIIIIII", data[:32])
-                pcm_8k = data[32:]
+                explicit_call = ""
+                if len(data) >= 56:
+                    explicit_call = data[32:56].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                    pcm_8k = data[56:]
+                else:
+                    pcm_8k = data[32:]
                 if tg == bridge_state.target_tg:
                     # Half-duplex guard: do not feed DMR audio back into Zello while an authorized Zello speaker is actively talking
                     if key_flag == 1 and bridge_state.active_speaker_allowed and (time.time() - bridge_state.last_rx_time < 0.75):
                         continue
-                    def _enqueue_pkt(item=(key_flag, pcm_8k, tg, src_id, slot)):
+                    def _enqueue_pkt(item=(key_flag, pcm_8k, tg, src_id, slot, explicit_call)):
                         if item[0] == 1 and dmr_to_zello_queue.qsize() > 60:
                             try:
                                 dmr_to_zello_queue.get_nowait()
@@ -704,7 +709,12 @@ async def zello_websocket_worker():
                                 bridge_state.active_stream_id = None
 
                             try:
-                                key_flag, pcm_8k, tg, src_id, slot = await asyncio.wait_for(dmr_to_zello_queue.get(), timeout=0.08)
+                                queue_item = await asyncio.wait_for(dmr_to_zello_queue.get(), timeout=0.08)
+                                if len(queue_item) >= 6:
+                                    key_flag, pcm_8k, tg, src_id, slot, explicit_call = queue_item[:6]
+                                else:
+                                    key_flag, pcm_8k, tg, src_id, slot = queue_item[:5]
+                                    explicit_call = ""
                             except asyncio.TimeoutError:
                                 # Watchdog with VOX hangover guardrail (0.55s): prevent premature cutoffs between speech phrases
                                 if bridge_state.dmr_to_zello_streaming and (time.time() - last_pcm_time > 0.55):
@@ -744,7 +754,14 @@ async def zello_websocket_worker():
 
                                 # Start stream if not yet started
                                 if not bridge_state.dmr_to_zello_streaming:
-                                    talker_call, talker_name = resolve_callbook_info_by_id(src_id)
+                                    cb_call, cb_name = resolve_callbook_info_by_id(src_id)
+                                    if explicit_call and (src_id in (0, 5109999) or cb_call.startswith("ID ")):
+                                        talker_call = explicit_call
+                                    elif src_id > 0 and not cb_call.startswith("ID "):
+                                        talker_call = cb_call
+                                    else:
+                                        talker_call = explicit_call or cb_call or f"ID-{src_id}"
+
                                     # Standard Zello Channel API: 16kHz, 1 frame/pkt, 60ms duration -> codec_header = "gD4BPA=="
                                     # Crucial: 60ms duration satisfies Zello mobile jitter buffer for immediate live loudspeaker playback
                                     start_cmd = {
@@ -768,11 +785,15 @@ async def zello_websocket_worker():
                                     record_log(f"DMR -> Zello LIVE TX Started on Channel '{bridge_state.channel}' (TG {tg} from {talker_call})")
                                     # Send text notification to Zello channel on new DMR transmission
                                     try:
+                                        if src_id in (0, 5109999) or str(src_id) in talker_call:
+                                            zello_text = f"📻 [DMR RX] {talker_call} on TG {tg}"
+                                        else:
+                                            zello_text = f"📻 [DMR RX] {talker_call} ({src_id}) on TG {tg}"
                                         text_cmd = {
                                             "command": "send_text_message",
                                             "seq": bridge_state.seq_counter,
                                             "channel": bridge_state.channel,
-                                            "text": f"📻 [DMR RX] {talker_call} ({src_id}) on TG {tg}"
+                                            "text": zello_text
                                         }
                                         bridge_state.seq_counter += 1
                                         await ws.send(json.dumps(text_cmd))

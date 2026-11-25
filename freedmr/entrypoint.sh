@@ -11,7 +11,7 @@ mkdir -p /opt/freedmr/json
 
 # Initialize alias files in the exact format expected by dmr_utils3
 echo '{"rptrs": []}' > "/opt/freedmr/json/peer_ids.json"
-echo '{"talkgroups": [{"id": 1025, "callsign": "TG 1025"}, {"id": 510, "callsign": "TG 510"}, {"id": 5109, "callsign": "TG 5109"}, {"id": 5101, "callsign": "TG 5101"}, {"id": 5102, "callsign": "TG 5102"}, {"id": 5103, "callsign": "TG 5103"}, {"id": 9990, "callsign": "TG 9990"}, {"id": 91, "callsign": "TG 91"}]}' > "/opt/freedmr/json/talkgroup_ids.json"
+echo '{"talkgroups": [{"id": 1025, "callsign": "TG 1025"}, {"id": 510, "callsign": "TG 510"}, {"id": 5109, "callsign": "TG 5109"}, {"id": 5101, "callsign": "TG 5101"}, {"id": 5102, "callsign": "TG 5102"}, {"id": 5103, "callsign": "TG 5103"}, {"id": 9990, "callsign": "TG 9990"}, {"id": 91, "callsign": "TG 91"}, {"id": 51024, "callsign": "TG 51024"}, {"id": 510991, "callsign": "TG 510991"}]}' > "/opt/freedmr/json/talkgroup_ids.json"
 echo '{"users": []}' > "/opt/freedmr/json/local_subscriber_ids.json"
 echo '{"users": []}' > "/opt/freedmr/json/subscriber_ids.json"
 

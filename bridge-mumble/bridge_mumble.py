@@ -1121,11 +1121,17 @@ class MumbleGatewayBot:
             if my_ch_id is None:
                 return
 
-            disp_call = (callsign or f"ID-{dmr_id}").replace("-", " ")
-            msg_html = (
-                f"📻 <b>[DMR]</b> Transmisi masuk: <b>{disp_call}</b> ({dmr_id}) "
-                f"di <b>TG {self.tg}</b>"
-            )
+            disp_call = (callsign or (f"ID-{dmr_id}" if dmr_id not in (0, 5109999) else "DMR Station")).replace("-", " ")
+            if dmr_id in (0, 5109999) or str(dmr_id) in disp_call:
+                msg_html = (
+                    f"📻 <b>[DMR]</b> Transmisi masuk: <b>{disp_call}</b> "
+                    f"di <b>TG {self.tg}</b>"
+                )
+            else:
+                msg_html = (
+                    f"📻 <b>[DMR]</b> Transmisi masuk: <b>{disp_call}</b> ({dmr_id}) "
+                    f"di <b>TG {self.tg}</b>"
+                )
 
             target_ch = self.mumble.channels.get(my_ch_id)
             if target_ch and hasattr(target_ch, "send_text_message"):
@@ -1145,15 +1151,19 @@ class MumbleGatewayBot:
             return
 
         self.current_morphed_callsign = callsign
-        disp_call = callsign.replace("-", " ")
+        disp_call = (callsign or (f"ID-{dmr_id}" if dmr_id not in (0, 5109999) else "DMR Station")).replace("-", " ")
         if ENABLE_MUMBLE_NAME_MORPH:
             new_name = f"[DMR] {disp_call}"[:25]
             self._rename(new_name)
-        self._set_comment(f"🔴 <b>TX Live:</b> [DMR] {disp_call} ({dmr_id}) on TG {self.tg}")
+        if dmr_id in (0, 5109999) or str(dmr_id) in disp_call:
+            comment_text = f"🔴 <b>TX Live:</b> [DMR] {disp_call} on TG {self.tg}"
+        else:
+            comment_text = f"🔴 <b>TX Live:</b> [DMR] {disp_call} ({dmr_id}) on TG {self.tg}"
+        self._set_comment(comment_text)
         # Send chat notification to Mumble channel containing active caller callsign
         if os.getenv("ENABLE_MUMBLE_CHAT_NOTIF", "true").lower() == "true":
             self.send_channel_notification(callsign, dmr_id)
-        logger.info(f"[{self.default_bot_user}] 💬 DMR RX Status Comment: [DMR] {disp_call} ({dmr_id}) on TG {self.tg}")
+        logger.info(f"[{self.default_bot_user}] 💬 DMR RX Status Comment: {comment_text.replace('<b>', '').replace('</b>', '')}")
 
     def revert_morph(self):
         """Reverts status comment back to default when DMR transmission ceases."""
@@ -1416,12 +1426,19 @@ def run_usrp_listener(gateway_pool):
             data, addr = sock.recvfrom(2048)
             if len(data) >= 32 and (time.time() - last_mumble_tx > 0.65):
                 last_dmr_tx = time.time()
-                pcm_8k = data[32:]
 
                 # Extract key_flag, talkgroup, and source DMR ID from USRP header
                 key_flag = struct.unpack(">I", data[12:16])[0]
                 talkgroup = struct.unpack(">I", data[16:20])[0]
                 dmr_id = struct.unpack(">I", data[20:24])[0]
+
+                # Support 56-byte extended USRP header with 24-byte caller metadata
+                explicit_call = ""
+                if len(data) >= 56:
+                    explicit_call = data[32:56].split(b"\x00")[0].decode("ascii", errors="ignore").strip()
+                    pcm_8k = data[56:]
+                else:
+                    pcm_8k = data[32:]
 
                 # Match bot by target talkgroup (Strict isolation: NEVER leak unmapped TGs into unrelated rooms)
                 target_bots = [bot for bot in gateway_pool.values() if bot.tg == talkgroup]
@@ -1435,19 +1452,21 @@ def run_usrp_listener(gateway_pool):
                     continue
 
                 if len(pcm_8k) > 0:
-                    if dmr_id > 0:
-                        callsign = lookup_callsign_by_dmr_id(dmr_id)
-                        for bot in target_bots:
-                            bot.morph_to_callsign(callsign, dmr_id)
-                            bot.play_pcm_8k(pcm_8k)
+                    if explicit_call and (dmr_id in (0, 5109999) or not lookup_callsign_by_dmr_id(dmr_id)):
+                        callsign = explicit_call
+                    elif dmr_id > 0:
+                        callsign = lookup_callsign_by_dmr_id(dmr_id) or explicit_call or f"ID-{dmr_id}"
                     else:
-                        for bot in target_bots:
-                            bot.play_pcm_8k(pcm_8k)
+                        callsign = explicit_call or "DMR Station"
+
+                    for bot in target_bots:
+                        bot.morph_to_callsign(callsign, dmr_id)
+                        bot.play_pcm_8k(pcm_8k)
 
                 if time.time() - last_rx_log > 2.0 and target_bots:
                     last_rx_log = time.time()
                     bot_names = ", ".join([f"{b.default_bot_user} in '{b.room_name}'" for b in target_bots])
-                    caller_str = f" from {lookup_callsign_by_dmr_id(dmr_id)}" if dmr_id > 0 else ""
+                    caller_str = f" from {callsign}" if 'callsign' in locals() and callsign else (f" from {lookup_callsign_by_dmr_id(dmr_id)}" if dmr_id > 0 else "")
                     logger.info(f"[Mumble-Bridge] 🔊 Routing DMR RX (TG {talkgroup}{caller_str}) to {bot_names}")
 
         except Exception:
