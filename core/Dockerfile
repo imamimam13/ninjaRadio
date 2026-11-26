@@ -23,11 +23,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /var/log /var/lib/dvswitch /app/data && \
     touch /var/lib/dvswitch/subscriber_ids.csv
 
-# 3. Build & install mbelib from source for high-fidelity AMBE2+ decoding
-RUN git clone https://github.com/szechyjs/mbelib.git /tmp/mbelib && \
-    cd /tmp/mbelib && mkdir build && cd build && \
-    cmake .. && make && make install && ldconfig && \
-    rm -rf /tmp/mbelib
+# 3. Build & install mbelib-neo from source for high-fidelity AMBE2+ decoding with adaptive smoothing & FFT synthesis
+RUN git clone --depth 1 https://github.com/arancormonk/mbelib-neo.git /tmp/mbelib-neo && \
+    cd /tmp/mbelib-neo && mkdir -p build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && make -j$(nproc) && make install && ldconfig && \
+    rm -rf /tmp/mbelib-neo
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
