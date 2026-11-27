@@ -93,6 +93,89 @@ if os.path.exists(hb_path):
         src = src.replace('self.send_config()', 'self._factory.send_config()')
         print('✓ Patched FreeDMR reporting socket handler in hblink.py')
 
+    # 1. Prevent a single peer's RPTO options (e.g. mobile app sending TS2_1=555;) from wiping out
+    # system-wide TS1_STATIC / TS2_STATIC for other MMDVM hotspots connected to the same MASTER port!
+    old_rpto = "                self._CONFIG['SYSTEMS'][self._system]['OPTIONS'] = _this_peer['OPTIONS'].decode()"
+    new_rpto = (
+        "                if self._config.get('MAX_PEERS', 1) <= 1:\n"
+        "                    self._CONFIG['SYSTEMS'][self._system]['OPTIONS'] = _this_peer['OPTIONS'].decode()\n"
+        "                else:\n"
+        "                    try:\n"
+        "                        import re as _re\n"
+        "                        _opt_s = _this_peer['OPTIONS'].decode('ascii', errors='ignore')\n"
+        "                        _p_tgs = set()\n"
+        "                        for _m in _re.finditer(r'(?:TS[12](?:_\\d+)?|StartTG)\\s*=\\s*([0-9,]+)', _opt_s):\n"
+        "                            for _p in _m.group(1).split(','):\n"
+        "                                if _p.strip().isdigit() and int(_p.strip()) > 0:\n"
+        "                                    _p_tgs.add(int(_p.strip()))\n"
+        "                        if _p_tgs:\n"
+        "                            _this_peer['SUB_TGS'] = _p_tgs\n"
+        "                            _this_peer['ACTIVE_TG'] = next(iter(_p_tgs))\n"
+        "                            _this_peer['ACTIVE_TG_TIME'] = time()\n"
+        "                    except Exception:\n"
+        "                        pass"
+    )
+    if old_rpto in src and "SUB_TGS" not in src:
+        src = src.replace(old_rpto, new_rpto)
+        print('✓ Patched FreeDMR hblink.py: isolated per-peer RPTO options on multi-peer MASTER')
+
+    # 2. Track each hotspot peer's active TX TG and isolate send_peers so two hotspots on different TGs
+    # (e.g. one on TG 1025 and another on TG 51024/555) never cut off each other's RF timeslot!
+    old_dmrd_rx = "                # The basic purpose of a master is to repeat to the peers"
+    new_dmrd_rx = (
+        "                try:\n"
+        "                    _tx_tg_int = int_id(_dst_id)\n"
+        "                    if _tx_tg_int > 0 and _tx_tg_int != 4000:\n"
+        "                        self._peers[_peer_id]['ACTIVE_TG'] = _tx_tg_int\n"
+        "                        self._peers[_peer_id]['ACTIVE_TG_TIME'] = time()\n"
+        "                except Exception:\n"
+        "                    pass\n"
+        "                # The basic purpose of a master is to repeat to the peers"
+    )
+    if old_dmrd_rx in src and "ACTIVE_TG_TIME" not in src:
+        src = src.replace(old_dmrd_rx, new_dmrd_rx, 1)
+
+    old_send_peers = (
+        "    def send_peers(self, _packet, _hops = b'', _ber = b'\\x00', _rssi = b'\\x00',_source_server = b'\\x00\\x00\\x00\\x00'):\n"
+        "        for _peer in self._peers:\n"
+        "            if len(_packet) < 54:\n"
+        "                _packet =b''.join([_packet,_ber,_rssi])\n"
+        "            self.send_peer(_peer, _packet)"
+    )
+    new_send_peers = (
+        "    def send_peers(self, _packet, _hops = b'', _ber = b'\\x00', _rssi = b'\\x00',_source_server = b'\\x00\\x00\\x00\\x00'):\n"
+        "        _pkt_tg = int_id(_packet[8:11]) if _packet[:4] == DMRD and len(_packet) >= 20 else 0\n"
+        "        _pkt_strid = _packet[16:20] if _packet[:4] == DMRD and len(_packet) >= 20 else b''\n"
+        "        _pkt_slot = (2 if (_packet[15] & 0x80) else 1) if _packet[:4] == DMRD and len(_packet) >= 20 else 2\n"
+        "        _pkt_vterm = ((_packet[15] & 0x30) >> 4 == 2 and (_packet[15] & 0x0F) in (0, 2)) if _packet[:4] == DMRD and len(_packet) >= 20 else False\n"
+        "        _now_t = time()\n"
+        "        for _peer in list(self._peers.keys()):\n"
+        "            _pinfo = self._peers.get(_peer)\n"
+        "            if not _pinfo:\n"
+        "                continue\n"
+        "            if _pkt_tg > 0:\n"
+        "                _sub_tgs = _pinfo.get('SUB_TGS')\n"
+        "                _act_tg = _pinfo.get('ACTIVE_TG', 0)\n"
+        "                if _sub_tgs and _pkt_tg not in _sub_tgs and _pkt_tg != _act_tg:\n"
+        "                    continue\n"
+        "                elif not _sub_tgs and _act_tg and (_now_t - _pinfo.get('ACTIVE_TG_TIME', 0)) < 1800 and _pkt_tg != _act_tg:\n"
+        "                    continue\n"
+        "                elif not _sub_tgs and not _act_tg and _pkt_tg in (555, 200):\n"
+        "                    continue\n"
+        "                _plocks = _pinfo.setdefault('SLOT_LOCKS', {})\n"
+        "                _plock = _plocks.get(_pkt_slot)\n"
+        "                if _plock and _now_t < _plock.get('until', 0.0):\n"
+        "                    if _plock.get('stream_id') != _pkt_strid or _plock.get('tg') != _pkt_tg:\n"
+        "                        continue\n"
+        "                _plocks[_pkt_slot] = {'stream_id': _pkt_strid, 'tg': _pkt_tg, 'until': _now_t + (0.2 if _pkt_vterm else 1.5)}\n"
+        "            if len(_packet) < 54:\n"
+        "                _packet =b''.join([_packet,_ber,_rssi])\n"
+        "            self.send_peer(_peer, _packet)"
+    )
+    if old_send_peers in src and "SLOT_LOCKS" not in src:
+        src = src.replace(old_send_peers, new_send_peers)
+        print('✓ Patched FreeDMR hblink.py: per-hotspot TG & slot lock isolation in send_peers')
+
     with open(hb_path, 'w', encoding='utf-8') as f:
         f.write(src)
 PYEOF
@@ -169,6 +252,31 @@ if os.path.exists(bm):
         print('✓ Patched FreeDMR: fixed _sysslot UnboundLocalError on >180s stream timeout')
 
     # Prevent CORE-BRIDGE from forwarding traffic to both TS1 and TS2 of the same target system, or being blocked by contention on an inactive slot
+    if "NINJA_MULTI_PEER_CONTENTION_BYPASS" not in src:
+        old_cont = "                        if ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < _target_system['GROUP_HANGTIME'])):"
+        new_cont = (
+            "                        if _target_system.get('MAX_PEERS', 1) > 1:  # NINJA_MULTI_PEER_CONTENTION_BYPASS\n"
+            "                            pass\n"
+            "                        elif ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < _target_system['GROUP_HANGTIME'])):"
+        )
+        if old_cont in src:
+            src = src.replace(old_cont, new_cont, 1)
+            src = src.replace(
+                "                        if ((_target['TGID'] != _target_status[_target['TS']]['TX_TGID']) and ((pkt_time - _target_status[_target['TS']]['TX_TIME']) < _target_system['GROUP_HANGTIME'])):",
+                "                        elif ((_target['TGID'] != _target_status[_target['TS']]['TX_TGID']) and ((pkt_time - _target_status[_target['TS']]['TX_TIME']) < _target_system['GROUP_HANGTIME'])):",
+                1,
+            )
+            src = src.replace(
+                "                        if (_target['TGID'] == _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < STREAM_TO):",
+                "                        elif (_target['TGID'] == _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < STREAM_TO):",
+                1,
+            )
+            src = src.replace(
+                "                        if (_target['TGID'] == _target_status[_target['TS']]['TX_TGID']) and (_rf_src != _target_status[_target['TS']]['TX_RFS']) and ((pkt_time - _target_status[_target['TS']]['TX_TIME']) < STREAM_TO):",
+                "                        elif (_target['TGID'] == _target_status[_target['TS']]['TX_TGID']) and (_rf_src != _target_status[_target['TS']]['TX_RFS']) and ((pkt_time - _target_status[_target['TS']]['TX_TIME']) < STREAM_TO):",
+                1,
+            )
+            print('✓ Patched FreeDMR: delegated multi-peer MASTER contention to per-hotspot send_peers')
     if "NINJA_PEER_SLOT_AGNOSTIC" not in src:
         old_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and _system['TS'] == _slot and _system['ACTIVE'] == True:"
         new_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and (_system['TS'] == _slot or CONFIG['SYSTEMS'][self._system]['MODE'] == 'PEER') and _system['ACTIVE'] == True and not _bridge.startswith('#'):  # NINJA_PEER_SLOT_AGNOSTIC"
