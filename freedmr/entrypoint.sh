@@ -171,10 +171,28 @@ if os.path.exists(bm):
     # Prevent CORE-BRIDGE from forwarding traffic to both TS1 and TS2 of the same target system, or being blocked by contention on an inactive slot
     if "NINJA_PEER_SLOT_AGNOSTIC" not in src:
         old_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and _system['TS'] == _slot and _system['ACTIVE'] == True:"
-        new_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and (_system['TS'] == _slot or CONFIG['SYSTEMS'][self._system]['MODE'] == 'PEER') and _system['ACTIVE'] == True:  # NINJA_PEER_SLOT_AGNOSTIC"
+        new_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and (_system['TS'] == _slot or CONFIG['SYSTEMS'][self._system]['MODE'] == 'PEER') and _system['ACTIVE'] == True and not _bridge.startswith('#'):  # NINJA_PEER_SLOT_AGNOSTIC"
         if old_loop in src:
             src = src.replace(old_loop, new_loop)
             print('✓ Patched FreeDMR: slot-agnostic PEER ingress matching in dmrd_received')
+        old_ref = (
+            "                            #Send to reflector or TG too, if it exists\n"
+            "                            if _bridge[0:1] == '#':\n"
+            "                                _bridge = _bridge[1:]\n"
+            "                            else:\n"
+            "                                _bridge = '#'+_bridge\n"
+            "                            if _bridge in BRIDGES:\n"
+            "                                _sysIgnore = self.to_target(_peer_id, _rf_src, _dst_id, _seq, _slot, _call_type, _frame_type, _dtype_vseq, _stream_id, _data, pkt_time, dmrpkt, _bits,_bridge,_system,False,_sysIgnore,_source_server,_ber,_rssi)"
+        )
+        new_ref = (
+            "                            #Send to reflector or TG too, if it exists\n"
+            "                            _alt_bridge = _bridge[1:] if _bridge[0:1] == '#' else ('#' + _bridge)\n"
+            "                            if _alt_bridge in BRIDGES:\n"
+            "                                _sysIgnore = self.to_target(_peer_id, _rf_src, _dst_id, _seq, _slot, _call_type, _frame_type, _dtype_vseq, _stream_id, _data, pkt_time, dmrpkt, _bits,_alt_bridge,_system,False,_sysIgnore,_source_server,_ber,_rssi)"
+        )
+        if old_ref in src:
+            src = src.replace(old_ref, new_ref)
+            print('✓ Patched FreeDMR: preserved _bridge name across multi-slot loop')
         old_rw = "                        if _system['TS'] != _target['TS']:"
         new_rw = "                        if (self._system != 'CORE-BRIDGE' and _system['TS'] != _target['TS']) or (self._system == 'CORE-BRIDGE' and _slot != _target['TS']):"
         if old_rw in src:
