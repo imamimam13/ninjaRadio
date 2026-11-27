@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useTransition } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { AdminGuard } from "@/components/AdminGuard";
 import { useLiveMonitor } from "@/hooks/useLiveMonitor";
@@ -12,7 +12,6 @@ import {
   Activity,
   Cpu,
   Layers,
-  Radio,
   Globe,
   RefreshCw,
   CheckCircle2,
@@ -21,13 +20,9 @@ import {
   Save,
   RotateCcw,
   Sparkles,
-  Sliders,
   ShieldCheck,
-  Disc,
   Info,
-  Server,
-  ArrowRightLeft,
-  Volume1
+  Server
 } from "lucide-react";
 
 interface MasterAudioSettings {
@@ -43,25 +38,29 @@ interface MasterAudioSettings {
 
 interface ModeAudioSetting {
   name: string;
-  ingress_gain: number;
-  egress_gain: number;
-  agc: boolean;
-  muted: boolean;
+  ingress_gain?: number;
+  egress_gain?: number;
+  rx_gain?: number;
+  tx_gain?: number;
+  agc?: boolean;
+  muted?: boolean;
+  mute?: boolean;
 }
 
 interface PeerAudioSetting {
   name: string;
-  rx_gain: number;
-  tx_gain: number;
-  agc: boolean;
-  muted: boolean;
+  rx_gain?: number;
+  tx_gain?: number;
+  agc?: boolean;
+  muted?: boolean;
+  mute?: boolean;
 }
 
 interface AudioSettingsData {
   master: MasterAudioSettings;
   modes: Record<string, ModeAudioSetting>;
   peers: Record<string, PeerAudioSetting>;
-  active_preset: string;
+  active_preset?: string;
 }
 
 interface PresetDefinition {
@@ -126,9 +125,16 @@ const PRESET_OPTIONS: PresetDefinition[] = [
   }
 ];
 
-const gainToDb = (gain: number): string => {
-  if (gain <= 0.001) return "-inf dB";
-  const db = 20 * Math.log10(gain);
+const getGain = (val: any, fallback = 1.0): number => {
+  if (typeof val === "number" && !isNaN(val)) return val;
+  const n = parseFloat(val);
+  return isNaN(n) ? fallback : n;
+};
+
+const gainToDb = (gain: any): string => {
+  const g = getGain(gain, 1.0);
+  if (g <= 0.001) return "-inf dB";
+  const db = 20 * Math.log10(g);
   return `${db >= 0 ? "+" : ""}${db.toFixed(1)} dB`;
 };
 
@@ -168,9 +174,27 @@ export default function AdminAudioDashboardPage() {
         throw new Error(`HTTP ${res.status}: ${text}`);
       }
       const json = await res.json();
-      const payload = json.data || (json.master ? json : null);
+      const payload: AudioSettingsData | null = json.data || (json.master ? json : null);
       if (payload) {
-        setSettings(payload);
+        // Guarantee master defaults
+        const master: MasterAudioSettings = {
+          dmr_rx_gain: getGain(payload.master?.dmr_rx_gain ?? (payload.modes?.dmr as any)?.rx_gain, 2.8),
+          target_rms: getGain(payload.master?.target_rms, 4200),
+          max_agc_gain: getGain(payload.master?.max_agc_gain, 4.0),
+          limiter_threshold: getGain(payload.master?.limiter_threshold, 18000),
+          agc_enabled: Boolean(payload.master?.agc_enabled ?? true),
+          filter_hpf: Boolean(payload.master?.filter_hpf ?? true),
+          filter_lpf: Boolean(payload.master?.filter_lpf ?? true),
+          filter_deemph: Boolean(payload.master?.filter_deemph ?? true)
+        };
+
+        setSettings({
+          ...payload,
+          master,
+          modes: payload.modes || {},
+          peers: payload.peers || {}
+        });
+
         if (payload.active_preset) {
           setActivePreset(payload.active_preset);
         }
@@ -188,14 +212,14 @@ export default function AdminAudioDashboardPage() {
     try {
       const res = await fetch("/api/admin/audio-meter");
       const json = await res.json();
-      if (json.status === "success") {
+      if (json.status === "success" || json.active_streams_count !== undefined) {
         setTelemetry({
           core_online: json.core_online ?? true,
-          active_streams: json.active_streams ?? 0,
-          active_talker: json.active_talker ?? null,
-          rms_level: json.rms_level ?? 0,
-          dbfs: json.dbfs ?? -60,
-          limiter_active: json.limiter_active ?? false,
+          active_streams: json.active_streams ?? json.active_streams_count ?? 0,
+          active_talker: json.active_talker ?? (json.streams && json.streams[0] ? json.streams[0] : null),
+          rms_level: getGain(json.rms_level, 0),
+          dbfs: getGain(json.dbfs, -60),
+          limiter_active: Boolean(json.limiter_active),
           vocoder: json.vocoder || "mbelib-neo HD (SIMD AVX/NEON)",
           normalizer_active: json.normalizer_active ?? true
         });
@@ -234,11 +258,11 @@ export default function AdminAudioDashboardPage() {
         throw new Error(`HTTP ${res.status}: ${text}`);
       }
       const json = await res.json();
-      if (json.status === "success") {
+      if (json.status === "success" || json.status === "SUCCESS") {
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3500);
         const payload = json.data || (json.audio_settings ? json.audio_settings : null);
-        if (payload) setSettings(payload);
+        if (payload) fetchSettings();
       } else {
         setErrorMsg(json.detail || json.message || "Gagal menyimpan konfigurasi");
       }
@@ -265,15 +289,11 @@ export default function AdminAudioDashboardPage() {
         throw new Error(`HTTP ${res.status}: ${text}`);
       }
       const json = await res.json();
-      if (json.status === "success") {
+      if (json.status === "success" || json.status === "SUCCESS") {
         setActivePreset(presetId);
-        const payload = json.data || (json.audio_settings ? json.audio_settings : null);
-        if (payload) setSettings(payload);
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3500);
-        if (json.data) setSettings(json.data);
-        setSaveSuccess(true);
-        setTimeout(() => setSaveSuccess(false), 3500);
+        fetchSettings();
       } else {
         setErrorMsg(json.detail || "Gagal menerapkan preset");
       }
@@ -303,9 +323,8 @@ export default function AdminAudioDashboardPage() {
       const gain = ctx.createGain();
 
       osc.type = "sine";
-      osc.frequency.setValueAtTime(1000, ctx.currentTime); // 1 kHz test tone
+      osc.frequency.setValueAtTime(1000, ctx.currentTime);
 
-      // Safe ramp-in and ramp-out to avoid pop
       gain.gain.setValueAtTime(0.001, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.05);
       gain.gain.setValueAtTime(0.25, ctx.currentTime + 0.45);
@@ -343,34 +362,48 @@ export default function AdminAudioDashboardPage() {
   };
 
   // Helper to update mode settings locally
-  const updateMode = (modeKey: string, field: keyof ModeAudioSetting, val: any) => {
+  const updateMode = (modeKey: string, field: string, val: any) => {
     if (!settings || !settings.modes[modeKey]) return;
+    const currentMode = settings.modes[modeKey];
     setSettings({
       ...settings,
       modes: {
         ...settings.modes,
         [modeKey]: {
-          ...settings.modes[modeKey],
-          [field]: val
+          ...currentMode,
+          [field]: val,
+          ...(field === "ingress_gain" ? { rx_gain: val } : {}),
+          ...(field === "egress_gain" ? { tx_gain: val } : {}),
+          ...(field === "muted" ? { mute: val } : {})
         }
       }
     });
   };
 
   // Helper to update peer settings locally
-  const updatePeer = (peerKey: string, field: keyof PeerAudioSetting, val: any) => {
+  const updatePeer = (peerKey: string, field: string, val: any) => {
     if (!settings || !settings.peers[peerKey]) return;
+    const currentPeer = settings.peers[peerKey];
     setSettings({
       ...settings,
       peers: {
         ...settings.peers,
         [peerKey]: {
-          ...settings.peers[peerKey],
-          [field]: val
+          ...currentPeer,
+          [field]: val,
+          ...(field === "muted" ? { mute: val } : {})
         }
       }
     });
   };
+
+  const dmrRxGainVal = getGain(
+    settings?.master?.dmr_rx_gain ?? (settings?.modes?.dmr as any)?.rx_gain,
+    2.8
+  );
+  const targetRmsVal = getGain(settings?.master?.target_rms, 4200);
+  const maxAgcGainVal = getGain(settings?.master?.max_agc_gain, 4.0);
+  const limiterThreshVal = getGain(settings?.master?.limiter_threshold, 18000);
 
   return (
     <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30">
@@ -410,7 +443,7 @@ export default function AdminAudioDashboardPage() {
                 </span>
                 <span className="px-2.5 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center gap-1.5">
                   <Sparkles className="w-3 h-3 text-cyan-300" />
-                  DYNAMIC AGC: {settings?.master.agc_enabled ? "ON" : "OFF"}
+                  DYNAMIC AGC: {settings?.master?.agc_enabled ? "ON" : "OFF"}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-md bg-purple-500/10 border border-purple-500/30 text-purple-400">
                   TDMA JITTER: 150ms SAFE
@@ -494,10 +527,10 @@ export default function AdminAudioDashboardPage() {
                 <Volume2 className="w-4 h-4 text-cyan-400" />
               </div>
               <div className="text-2xl font-black text-cyan-400 tracking-tight font-mono">
-                {settings ? `${settings.master.dmr_rx_gain.toFixed(2)}x` : "-"}
+                {settings ? `${dmrRxGainVal.toFixed(2)}x` : "-"}
               </div>
               <div className="text-[11px] text-slate-400 font-mono mt-1">
-                {settings ? gainToDb(settings.master.dmr_rx_gain) : "-"} (Vocoder Multiplier)
+                {settings ? gainToDb(dmrRxGainVal) : "-"} (Vocoder Multiplier)
               </div>
             </div>
 
@@ -508,7 +541,7 @@ export default function AdminAudioDashboardPage() {
                 <Zap className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="text-2xl font-black text-emerald-400 tracking-tight font-mono">
-                {settings ? `${Math.round(settings.master.target_rms)}` : "-"} <span className="text-xs font-normal text-slate-400">RMS</span>
+                {settings ? `${Math.round(targetRmsVal)}` : "-"} <span className="text-xs font-normal text-slate-400">RMS</span>
               </div>
               <div className="text-[11px] text-slate-400 font-mono mt-1">
                 Nominal: -14 dBFS broadcast
@@ -522,7 +555,7 @@ export default function AdminAudioDashboardPage() {
                 <ShieldCheck className="w-4 h-4 text-amber-400" />
               </div>
               <div className="text-2xl font-black text-amber-400 tracking-tight font-mono">
-                {settings ? settings.master.limiter_threshold : 18000}
+                {settings ? limiterThreshVal : 18000}
               </div>
               <div className="text-[11px] text-slate-400 font-mono mt-1">
                 Anti-clipping Tanh Knee
@@ -536,7 +569,7 @@ export default function AdminAudioDashboardPage() {
                 <Layers className="w-4 h-4 text-purple-400" />
               </div>
               <div className="text-2xl font-black text-purple-400 tracking-tight font-mono">
-                {settings ? Object.keys(settings.modes).length : 6} / 6
+                {settings && settings.modes ? Object.keys(settings.modes).length : 6} / 6
               </div>
               <div className="text-[11px] text-slate-400 font-mono mt-1">
                 DMR, Web, Mumble, Svx, Zello, DVS
@@ -554,7 +587,7 @@ export default function AdminAudioDashboardPage() {
               </div>
               <div className="text-[11px] text-slate-400 font-mono mt-1 truncate">
                 {telemetry.active_talker
-                  ? `${telemetry.active_talker.callsign} (TG ${telemetry.active_talker.talkgroup})`
+                  ? `${telemetry.active_talker.callsign || "Remote"} (${telemetry.active_talker.talkgroup ? "TG " + telemetry.active_talker.talkgroup : telemetry.active_talker.mode || "Audio"})`
                   : "Menunggu burst suara..."}
               </div>
             </div>
@@ -631,7 +664,6 @@ export default function AdminAudioDashboardPage() {
 
             {/* Simulated VU Meter Bar */}
             <div className="w-full h-4 bg-slate-950 rounded-full p-0.5 border border-slate-800 overflow-hidden relative">
-              {/* Scale Tick Marks */}
               <div className="absolute inset-0 flex justify-between px-2 text-[8px] font-mono text-slate-600 pointer-events-none select-none items-center">
                 <span>-40dB</span>
                 <span>-24dB</span>
@@ -641,7 +673,6 @@ export default function AdminAudioDashboardPage() {
                 <span className="text-amber-400 font-bold">-3dB</span>
                 <span className="text-red-400 font-bold">0dB</span>
               </div>
-              {/* Dynamic Fill Bar */}
               <div
                 className={`h-full rounded-full transition-all duration-150 ${
                   telemetry.dbfs > -3
@@ -658,7 +689,7 @@ export default function AdminAudioDashboardPage() {
           </div>
 
           {/* Master Dynamic Equalization & Vocoder DSP Card */}
-          {settings && (
+          {settings && settings.master && (
             <div className="p-5 sm:p-6 rounded-2xl bg-[#0c1427] border border-cyan-500/30 shadow-2xl space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-4">
                 <div className="space-y-1">
@@ -676,7 +707,7 @@ export default function AdminAudioDashboardPage() {
                   <label className="text-xs font-semibold text-slate-300 flex items-center gap-2 cursor-pointer bg-slate-900/80 px-3 py-1.5 rounded-xl border border-slate-700">
                     <input
                       type="checkbox"
-                      checked={settings.master.agc_enabled}
+                      checked={Boolean(settings.master.agc_enabled)}
                       onChange={(e) => updateMaster("agc_enabled", e.target.checked)}
                       className="rounded bg-slate-800 border-slate-600 text-cyan-500 focus:ring-cyan-500 w-4 h-4"
                     />
@@ -692,7 +723,7 @@ export default function AdminAudioDashboardPage() {
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-200">Vocoder RX Gain</label>
                     <span className="text-xs font-mono font-bold text-cyan-400">
-                      {settings.master.dmr_rx_gain.toFixed(2)}x ({gainToDb(settings.master.dmr_rx_gain)})
+                      {dmrRxGainVal.toFixed(2)}x ({gainToDb(dmrRxGainVal)})
                     </span>
                   </div>
                   <input
@@ -700,7 +731,7 @@ export default function AdminAudioDashboardPage() {
                     min="0.5"
                     max="5.0"
                     step="0.05"
-                    value={settings.master.dmr_rx_gain}
+                    value={dmrRxGainVal}
                     onChange={(e) => updateMaster("dmr_rx_gain", parseFloat(e.target.value))}
                     className="w-full accent-cyan-400 cursor-pointer h-2 bg-slate-800 rounded-lg"
                   />
@@ -714,7 +745,7 @@ export default function AdminAudioDashboardPage() {
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-200">Target RMS Normalizer</label>
                     <span className="text-xs font-mono font-bold text-emerald-400">
-                      {Math.round(settings.master.target_rms)} RMS
+                      {Math.round(targetRmsVal)} RMS
                     </span>
                   </div>
                   <input
@@ -722,7 +753,7 @@ export default function AdminAudioDashboardPage() {
                     min="1500"
                     max="7000"
                     step="100"
-                    value={settings.master.target_rms}
+                    value={targetRmsVal}
                     onChange={(e) => updateMaster("target_rms", parseFloat(e.target.value))}
                     className="w-full accent-emerald-400 cursor-pointer h-2 bg-slate-800 rounded-lg"
                   />
@@ -736,7 +767,7 @@ export default function AdminAudioDashboardPage() {
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-200">Max AGC Gain Ceiling</label>
                     <span className="text-xs font-mono font-bold text-amber-400">
-                      {settings.master.max_agc_gain.toFixed(1)}x ({gainToDb(settings.master.max_agc_gain)})
+                      {maxAgcGainVal.toFixed(1)}x ({gainToDb(maxAgcGainVal)})
                     </span>
                   </div>
                   <input
@@ -744,7 +775,7 @@ export default function AdminAudioDashboardPage() {
                     min="1.0"
                     max="6.0"
                     step="0.1"
-                    value={settings.master.max_agc_gain}
+                    value={maxAgcGainVal}
                     onChange={(e) => updateMaster("max_agc_gain", parseFloat(e.target.value))}
                     className="w-full accent-amber-400 cursor-pointer h-2 bg-slate-800 rounded-lg"
                   />
@@ -758,7 +789,7 @@ export default function AdminAudioDashboardPage() {
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-200">Tanh Limiter Ceiling</label>
                     <span className="text-xs font-mono font-bold text-purple-400">
-                      {settings.master.limiter_threshold}
+                      {limiterThreshVal}
                     </span>
                   </div>
                   <input
@@ -766,7 +797,7 @@ export default function AdminAudioDashboardPage() {
                     min="12000"
                     max="28000"
                     step="500"
-                    value={settings.master.limiter_threshold}
+                    value={limiterThreshVal}
                     onChange={(e) => updateMaster("limiter_threshold", parseFloat(e.target.value))}
                     className="w-full accent-purple-400 cursor-pointer h-2 bg-slate-800 rounded-lg"
                   />
@@ -785,7 +816,7 @@ export default function AdminAudioDashboardPage() {
                   </div>
                   <input
                     type="checkbox"
-                    checked={settings.master.filter_hpf}
+                    checked={Boolean(settings.master.filter_hpf)}
                     onChange={(e) => updateMaster("filter_hpf", e.target.checked)}
                     className="rounded bg-slate-800 border-slate-600 text-cyan-500 focus:ring-cyan-500 w-4 h-4 ml-3"
                   />
@@ -798,7 +829,7 @@ export default function AdminAudioDashboardPage() {
                   </div>
                   <input
                     type="checkbox"
-                    checked={settings.master.filter_lpf}
+                    checked={Boolean(settings.master.filter_lpf)}
                     onChange={(e) => updateMaster("filter_lpf", e.target.checked)}
                     className="rounded bg-slate-800 border-slate-600 text-cyan-500 focus:ring-cyan-500 w-4 h-4 ml-3"
                   />
@@ -811,7 +842,7 @@ export default function AdminAudioDashboardPage() {
                   </div>
                   <input
                     type="checkbox"
-                    checked={settings.master.filter_deemph}
+                    checked={Boolean(settings.master.filter_deemph)}
                     onChange={(e) => updateMaster("filter_deemph", e.target.checked)}
                     className="rounded bg-slate-800 border-slate-600 text-cyan-500 focus:ring-cyan-500 w-4 h-4 ml-3"
                   />
@@ -821,7 +852,7 @@ export default function AdminAudioDashboardPage() {
           )}
 
           {/* Inter-Mode Audio Calibration Grid */}
-          {settings && (
+          {settings && settings.modes && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -837,11 +868,16 @@ export default function AdminAudioDashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {Object.entries(settings.modes).map(([modeKey, mode]) => {
+                  const ingress = getGain(mode?.ingress_gain ?? mode?.rx_gain, 1.0);
+                  const egress = getGain(mode?.egress_gain ?? mode?.tx_gain, 1.0);
+                  const isMuted = Boolean(mode?.muted ?? mode?.mute ?? false);
+                  const isAgc = Boolean(mode?.agc ?? true);
+
                   return (
                     <div
                       key={modeKey}
                       className={`p-4 rounded-2xl border transition-all space-y-4 ${
-                        mode.muted
+                        isMuted
                           ? "bg-red-950/20 border-red-500/30"
                           : "bg-[#0c1427] border-slate-800 hover:border-slate-700 shadow-xl"
                       }`}
@@ -851,22 +887,22 @@ export default function AdminAudioDashboardPage() {
                         <div className="flex items-center gap-2">
                           <div className="w-2 h-2 rounded-full bg-cyan-400" />
                           <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">
-                            {mode.name}
+                            {mode.name || modeKey.toUpperCase()}
                           </h3>
                         </div>
 
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => updateMode(modeKey, "muted", !mode.muted)}
+                            onClick={() => updateMode(modeKey, "muted", !isMuted)}
                             className={`p-1.5 rounded-lg text-xs font-semibold transition-all ${
-                              mode.muted
+                              isMuted
                                 ? "bg-red-500/20 text-red-400 border border-red-500/40"
                                 : "bg-slate-800 text-slate-400 hover:text-slate-200"
                             }`}
-                            title={mode.muted ? "Mode Ter-mute" : "Mute Mode Ini"}
+                            title={isMuted ? "Mode Ter-mute" : "Mute Mode Ini"}
                           >
-                            {mode.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                            {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
                           </button>
 
                           <button
@@ -888,7 +924,7 @@ export default function AdminAudioDashboardPage() {
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-slate-400">Ingress (Masuk Server)</span>
                           <span className="font-mono text-cyan-400 font-bold">
-                            {mode.ingress_gain.toFixed(2)}x ({gainToDb(mode.ingress_gain)})
+                            {ingress.toFixed(2)}x ({gainToDb(ingress)})
                           </span>
                         </div>
                         <input
@@ -896,7 +932,7 @@ export default function AdminAudioDashboardPage() {
                           min="0.2"
                           max="3.0"
                           step="0.05"
-                          value={mode.ingress_gain}
+                          value={ingress}
                           onChange={(e) => updateMode(modeKey, "ingress_gain", parseFloat(e.target.value))}
                           className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                         />
@@ -907,7 +943,7 @@ export default function AdminAudioDashboardPage() {
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-slate-400">Egress (Keluar ke Klien)</span>
                           <span className="font-mono text-emerald-400 font-bold">
-                            {mode.egress_gain.toFixed(2)}x ({gainToDb(mode.egress_gain)})
+                            {egress.toFixed(2)}x ({gainToDb(egress)})
                           </span>
                         </div>
                         <input
@@ -915,7 +951,7 @@ export default function AdminAudioDashboardPage() {
                           min="0.2"
                           max="3.0"
                           step="0.05"
-                          value={mode.egress_gain}
+                          value={egress}
                           onChange={(e) => updateMode(modeKey, "egress_gain", parseFloat(e.target.value))}
                           className="w-full accent-emerald-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                         />
@@ -926,7 +962,7 @@ export default function AdminAudioDashboardPage() {
                         <span>Auto AGC Normalizer</span>
                         <input
                           type="checkbox"
-                          checked={mode.agc}
+                          checked={isAgc}
                           onChange={(e) => updateMode(modeKey, "agc", e.target.checked)}
                           className="rounded bg-slate-800 border-slate-600 text-cyan-500 focus:ring-cyan-500 w-3.5 h-3.5"
                         />
@@ -939,7 +975,7 @@ export default function AdminAudioDashboardPage() {
           )}
 
           {/* Interconnected Peers Audio Calibration Grid */}
-          {settings && (
+          {settings && settings.peers && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -955,11 +991,15 @@ export default function AdminAudioDashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {Object.entries(settings.peers).map(([peerKey, peer]) => {
+                  const rxGain = getGain(peer?.rx_gain, 1.0);
+                  const txGain = getGain(peer?.tx_gain, 1.0);
+                  const isPeerMuted = Boolean(peer?.muted ?? peer?.mute ?? false);
+
                   return (
                     <div
                       key={peerKey}
                       className={`p-4 rounded-2xl border transition-all space-y-4 ${
-                        peer.muted
+                        isPeerMuted
                           ? "bg-red-950/20 border-red-500/30"
                           : "bg-[#0c1427] border-slate-800 hover:border-slate-700 shadow-xl"
                       }`}
@@ -969,22 +1009,22 @@ export default function AdminAudioDashboardPage() {
                         <div className="flex items-center gap-2">
                           <Server className="w-4 h-4 text-sky-400" />
                           <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">
-                            {peer.name}
+                            {peer.name || peerKey}
                           </h3>
                         </div>
 
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => updatePeer(peerKey, "muted", !peer.muted)}
+                            onClick={() => updatePeer(peerKey, "muted", !isPeerMuted)}
                             className={`p-1.5 rounded-lg text-xs font-semibold transition-all ${
-                              peer.muted
+                              isPeerMuted
                                 ? "bg-red-500/20 text-red-400 border border-red-500/40"
                                 : "bg-slate-800 text-slate-400 hover:text-slate-200"
                             }`}
-                            title={peer.muted ? "Peer Ter-mute" : "Mute Peer Ini"}
+                            title={isPeerMuted ? "Peer Ter-mute" : "Mute Peer Ini"}
                           >
-                            {peer.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                            {isPeerMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
                           </button>
 
                           <button
@@ -1006,7 +1046,7 @@ export default function AdminAudioDashboardPage() {
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-slate-400">Incoming RX Gain (Dari Peer)</span>
                           <span className="font-mono text-cyan-400 font-bold">
-                            {peer.rx_gain.toFixed(2)}x ({gainToDb(peer.rx_gain)})
+                            {rxGain.toFixed(2)}x ({gainToDb(rxGain)})
                           </span>
                         </div>
                         <input
@@ -1014,7 +1054,7 @@ export default function AdminAudioDashboardPage() {
                           min="0.2"
                           max="3.0"
                           step="0.05"
-                          value={peer.rx_gain}
+                          value={rxGain}
                           onChange={(e) => updatePeer(peerKey, "rx_gain", parseFloat(e.target.value))}
                           className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                         />
@@ -1025,7 +1065,7 @@ export default function AdminAudioDashboardPage() {
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-slate-400">Outgoing TX Gain (Ke Peer)</span>
                           <span className="font-mono text-emerald-400 font-bold">
-                            {peer.tx_gain.toFixed(2)}x ({gainToDb(peer.tx_gain)})
+                            {txGain.toFixed(2)}x ({gainToDb(txGain)})
                           </span>
                         </div>
                         <input
@@ -1033,7 +1073,7 @@ export default function AdminAudioDashboardPage() {
                           min="0.2"
                           max="3.0"
                           step="0.05"
-                          value={peer.tx_gain}
+                          value={txGain}
                           onChange={(e) => updatePeer(peerKey, "tx_gain", parseFloat(e.target.value))}
                           className="w-full accent-emerald-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                         />

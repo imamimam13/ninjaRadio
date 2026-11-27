@@ -4950,6 +4950,32 @@ async def get_admin_audio_settings():
         audio_cfg["peers"] = peers_dict
         audio_cfg["presets"] = {"current_preset": "broadcast_warm", "available": list(PRESET_PROFILES.keys())}
     
+    # Normalize master attributes
+    master = audio_cfg.setdefault("master", {})
+    master.setdefault("dmr_rx_gain", 2.8)
+    master.setdefault("target_rms", 4200.0)
+    master.setdefault("max_agc_gain", 4.0)
+    master.setdefault("limiter_threshold", 18000.0)
+    master.setdefault("agc_enabled", True)
+    master.setdefault("filter_hpf", True)
+    master.setdefault("filter_lpf", True)
+    master.setdefault("filter_deemph", True)
+    
+    # Normalize mode attributes with dual aliases (ingress_gain/rx_gain, egress_gain/tx_gain, muted/mute)
+    modes = audio_cfg.setdefault("modes", {})
+    for mkey, mval in modes.items():
+        if isinstance(mval, dict):
+            ig = float(mval.get("ingress_gain") if mval.get("ingress_gain") is not None else mval.get("rx_gain", 1.0))
+            eg = float(mval.get("egress_gain") if mval.get("egress_gain") is not None else mval.get("tx_gain", 1.0))
+            mval["ingress_gain"] = ig
+            mval["rx_gain"] = ig
+            mval["egress_gain"] = eg
+            mval["tx_gain"] = eg
+            mval.setdefault("agc", True)
+            is_muted = bool(mval.get("muted", mval.get("mute", False)))
+            mval["muted"] = is_muted
+            mval["mute"] = is_muted
+
     # Ensure all peers in config.json exist in audio_cfg["peers"]
     existing_peers = audio_cfg.setdefault("peers", {})
     for p in cfg.get("peering", []):
@@ -4959,9 +4985,21 @@ async def get_admin_audio_settings():
                 "rx_gain": 1.1,
                 "tx_gain": 1.0,
                 "mute": False,
+                "muted": False,
                 "solo": False,
                 "name": p_name
             }
+
+    for pkey, pval in existing_peers.items():
+        if isinstance(pval, dict):
+            pval.setdefault("rx_gain", 1.0)
+            pval.setdefault("tx_gain", 1.0)
+            is_p_muted = bool(pval.get("muted", pval.get("mute", False)))
+            pval["muted"] = is_p_muted
+            pval["mute"] = is_p_muted
+            pval.setdefault("agc", True)
+
+    audio_cfg.setdefault("active_preset", "broadcast_warm")
 
     return {
         "status": "success",
