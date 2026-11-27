@@ -276,7 +276,12 @@ if os.path.exists(bm):
                 "                        elif (_target['TGID'] == _target_status[_target['TS']]['TX_TGID']) and (_rf_src != _target_status[_target['TS']]['TX_RFS']) and ((pkt_time - _target_status[_target['TS']]['TX_TIME']) < STREAM_TO):",
                 1,
             )
-            print('✓ Patched FreeDMR: delegated multi-peer MASTER contention to per-hotspot send_peers')
+            src = src.replace(
+                "                        if (_stream_id != self.STATUS[_slot]['RX_STREAM_ID']):",
+                "                        if (_stream_id != self.STATUS[_slot]['RX_STREAM_ID']) or (_target_status[_target['TS']]['TX_STREAM_ID'] != _stream_id):",
+                1,
+            )
+            print('✓ Patched FreeDMR: delegated multi-peer MASTER contention and per-stream BPTC LC regeneration')
     if "NINJA_PEER_SLOT_AGNOSTIC" not in src:
         old_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and _system['TS'] == _slot and _system['ACTIVE'] == True:"
         new_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and (_system['TS'] == _slot or CONFIG['SYSTEMS'][self._system]['MODE'] == 'PEER') and _system['ACTIVE'] == True and not _bridge.startswith('#'):  # NINJA_PEER_SLOT_AGNOSTIC"
