@@ -109,8 +109,8 @@ if os.path.exists(bm):
     if 'NINJA_PEER_ALWAYS_ACTIVE' not in src and anchor in src:
         inject = (
             "            if CONFIG['SYSTEMS'][_system]['MODE'] == 'PEER':  # NINJA_PEER_ALWAYS_ACTIVE\n"
-            "                BRIDGES[_tgid_s].append({'SYSTEM': _system, 'TS': 1, 'TGID': _tgid,'ACTIVE': _slot == 1,'TIMEOUT': 0,'TO_TYPE': 'NONE','OFF': [],'ON': [_tgid,],'RESET': [], 'TIMER': time()})\n"
-            "                BRIDGES[_tgid_s].append({'SYSTEM': _system, 'TS': 2, 'TGID': _tgid,'ACTIVE': _slot == 2,'TIMEOUT': 0,'TO_TYPE': 'NONE','OFF': [],'ON': [_tgid,],'RESET': [], 'TIMER': time()})\n"
+            "                BRIDGES[_tgid_s].append({'SYSTEM': _system, 'TS': 1, 'TGID': _tgid,'ACTIVE': True,'TIMEOUT': 0,'TO_TYPE': 'NONE','OFF': [],'ON': [_tgid,],'RESET': [], 'TIMER': time()})\n"
+            "                BRIDGES[_tgid_s].append({'SYSTEM': _system, 'TS': 2, 'TGID': _tgid,'ACTIVE': True,'TIMEOUT': 0,'TO_TYPE': 'NONE','OFF': [],'ON': [_tgid,],'RESET': [], 'TIMER': time()})\n"
             "                continue\n"
         )
         src = src.replace(anchor, inject + anchor, 1)
@@ -153,6 +153,42 @@ if os.path.exists(bm):
     if "CONFIG['SYSTEMS'][self._system]['DEFAULT_UA_TIMER']" in src:
         src = src.replace("CONFIG['SYSTEMS'][self._system]['DEFAULT_UA_TIMER']", "CONFIG['SYSTEMS'][self._system].get('DEFAULT_UA_TIMER', 60)")
         print('✓ Patched FreeDMR: safe .get(DEFAULT_UA_TIMER, 60) lookup for PEER systems')
+
+    # Fix FreeDMR bug in options_config(): handle single TS2_1 option (e.g. TS2_1=1025;) and fix UnboundLocalError: _sysslot on >180s stream timeout
+    if "if 'TS2_2' in _options:\n                        _options['TS2_STATIC'] = _options.pop('TS2_1')" in src:
+        src = src.replace(
+            "if 'TS2_2' in _options:\n                        _options['TS2_STATIC'] = _options.pop('TS2_1')",
+            "if 'TS2_1' in _options:\n                        _options['TS2_STATIC'] = _options.pop('TS2_1')",
+        )
+        print('✓ Patched FreeDMR: fixed TS2_1 single-talkgroup RPTO option parser')
+    if 'int_id(_dst_id),_sysslot)' in src:
+        src = src.replace(
+            'logger.info("(%s) HBP * SOURCE TIMEOUT* STREAM ID: %s, TG: %s, TS: %s, IGNORE THIS SOURCE",self._system, int_id(_stream_id), int_id(_dst_id),_sysslot)',
+            'logger.info("(%s) HBP * SOURCE TIMEOUT* STREAM ID: %s, TG: %s, TS: %s, IGNORE THIS SOURCE",self._system, int_id(_stream_id), int_id(_dst_id),_slot)',
+        )
+        print('✓ Patched FreeDMR: fixed _sysslot UnboundLocalError on >180s stream timeout')
+
+    # Prevent CORE-BRIDGE from forwarding traffic to both TS1 and TS2 of the same target system, or being blocked by contention on an inactive slot
+    if "NINJA_PEER_SLOT_AGNOSTIC" not in src:
+        old_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and _system['TS'] == _slot and _system['ACTIVE'] == True:"
+        new_loop = "if _system['SYSTEM'] == self._system and _system['TGID'] == _dst_id and (_system['TS'] == _slot or CONFIG['SYSTEMS'][self._system]['MODE'] == 'PEER') and _system['ACTIVE'] == True:  # NINJA_PEER_SLOT_AGNOSTIC"
+        if old_loop in src:
+            src = src.replace(old_loop, new_loop)
+            print('✓ Patched FreeDMR: slot-agnostic PEER ingress matching in dmrd_received')
+        old_rw = "                        if _system['TS'] != _target['TS']:"
+        new_rw = "                        if (self._system != 'CORE-BRIDGE' and _system['TS'] != _target['TS']) or (self._system == 'CORE-BRIDGE' and _slot != _target['TS']):"
+        if old_rw in src:
+            src = src.replace(old_rw, new_rw)
+            print('✓ Patched FreeDMR: accurate slot bit rewrite from CORE-BRIDGE')
+    old_dedup = "                    if (_target['SYSTEM'],_target['TS']) in _sysIgnore:"
+    new_dedup = "                    if (_target['SYSTEM'],_target['TS']) in _sysIgnore or _target['SYSTEM'] in _sysIgnore:"
+    if old_dedup in src and "or _target['SYSTEM'] in _sysIgnore:" not in src:
+        src = src.replace(old_dedup, new_dedup)
+        src = src.replace(
+            "                    systems[_target['SYSTEM']].send_system(_tmp_data,b'',_ber,_rssi,_source_server)",
+            "                    _sysIgnore.append((_target['SYSTEM'],_target['TS']))\n                    _sysIgnore.append(_target['SYSTEM'])\n                    systems[_target['SYSTEM']].send_system(_tmp_data,b'',_ber,_rssi,_source_server)",
+        )
+        print('✓ Patched FreeDMR: per-system target dedup in routerHBP.to_target')
 
     open(bm, 'w', encoding='utf-8').write(src)
 PYEOF
