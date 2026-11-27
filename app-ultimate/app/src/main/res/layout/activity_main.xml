@@ -1,0 +1,497 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0A0E14"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <!-- Top Header Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="#131B26"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="10dp">
+
+        <ImageView
+            android:id="@+id/ivHeaderLogo"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:src="@drawable/ic_ninja_logo" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvAppTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="NINJA RT(X)"
+                android:textColor="#00FFA3"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvSystemInfo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DMR • SVXLINK • ROIP"
+                android:textColor="#94A3B8"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvStatusBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/badge_status_offline"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="3dp"
+            android:text="● OFFLINE"
+            android:textColor="#94A3B8"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Row 2: Quick Server Carousel (Height 38dp) -->
+    <LinearLayout
+        android:id="@+id/layoutServerRow"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:layout_marginTop="6dp"
+        android:background="#162032"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="4dp">
+
+        <Button
+            android:id="@+id/btnServerPrev"
+            android:layout_width="38dp"
+            android:layout_height="match_parent"
+            android:background="?android:attr/selectableItemBackground"
+            android:text="◀"
+            android:textColor="#38BDF8"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/tvServerBadge"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:singleLine="true"
+            android:text="⚡ SERVER BARU"
+            android:textColor="#38BDF8"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnServerNext"
+            android:layout_width="38dp"
+            android:layout_height="match_parent"
+            android:background="?android:attr/selectableItemBackground"
+            android:text="▶"
+            android:textColor="#38BDF8"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Row 3: Dynamic Talkgroup / Room Carousel (Height 38dp) -->
+    <LinearLayout
+        android:id="@+id/layoutTgBar"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:layout_marginTop="4dp"
+        android:background="#1E293B"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="4dp">
+
+        <Button
+            android:id="@+id/btnTgPrev"
+            android:layout_width="38dp"
+            android:layout_height="match_parent"
+            android:background="?android:attr/selectableItemBackground"
+            android:text="◀"
+            android:textColor="#FBBF24"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/tvTg"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:singleLine="true"
+            android:text="TG 1025 • NUSANTARA"
+            android:textColor="#FBBF24"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvSlot"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:background="@drawable/badge_ts_amber"
+            android:paddingHorizontal="5dp"
+            android:paddingVertical="1dp"
+            android:text="TS 2"
+            android:textColor="#000000"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnTgNext"
+            android:layout_width="38dp"
+            android:layout_height="match_parent"
+            android:background="?android:attr/selectableItemBackground"
+            android:text="▶"
+            android:textColor="#FBBF24"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Main Telemetry Card -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="#121820"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/viewCallerAccent"
+                android:layout_width="4dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="8dp"
+                android:background="#00FFA3" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvTalker"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="STANDBY (IDLE)"
+                    android:textColor="#00FFA3"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvTalkerDetails"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="TG 1025 • NUSANTARA | Node: 1022057"
+                    android:textColor="#F8FAFC"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvQsoTimer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="00:00"
+                android:textColor="#38BDF8"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- S-Meter Level Bar & Labels -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tvSmeterLabel"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="SIGNAL S-METER"
+                    android:textColor="#94A3B8"
+                    android:textSize="9.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvLevelDbfs"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="S9+20 (-14 dBFS)"
+                    android:textColor="#00FFA3"
+                    android:textSize="9.5sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <ProgressBar
+                android:id="@+id/pbLevel"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="10dp"
+                android:layout_marginTop="3dp"
+                android:max="100"
+                android:progress="0"
+                android:progressDrawable="@android:drawable/progress_horizontal" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="S1    S3    S5    S7    S9    +20   +40"
+                android:textColor="#475569"
+                android:textSize="8.5sp" />
+        </LinearLayout>
+
+        <!-- Network & QSO Telemetry Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvTelemetry"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:text="Ping: --ms | Loss: 0% | Jitter: --ms"
+                android:textColor="#94A3B8"
+                android:textSize="10.5sp" />
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:text="Standby"
+                android:textColor="#64748B"
+                android:textSize="10sp" />
+        </LinearLayout>
+
+        <!-- Status Badges Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvPttIndicator"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="#064E3B"
+                android:paddingHorizontal="6dp"
+                android:paddingVertical="2dp"
+                android:text="[PTT: SIDE KEY (216)]"
+                android:textColor="#34D399"
+                android:textSize="9.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvAudioMode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="6dp"
+                android:paddingVertical="2dp"
+                android:text="MIC +6dB"
+                android:textColor="#94A3B8"
+                android:textSize="9.5sp" />
+
+            <TextView
+                android:id="@+id/tvRogerBeep"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="6dp"
+                android:paddingVertical="2dp"
+                android:text="ROGER BEEP"
+                android:textColor="#94A3B8"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Quick Talkgroup Chips -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="QUICK TALKGROUPS / CHANNELS"
+        android:textColor="#94A3B8"
+        android:textSize="10sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnTg1025"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:background="#047857"
+            android:text="TG 1025"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnTg91"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="TG 91"
+            android:textColor="#CBD5E1"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnTg38"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="TG 38"
+            android:textColor="#CBD5E1"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnTg510"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="TG 510"
+            android:textColor="#CBD5E1"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- Tactile PTT Button Section (Expands to fill vertical space) -->
+    <LinearLayout
+        android:id="@+id/layoutPttButtonContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <Button
+            android:id="@+id/btnPtt"
+            android:layout_width="220dp"
+            android:layout_height="100dp"
+            android:background="#059669"
+            android:text="TEKAN UNTUK BICARA\n(HOLD PTT)"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvHardwarePttBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="20dp"
+            android:background="#0F172A"
+            android:gravity="center"
+            android:padding="16dp"
+            android:text="TOMBOL PTT LAYAR DISEMBUNYIKAN\nGunakan Tombol Fisik PTT Samping untuk Berbicara"
+            android:textColor="#94A3B8"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- Bottom Actions Bar (4 Buttons matching PoC) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="#0F172A"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnNavRadio"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="2dp"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="RADIO"
+            android:textColor="#00FFA3"
+            android:textSize="10.5sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnNavServer"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="2dp"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="SERVER"
+            android:textColor="#38BDF8"
+            android:textSize="10.5sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnNavTg"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="2dp"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="TG / ROOM"
+            android:textColor="#FBBF24"
+            android:textSize="10.5sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnNavSettings"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="2dp"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="SETTING"
+            android:textColor="#E2E8F0"
+            android:textSize="10.5sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</LinearLayout>

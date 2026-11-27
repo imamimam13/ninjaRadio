@@ -45,6 +45,24 @@ object CallbookManager {
         if (isLoaded) return
         synchronized(this) {
             if (isLoaded) return
+
+            // 1. Preload bundled offline callbook from assets (4,600+ Indonesian & worldwide stations)
+            try {
+                context.assets.open("callbook.tsv").bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        val parts = line.split('\t')
+                        if (parts.size >= 2) {
+                            val id = parts[0].trim().toIntOrNull()
+                            val call = parts[1].trim()
+                            if (id != null && call.isNotEmpty()) {
+                                memoryCache[id] = call
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // 2. Overlay with custom/downloaded file cache if present
             val file = getCacheFile(context)
             if (file.exists()) {
                 try {
@@ -101,7 +119,15 @@ object CallbookManager {
     fun getCallsign(context: Context, dmrId: Int): String? {
         if (dmrId <= 0) return null
         ensureLoaded(context)
-        return memoryCache[dmrId] ?: if (dmrId > 9999999) memoryCache[dmrId / 100] else null
+        memoryCache[dmrId]?.let { return it }
+        if (dmrId > 99999999) {
+            // 9-digit ESSID (e.g. 510168801 -> 5101688)
+            memoryCache[dmrId / 100]?.let { return it }
+        } else if (dmrId > 9999999) {
+            // 8-digit ESSID (e.g. 51016881 -> 5101688)
+            memoryCache[dmrId / 10]?.let { return it }
+        }
+        return null
     }
 
     fun resolveStationLabel(context: Context, dmrId: Int, fallbackCallsign: String = ""): String {
@@ -145,7 +171,11 @@ object CallbookManager {
                         override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
                     }
                 )
-                val sc = javax.net.ssl.SSLContext.getInstance("TLS")
+                val sc = try {
+                    javax.net.ssl.SSLContext.getInstance("TLSv1.2")
+                } catch (_: Exception) {
+                    javax.net.ssl.SSLContext.getInstance("TLS")
+                }
                 sc.init(null, trustAllCerts, java.security.SecureRandom())
                 conn.sslSocketFactory = sc.socketFactory
                 conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }

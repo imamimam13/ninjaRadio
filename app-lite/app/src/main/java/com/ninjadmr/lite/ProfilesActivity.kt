@@ -101,6 +101,7 @@ class ProfilesActivity : AppCompatActivity() {
         }
 
         btnBack.setOnClickListener {
+            setResult(Activity.RESULT_OK)
             finish()
         }
 
@@ -237,5 +238,9 @@ class ProfilesActivity : AppCompatActivity() {
     companion object {
         private const val REQ_ADD_PROFILE = 101
         private const val REQ_EDIT_PROFILE = 102
+    }
+    override fun onBackPressed() {
+        setResult(Activity.RESULT_OK)
+        super.onBackPressed()
     }
 }

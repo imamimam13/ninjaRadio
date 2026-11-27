@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.ninjaradio.ultimate'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.ninjaradio.ultimate"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0-ultimate"
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled true
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    // Pure-Java Opus codec (Ultra lightweight, runs on all Android devices)
+    implementation 'io.github.jaredmdobson:concentus:1.0.2'
+    // OkHttp for native WebSocket (Zello Channel API wss://zello.io/ws)
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+}

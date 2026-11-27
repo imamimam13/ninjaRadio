@@ -272,21 +272,32 @@ export default function DashboardPage() {
       }
       lastAudiblePacketTimeRef.current = now;
     } else {
-      // 2. Multi-TG Anti-Collision Priority Lock (Hangover: 1200ms)
-      // When multiple TGs transmit simultaneously, lock onto the first active TG.
-      // Retain the lock for 1200ms after its last packet to avoid audio interleaving during speech pauses.
+      // 2. Multi-TG Anti-Collision Priority Lock & Background Peer Preemption
+      // Primary server talkgroups always take priority over background external peer streams (e.g. TG 555 / 200 from dmrid.online).
+      const isIncomingBgPeer = chunkTg === 555 || chunkTg === 200;
+      const isCurrentBgPeer = activeAudibleTgRef.current === 555 || activeAudibleTgRef.current === 200;
+      const hangoverMs = isCurrentBgPeer ? 600 : 2200;
       const isLockActive =
         activeAudibleTgRef.current !== null &&
-        now - lastAudiblePacketTimeRef.current < 1200;
+        (now - lastAudiblePacketTimeRef.current < hangoverMs || (!isCurrentBgPeer && rxActiveSourcesRef.current.length > 0));
 
       if (isLockActive) {
         if (chunkTg !== activeAudibleTgRef.current) {
-          return; // Drop secondary overlapping TG bursts so voice stays clean and intelligible
+          // If currently playing background peer (TG 555/200) and a primary channel keys up, preempt TG 555/200 immediately!
+          if (isCurrentBgPeer && !isIncomingBgPeer) {
+            stopAllScheduledRxSources();
+            activeAudibleTgRef.current = chunkTg;
+            setAudibleTg(chunkTg);
+            lastAudiblePacketTimeRef.current = now;
+          } else {
+            return; // Drop secondary overlapping TG bursts so active primary channel stays clean and uninterrupted
+          }
+        } else {
+          lastAudiblePacketTimeRef.current = now;
         }
-        lastAudiblePacketTimeRef.current = now;
       } else {
-        // Lock expired or fresh transmission: cleanly switch lock to this incoming TG
-        if (activeAudibleTgRef.current !== null && activeAudibleTgRef.current !== chunkTg) {
+        // Lock expired or fresh transmission: switch lock to this incoming TG
+        if (activeAudibleTgRef.current !== null && activeAudibleTgRef.current !== chunkTg && isCurrentBgPeer) {
           stopAllScheduledRxSources();
         }
         activeAudibleTgRef.current = chunkTg;

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Outer Emerald RX Glow Bezel -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="#072220"
+                android:centerColor="#0C1E2E"
+                android:endColor="#06141C" />
+            <stroke android:width="2dp" android:color="#34D399" />
+            <corners android:radius="6dp" />
+        </shape>
+    </item>
+    <item android:top="2dp" android:left="2dp" android:right="2dp" android:bottom="2dp">
+        <shape android:shape="rectangle">
+            <stroke android:width="1dp" android:color="#4434D399" />
+            <corners android:radius="5dp" />
+        </shape>
+    </item>
+</layer-list>

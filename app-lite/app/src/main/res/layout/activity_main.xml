@@ -26,15 +26,15 @@
             android:layout_height="wrap_content"
             android:text="CH --"
             android:textColor="#00F0FF"
-            android:textSize="10sp"
+            android:textSize="9.5sp"
             android:fontFamily="monospace"
             android:textStyle="bold"
             android:background="@drawable/badge_pill"
-            android:paddingStart="5dp"
-            android:paddingEnd="5dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
             android:paddingTop="1dp"
             android:paddingBottom="1dp"
-            android:layout_marginEnd="5dp" />
+            android:layout_marginEnd="4dp" />
 
         <TextView
             android:id="@+id/tvProfileName"
@@ -43,11 +43,34 @@
             android:layout_weight="1"
             android:text="NINJA DMR"
             android:textColor="#F8FAFC"
-            android:textSize="11.5sp"
+            android:textSize="10.5sp"
             android:fontFamily="sans-serif-black"
             android:textStyle="bold"
             android:singleLine="true"
             android:ellipsize="end" />
+
+        <TextClock
+            android:id="@+id/tcClock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format12Hour="HH:mm"
+            android:format24Hour="HH:mm"
+            android:textColor="#38BDF8"
+            android:textSize="9.5sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:layout_marginEnd="4dp" />
+
+        <TextView
+            android:id="@+id/tvBattery"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="--%"
+            android:textColor="#A3E635"
+            android:textSize="9.5sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:layout_marginEnd="4dp" />
 
         <TextView
             android:id="@+id/tvAudioModeBadge"
@@ -275,6 +298,59 @@
             android:visibility="gone"
             android:max="100"
             android:progress="0" />
+    </LinearLayout>
+
+    <!-- Tactical Quick Talkgroup Switcher Row (Height 28dp) -->
+    <LinearLayout
+        android:id="@+id/layoutTgSwitcher"
+        android:layout_width="match_parent"
+        android:layout_height="28dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/card_zone_caller"
+        android:paddingStart="3dp"
+        android:paddingEnd="3dp"
+        android:layout_marginTop="1.5dp"
+        android:layout_marginBottom="1dp">
+
+        <Button
+            android:id="@+id/btnTgPrev"
+            android:layout_width="48dp"
+            android:layout_height="match_parent"
+            android:text="◀ TG"
+            android:textSize="10sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_cyan"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/tvQuickTg"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:text="TG --- (1/1)"
+            android:textColor="@color/ninja_amber"
+            android:textSize="11sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:singleLine="true"
+            android:background="?android:attr/selectableItemBackground"
+            android:focusable="true" />
+
+        <Button
+            android:id="@+id/btnTgNext"
+            android:layout_width="48dp"
+            android:layout_height="match_parent"
+            android:text="TG ▶"
+            android:textSize="10sp"
+            android:fontFamily="sans-serif-condensed"
+            android:textStyle="bold"
+            android:textColor="@color/ninja_cyan"
+            android:background="@drawable/btn_dpad"
+            android:focusable="true" />
     </LinearLayout>
 
     <!-- Bottom Tactical Hardware Keys Row with Real Top Color LED Strips (Height 35dp) -->

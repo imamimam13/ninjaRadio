@@ -172,9 +172,33 @@ class EditProfileActivity : AppCompatActivity() {
         val callsign = etCallsign.text.toString().trim().uppercase()
         val dmrId = etDmrId.text.toString().trim().toIntOrNull() ?: 0
         val essid = etEssid.text.toString().trim().toIntOrNull()?.coerceIn(0, 99) ?: 1
-        val tg = etTalkgroup.text.toString().trim().toIntOrNull() ?: 0
+        val tgRaw = etTalkgroup.text.toString().trim()
+        val rxGroupRaw = etRxGroup.text.toString().trim()
+        val tgNumbers = Regex("""\d+""").findAll(tgRaw).mapNotNull { it.value.toIntOrNull() }.filter { it > 0 }.toList()
+        val tg = tgNumbers.firstOrNull() ?: 0
+        val extraTgs = tgNumbers.drop(1)
+
+        val allTgsList = mutableListOf<Int>()
+        if (tg > 0) allTgsList.add(tg)
+        for (num in extraTgs) {
+            if (!allTgsList.contains(num)) allTgsList.add(num)
+        }
+        if (rxGroupRaw != "*" && !rxGroupRaw.equals("ALL", ignoreCase = true)) {
+            val rxNumbers = Regex("""\d+""").findAll(rxGroupRaw).mapNotNull { it.value.toIntOrNull() }.filter { it > 0 }.toList()
+            for (num in rxNumbers) {
+                if (!allTgsList.contains(num)) allTgsList.add(num)
+            }
+        }
+
+        val rxGroup = if (rxGroupRaw == "*" || rxGroupRaw.equals("ALL", ignoreCase = true)) {
+            "*"
+        } else if (allTgsList.isNotEmpty()) {
+            allTgsList.joinToString(", ")
+        } else {
+            ""
+        }
+        val savedTgs = if (rxGroupRaw == "*" || rxGroupRaw.equals("ALL", ignoreCase = true)) "" else allTgsList.joinToString(", ")
         val slot = etSlot.text.toString().trim().toIntOrNull() ?: 2
-        val rxGroup = etRxGroup.text.toString().trim()
         val location = etLocation.text.toString().trim().ifBlank { "Mobile, ID" }
         val software = etSoftware.text.toString().trim().ifBlank { "20260911_WPSD" }
         val hardware = etHardware.text.toString().trim().ifBlank { "MMDVM_MMDVM_HS_Hat" }
@@ -202,6 +226,7 @@ class EditProfileActivity : AppCompatActivity() {
                 this.talkgroup = tg
                 this.slot = slot
                 this.rxGroup = rxGroup
+                this.savedTalkgroups = savedTgs
                 this.location = location
                 this.software = software
                 this.hardware = hardware
@@ -223,6 +248,7 @@ class EditProfileActivity : AppCompatActivity() {
                 talkgroup = tg,
                 slot = slot,
                 rxGroup = rxGroup,
+                savedTalkgroups = savedTgs,
                 location = location,
                 software = software,
                 hardware = hardware,

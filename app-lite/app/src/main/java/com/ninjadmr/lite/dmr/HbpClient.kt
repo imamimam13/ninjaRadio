@@ -236,6 +236,13 @@ class HbpClient(
         }
     }
 
+    fun updateTalkgroupSubscription(slot: Int, talkgroup: Int) {
+        if (state != State.CONNECTED || talkgroup <= 0) return
+        val rptoStr = "TS${slot}_1=$talkgroup;StartTG=$talkgroup;"
+        Log.i(TAG, "Sending dynamic RPTO subscription: $rptoStr")
+        send(Dmr.ascii("RPTO") + id + Dmr.ascii(rptoStr))
+    }
+
     private fun handle(d: ByteArray): Boolean {
         val headerText = if (d.size >= 4) String(d, 0, 4, StandardCharsets.US_ASCII) else ""
         Log.d(TAG, "RECV packet len=${d.size}, header='$headerText', hex=${d.take(16).joinToString("") { "%02x".format(it) }}")

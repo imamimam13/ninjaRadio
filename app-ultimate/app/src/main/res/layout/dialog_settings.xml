@@ -1,0 +1,368 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050811"
+    android:orientation="vertical">
+
+    <!-- Top Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:background="#0F172A"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="16dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="PENGATURAN LENGKAP"
+            android:textColor="#38BDF8"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AUDIO &amp; PTT"
+            android:textColor="#94A3B8"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1E293B" />
+
+    <!-- Scrollable Settings Form -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:padding="12dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- ================= SECTION 1: AUDIO & MIC GAIN ================= -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="AUDIO &amp; PENGUATAN (GAIN)"
+                android:textColor="#00FFA3"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <!-- Mic Gain (TX Boost) -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Penguatan Mikrofon (Mic Gain / TX Boost):"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <Spinner
+                android:id="@+id/spnMicGain"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="8dp" />
+
+            <!-- RX Volume Boost -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Penguatan Volume Suara Masuk (RX Boost):"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <Spinner
+                android:id="@+id/spnRxGain"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="8dp" />
+
+            <!-- Audio Route -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Rute / Output Audio:"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <Spinner
+                android:id="@+id/spnAudioRoute"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="8dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="14dp"
+                android:background="#1E293B" />
+
+            <!-- ================= SECTION 2: TRANSMISI & VOX ================= -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="TRANSMISI &amp; VOX"
+                android:textColor="#00FFA3"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <!-- Transmission Mode -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Mode Transmisi:"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <Spinner
+                android:id="@+id/spnTxMode"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="8dp" />
+
+            <!-- VOX Sensitivity -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Sensitivitas VOX (Batas Suara Aktif):"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <Spinner
+                android:id="@+id/spnVoxSensitivity"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="8dp" />
+
+            <!-- VOX Hangover -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Jeda Pelepasan VOX (Hangover Time):"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <Spinner
+                android:id="@+id/spnVoxHangover"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="8dp" />
+
+            <!-- TOT -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Batas Waktu Bicara (Time-Out Timer / TOT):"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <Spinner
+                android:id="@+id/spnTot"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:background="#1E293B"
+                android:paddingHorizontal="8dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="14dp"
+                android:background="#1E293B" />
+
+            <!-- ================= SECTION 3: NADA & EFEK SUARA ================= -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="EFEK NADA / BEEP"
+                android:textColor="#00FFA3"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <CheckBox
+                android:id="@+id/cbRogerBeep"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:buttonTint="#00FFA3"
+                android:text="Aktifkan Roger Beep (Nada Selesai Transmisi)"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <CheckBox
+                android:id="@+id/cbKeyBeep"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:buttonTint="#00FFA3"
+                android:text="Aktifkan Suara Klik Tombol UI (Key Beep)"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="14dp"
+                android:background="#1E293B" />
+
+            <!-- ================= SECTION 4: TOMBOL FISIK PTT ================= -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="TOMBOL PTT HARDWARE &amp; TAMPILAN"
+                android:textColor="#00FFA3"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <CheckBox
+                android:id="@+id/cbHideScreenPtt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:buttonTint="#00FFA3"
+                android:text="Sembunyikan Tombol PTT Layar (Khusus PTT Fisik)"
+                android:textColor="#F8FAFC"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/tvCurrentPttKey"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Tombol Aktif: Otomatis / Universal (Side Key)"
+                android:textColor="#38BDF8"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <!-- Pilihan Cepat Tombol Caraka -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnQuickCaraka290"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginEnd="3dp"
+                    android:layout_weight="1"
+                    android:background="#1E293B"
+                    android:text="CARAKA (290)"
+                    android:textColor="#00FFA3"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnQuickCaraka291"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="3dp"
+                    android:layout_weight="1"
+                    android:background="#1E293B"
+                    android:text="CARAKA (291)"
+                    android:textColor="#00FFA3"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnCalibratePtt"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginEnd="4dp"
+                    android:layout_weight="1"
+                    android:background="#1E293B"
+                    android:text="KALIBRASI PTT"
+                    android:textColor="#38BDF8"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnResetPtt"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="4dp"
+                    android:layout_weight="1"
+                    android:background="#1E293B"
+                    android:text="RESET DEFAULT"
+                    android:textColor="#EF4444"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1E293B" />
+
+    <!-- Bottom Buttons Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="#0A0F1D"
+        android:orientation="horizontal"
+        android:padding="4dp">
+
+        <Button
+            android:id="@+id/btnSettingsCancel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:background="#1E293B"
+            android:text="BATAL"
+            android:textColor="#94A3B8"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnSettingsSave"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1.5"
+            android:background="#059669"
+            android:text="SIMPAN PENGATURAN"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</LinearLayout>

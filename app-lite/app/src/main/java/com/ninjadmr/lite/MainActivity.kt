@@ -13,7 +13,9 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.media.AudioManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -22,6 +24,7 @@ import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Button
 import android.widget.EditText
@@ -60,6 +63,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private var pttCalibDialog: AlertDialog? = null
     private var pendingLearnedKey: Triple<Int, Int, String>? = null
     private var updateCalibTargetUi: (() -> Unit)? = null
+    private var batteryReceiver: BroadcastReceiver? = null
 
     private lateinit var layoutLcdPanel: LinearLayout
     private var layoutCallerCard: LinearLayout? = null
@@ -68,6 +72,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private lateinit var tvProfileName: TextView
     private lateinit var tvAudioModeBadge: TextView
     private lateinit var tvStatus: TextView
+    private lateinit var tvBattery: TextView
     private lateinit var tvTg: TextView
     private lateinit var tvModeBadge: TextView
     private lateinit var tvQsoTimer: TextView
@@ -82,6 +87,10 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     private lateinit var btnPtt: Button
     private lateinit var btnProfiles: Button
     private lateinit var btnApps: Button
+    private var layoutTgSwitcher: LinearLayout? = null
+    private var btnTgPrev: Button? = null
+    private var btnTgNext: Button? = null
+    private var tvQuickTg: TextView? = null
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private var statusPulseAnimator: ObjectAnimator? = null
@@ -122,10 +131,12 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         super.onCreate(savedInstanceState)
 
         window.addFlags(
+            android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN or
             android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
             android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
             android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
+        applyImmersiveFullscreen()
         setContentView(R.layout.activity_main)
 
         profileStore = ProfileStore(this)
@@ -137,6 +148,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         tvProfileName = findViewById(R.id.tvProfileName)
         tvAudioModeBadge = findViewById(R.id.tvAudioModeBadge)
         tvStatus = findViewById(R.id.tvStatus)
+        tvBattery = findViewById(R.id.tvBattery)
         tvTg = findViewById(R.id.tvTg)
         tvModeBadge = findViewById(R.id.tvModeBadge)
         tvQsoTimer = findViewById(R.id.tvQsoTimer)
@@ -152,6 +164,10 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         btnPtt = findViewById(R.id.btnPtt)
         btnProfiles = findViewById(R.id.btnProfiles)
         btnApps = findViewById(R.id.btnApps)
+        layoutTgSwitcher = findViewById(R.id.layoutTgSwitcher)
+        btnTgPrev = findViewById(R.id.btnTgPrev)
+        btnTgNext = findViewById(R.id.btnTgNext)
+        tvQuickTg = findViewById(R.id.tvQuickTg)
 
         checkPermissions()
         startAndBindService()
@@ -172,8 +188,18 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         NinjaAudioFx.init(this)
         registerPttBroadcastReceiver()
         registerHeadsetPlugReceiver()
+        registerBatteryReceiver()
 
         btnConnect.requestFocus()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val active = profileStore.getActiveProfile()
+        if (active != null) {
+            dmrService?.updateActiveProfile(active)
+        }
+        updateProfileDisplay()
     }
 
     private fun attachTacticalButtonAnimations(vararg buttons: View) {
@@ -340,6 +366,31 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             true
         }
 
+        btnTgPrev?.setOnClickListener {
+            animatePress(it)
+            dmrService?.switchTalkgroup(-1)
+        }
+
+        btnTgNext?.setOnClickListener {
+            animatePress(it)
+            dmrService?.switchTalkgroup(+1)
+        }
+
+        tvQuickTg?.setOnClickListener {
+            animatePress(it)
+            showTalkgroupSelectorDialog()
+        }
+
+        tvTg.setOnClickListener {
+            animatePress(it)
+            showTalkgroupSelectorDialog()
+        }
+
+        tvTg.setOnLongClickListener {
+            showTalkgroupSelectorDialog()
+            true
+        }
+
         btnProfiles.setOnClickListener {
             animatePress(it)
             openProfiles()
@@ -447,9 +498,12 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_PROFILES) {
+            val active = profileStore.getActiveProfile()
+            if (active != null) {
+                dmrService?.updateActiveProfile(active)
+            }
             updateProfileDisplay()
             val s = dmrService
-            val active = profileStore.getActiveProfile()
             if (s != null && active != null) {
                 if (s.isConnected && s.activeProfile?.id != active.id) {
                     s.connectWithProfile(active)
@@ -485,6 +539,16 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         }
     }
 
+    private fun setCallsignDisplayText(text: String) {
+        tvCallsignId.text = text
+        tvCallsignId.textSize = when {
+            text.length > 15 -> 14f
+            text.length > 12 -> 16f
+            text.length > 9  -> 17.5f
+            else             -> 19.5f
+        }
+    }
+
     private fun updateProfileDisplay() {
         val p = profileStore.getActiveProfile()
         val (chNum, totalCh) = profileStore.getActiveChannelIndex()
@@ -497,7 +561,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             tvProfileName.text = p.name
             tvTg.text = "TG ${p.talkgroup}"
             tvSlot.text = "TS ${p.slot}"
-            tvCallsignId.text = CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign)
+            setCallsignDisplayText(CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign))
             startCallsignPulse(Color.parseColor("#38BDF8"), Color.parseColor("#BAE6FD"))
             tvRxInfo.text = "${p.name} · TG ${p.talkgroup} · TS ${p.slot} · STANDBY"
         } else {
@@ -505,10 +569,112 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             tvProfileName.text = "NINJA DMR"
             tvTg.text = "TG ---"
             tvSlot.text = "TS -"
-            tvCallsignId.text = "NOCALL (0)"
+            setCallsignDisplayText("NOCALL (0)")
             startCallsignPulse(Color.parseColor("#64748B"), Color.parseColor("#94A3B8"))
             tvRxInfo.text = "STANDBY · SIAP MEMANCAR"
         }
+        updateQuickTgUi(p)
+    }
+
+    private fun updateQuickTgUi(p: DmrProfile? = null) {
+        val profile = dmrService?.activeProfile ?: p ?: profileStore.getActiveProfile()
+        if (profile != null) {
+            val tgs = profile.getAllTalkgroups()
+            val total = tgs.size.coerceAtLeast(1)
+            val idx = tgs.indexOf(profile.talkgroup).let { if (it >= 0) it + 1 else 1 }
+            tvQuickTg?.text = "TG ${profile.talkgroup} ($idx/$total)"
+            btnTgPrev?.isEnabled = total > 1
+            btnTgNext?.isEnabled = total > 1
+            btnTgPrev?.alpha = if (total > 1) 1.0f else 0.4f
+            btnTgNext?.alpha = if (total > 1) 1.0f else 0.4f
+        } else {
+            tvQuickTg?.text = "TG --- (0/0)"
+            btnTgPrev?.isEnabled = false
+            btnTgNext?.isEnabled = false
+            btnTgPrev?.alpha = 0.4f
+            btnTgNext?.alpha = 0.4f
+        }
+    }
+
+    private fun showTalkgroupSelectorDialog() {
+        val profile = dmrService?.activeProfile ?: profileStore.getActiveProfile() ?: return
+        val tgs = profile.getAllTalkgroups()
+        if (tgs.isEmpty()) {
+            Toast.makeText(this, "Tidak ada Talkgroup tersimpan", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val view = layoutInflater.inflate(R.layout.dialog_select_talkgroup, null)
+        val tvTitle = view.findViewById<TextView>(R.id.tvTgDialogTitle)
+        val btnClose = view.findViewById<Button>(R.id.btnTgDialogClose)
+        val container = view.findViewById<LinearLayout>(R.id.layoutTgItemsContainer)
+
+        tvTitle.text = "⚡ TG: ${profile.name}"
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(view)
+            .create()
+
+        btnClose.setOnClickListener {
+            animatePress(it)
+            dialog.dismiss()
+        }
+
+        val density = resources.displayMetrics.density
+        val btnHeightPx = (28 * density).toInt()
+        val marginPx = (3 * density).toInt()
+
+        for (tg in tgs) {
+            val isCurrent = tg == profile.talkgroup
+            val btn = Button(this).apply {
+                val lp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    btnHeightPx
+                ).apply {
+                    bottomMargin = marginPx
+                }
+                layoutParams = lp
+
+                val label = when (tg) {
+                    1025 -> "TG 1025 · Ninja Master"
+                    510 -> "TG 510 · Indonesia"
+                    510991 -> "TG 510991 · Nusantara"
+                    51024 -> "TG 51024 · Local Net"
+                    91 -> "TG 91 · Worldwide"
+                    else -> "TG $tg"
+                }
+
+                text = if (isCurrent) "● $label (AKTIF)" else "○ $label"
+                textSize = 10.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                includeFontPadding = false
+
+                if (isCurrent) {
+                    setBackgroundResource(R.drawable.btn_key_ch)
+                    setTextColor(Color.parseColor("#34D399"))
+                } else {
+                    setBackgroundResource(R.drawable.btn_dpad)
+                    setTextColor(Color.parseColor("#38BDF8"))
+                }
+
+                isFocusable = true
+                isFocusableInTouchMode = true
+
+                setOnClickListener {
+                    animatePress(it)
+                    dmrService?.setTalkgroup(tg)
+                    dialog.dismiss()
+                }
+            }
+            container.addView(btn)
+        }
+
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
+
+        val dm = resources.displayMetrics
+        val targetWidth = (dm.widthPixels * 0.96).toInt()
+        dialog.window?.setLayout(targetWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     private fun showAudioSettingsDialog() {
@@ -1173,6 +1339,18 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         }
     }
 
+    private fun isNavOrSystemKey(keyCode: Int): Boolean {
+        return keyCode == KeyEvent.KEYCODE_BACK ||
+               keyCode == KeyEvent.KEYCODE_DPAD_UP ||
+               keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+               keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+               keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
+               keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+               keyCode == KeyEvent.KEYCODE_ENTER ||
+               keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+               keyCode == KeyEvent.KEYCODE_TAB
+    }
+
     private fun showPttCalibrationDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_ptt_calibration, null)
         val tvCurrent = view.findViewById<TextView>(R.id.tvCurrentPttSetting)
@@ -1188,9 +1366,9 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         val btnPresetVol = view.findViewById<Button>(R.id.btnPresetVol)
         val btnPresetPage = view.findViewById<Button>(R.id.btnPresetPage)
 
-        btnTargetPtt.isFocusable = false
-        btnTargetChNext.isFocusable = false
-        btnTargetChPrev.isFocusable = false
+        btnTargetPtt.isFocusable = true
+        btnTargetChNext.isFocusable = true
+        btnTargetChPrev.isFocusable = true
 
         learningTarget = PttManager.KeyTarget.PTT
         pendingLearnedKey = null
@@ -1220,22 +1398,68 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             }
             tvDetect.text = "TARGET: $targetLabel\nTekan tombol fisik HT atau putar knob..."
             tvDetect.setTextColor(Color.parseColor("#F8FAFC"))
-            btnSave.isEnabled = false
+            btnSave.isEnabled = true
             pendingLearnedKey = null
         }
 
         updateCalibTargetUi = { updateTargetUi() }
 
+        btnSave.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                isLearningPtt = false
+                tvDetect.text = "✓ PENGATURAN SIAP DISIMPAN\nTekan Enter / OK untuk SIMPAN"
+                tvDetect.setTextColor(Color.parseColor("#34D399"))
+            }
+        }
+        btnReset.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                isLearningPtt = false
+                tvDetect.text = "Tekan Enter / OK untuk RESET ke default"
+                tvDetect.setTextColor(Color.parseColor("#F59E0B"))
+            }
+        }
+        btnCancel.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                isLearningPtt = false
+                tvDetect.text = "Tekan Enter / OK untuk KEMBALI"
+                tvDetect.setTextColor(Color.parseColor("#94A3B8"))
+            }
+        }
+        btnTargetPtt.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                learningTarget = PttManager.KeyTarget.PTT
+                isLearningPtt = true
+                updateTargetUi()
+            }
+        }
+        btnTargetChNext.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                learningTarget = PttManager.KeyTarget.CH_NEXT
+                isLearningPtt = true
+                updateTargetUi()
+            }
+        }
+        btnTargetChPrev.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                learningTarget = PttManager.KeyTarget.CH_PREV
+                isLearningPtt = true
+                updateTargetUi()
+            }
+        }
+
         btnTargetPtt.setOnClickListener {
             learningTarget = PttManager.KeyTarget.PTT
+            isLearningPtt = true
             updateTargetUi()
         }
         btnTargetChNext.setOnClickListener {
             learningTarget = PttManager.KeyTarget.CH_NEXT
+            isLearningPtt = true
             updateTargetUi()
         }
         btnTargetChPrev.setOnClickListener {
             learningTarget = PttManager.KeyTarget.CH_PREV
+            isLearningPtt = true
             updateTargetUi()
         }
 
@@ -1270,10 +1494,21 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
         val dialog = object : AlertDialog(this) {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                if (isNavOrSystemKey(event.keyCode)) {
+                    return super.dispatchKeyEvent(event)
+                }
+                // If focus is currently on one of the action/preset buttons, do not learn keys
+                val curFocus = currentFocus
+                if (curFocus is Button && (curFocus.id == R.id.btnSaveLearnedKey ||
+                                            curFocus.id == R.id.btnResetPttDefault ||
+                                            curFocus.id == R.id.btnCancelPttCalib ||
+                                            curFocus.id == R.id.btnTopCloseCalib ||
+                                            curFocus.id == R.id.btnPresetKnob ||
+                                            curFocus.id == R.id.btnPresetVol ||
+                                            curFocus.id == R.id.btnPresetPage)) {
+                    return super.dispatchKeyEvent(event)
+                }
                 if (isLearningPtt) {
-                    if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-                        return super.dispatchKeyEvent(event)
-                    }
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         val name = PttManager.formatKeyName(event.keyCode)
                         onPttKeyLearned(event.keyCode, event.scanCode, name)
@@ -1330,6 +1565,8 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 }
                 Toast.makeText(this, "Tombol $label disimpan: ${key.third}", Toast.LENGTH_SHORT).show()
                 updateSummaryText()
+            } else {
+                Toast.makeText(this, "Pengaturan tombol disimpan", Toast.LENGTH_SHORT).show()
             }
             isLearningPtt = false
             updateCalibTargetUi = null
@@ -1343,11 +1580,15 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             updateTargetUi()
             tvDetect.text = "Semua Tombol Direset ke Default!"
             tvDetect.setTextColor(Color.parseColor("#34D399"))
-            btnSave.isEnabled = false
+            btnSave.isEnabled = true
             Toast.makeText(this, "Tombol PTT & Channel direset ke Default", Toast.LENGTH_SHORT).show()
         }
 
         dialog.show()
+        dialog.window?.let { win ->
+            win.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        }
     }
 
     private fun onPttKeyLearned(keyCode: Int, scanCode: Int, name: String) {
@@ -1386,10 +1627,16 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                             updateCalibTargetUi?.invoke()
                         }
                         PttManager.KeyTarget.CH_PREV -> {
+                            isLearningPtt = false
                             pttCalibDialog?.findViewById<TextView>(R.id.tvPttDetectStatus)?.let { tv ->
                                 tv.text = "✓ SEMUA TOMBOL (PTT, CH+, CH-) SELESAI DISET!\nKlik SIMPAN atau KEMBALI"
                                 tv.setTextColor(Color.parseColor("#38BDF8"))
                             }
+                            val btnSave = pttCalibDialog?.findViewById<Button>(R.id.btnSaveLearnedKey)
+                            btnSave?.isEnabled = true
+                            btnSave?.isFocusable = true
+                            btnSave?.isFocusableInTouchMode = true
+                            btnSave?.requestFocus()
                         }
                     }
                 }
@@ -1461,18 +1708,18 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
     // Intercept hardware keys across all focused views (PTT, CH+, CH-)
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (isLearningPtt) {
-            // Allow D-pad navigation inside the dialog if user is clicking Save/Cancel with D-Pad
-            if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
-                event.keyCode == KeyEvent.KEYCODE_ENTER ||
-                event.keyCode == KeyEvent.KEYCODE_BACK) {
+        if (pttCalibDialog != null && pttCalibDialog?.isShowing == true) {
+            if (isNavOrSystemKey(event.keyCode)) {
                 return super.dispatchKeyEvent(event)
             }
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                val name = PttManager.formatKeyName(event.keyCode)
-                onPttKeyLearned(event.keyCode, event.scanCode, name)
+            if (isLearningPtt) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    val name = PttManager.formatKeyName(event.keyCode)
+                    onPttKeyLearned(event.keyCode, event.scanCode, name)
+                }
+                return true
             }
-            return true
+            return super.dispatchKeyEvent(event)
         }
 
         // Check Channel Next (CH+)
@@ -1543,6 +1790,20 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
     }
 
     // DmrService.Listener
+    override fun onTalkgroupSwitched(talkgroup: Int, index: Int, total: Int) {
+        runOnUiThread {
+            tvTg.text = "TG $talkgroup"
+            tvQuickTg?.text = "TG $talkgroup ($index/$total)"
+            animatePop(tvTg)
+            tvQuickTg?.let { animatePop(it) }
+            val p = profileStore.getActiveProfile()
+            val profileName = p?.name ?: "DMR"
+            tvRxInfo.text = "TG AKTIF: $talkgroup ($index/$total) · $profileName"
+            tvRxInfo.setTextColor(Color.parseColor("#34D399"))
+            Toast.makeText(this, "Talkgroup: TG $talkgroup ($index/$total)", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onChannelSwitched(profile: DmrProfile, channelIndex: Int, totalChannels: Int) {
         runOnUiThread {
             lastHeardDisplay = ""
@@ -1625,6 +1886,21 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         }
     }
 
+    override fun onTalkerAliasReceived(srcId: Int, alias: String) {
+        runOnUiThread {
+            if (srcId > 0 && alias.isNotBlank()) {
+                CallbookManager.cacheCallsign(this, srcId, alias)
+                if (dmrService?.isRx == true && dmrService?.currentRxSrc == srcId) {
+                    setCallsignDisplayText(alias)
+                    lastHeardDisplay = alias
+                    val targetTg = dmrService?.currentRxDst ?: (profileStore.getActiveProfile()?.talkgroup ?: 0)
+                    tvRxInfo.text = "RX ID: $srcId · TG $targetTg · TA AKTIF"
+                    updateLastHeardBanner(isRxActive = true)
+                }
+            }
+        }
+    }
+
     override fun onRxStateChanged(active: Boolean, srcId: Int, talkgroup: Int) {
         runOnUiThread {
             if (active) {
@@ -1646,7 +1922,9 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 }
 
                 val p = profileStore.getActiveProfile()
+                val localProfile = profileStore.getAllProfiles().firstOrNull { it.dmrId == srcId }
                 val knownCall = CallbookManager.getCallsign(this, srcId)
+                    ?: localProfile?.let { CallbookManager.resolveStationLabel(this, it.dmrId, it.callsign) }
                     ?: if (p != null && srcId == p.dmrId) CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign) else null
 
                 val displayLabel = knownCall ?: "$srcId"
@@ -1656,7 +1934,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 lastHeardSrcId = srcId
                 lastHeardDisplay = "$displayLabel"
                 updateLastHeardBanner(isRxActive = true)
-                tvCallsignId.text = "$displayLabel"
+                setCallsignDisplayText(displayLabel)
                 startCallsignPulse(Color.parseColor("#34D399"), Color.parseColor("#A7F3D0"))
                 val targetTg = if (talkgroup > 0) talkgroup else (p?.talkgroup ?: 0)
                 tvRxInfo.text = if (knownCall != null) "RX ID: $srcId · TG $targetTg · SUARA MASUK" else "MENCARI CALLSIGN ($srcId)..."
@@ -1668,7 +1946,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                             lastHeardDisplay = "$resolved"
                         }
                         if (dmrService?.isRx == true && dmrService?.currentRxSrc == srcId) {
-                            tvCallsignId.text = "$resolved"
+                            setCallsignDisplayText(resolved)
                             tvRxInfo.text = "RX ID: $srcId · TG $targetTg · SUARA MASUK"
                             updateLastHeardBanner(isRxActive = true)
                         } else {
@@ -1698,7 +1976,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 if (p != null) {
                     tvTg.text = "TG ${p.talkgroup}"
                     tvTg.setTextColor(Color.parseColor("#38BDF8"))
-                    tvCallsignId.text = CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign)
+                    setCallsignDisplayText(CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign))
                 } else {
                     updateProfileDisplay()
                 }
@@ -1731,7 +2009,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
 
                 val p = profileStore.getActiveProfile()
                 val call = p?.callsign?.ifBlank { "ME" } ?: "ME"
-                tvCallsignId.text = CallbookManager.resolveStationLabel(this, p?.dmrId ?: 0, call)
+                setCallsignDisplayText(CallbookManager.resolveStationLabel(this, p?.dmrId ?: 0, call))
                 startCallsignPulse(Color.parseColor("#FEF08A"), Color.parseColor("#FEF08A"))
                 tvRxInfo.text = "TRANSMIT KE TG ${p?.talkgroup ?: 0} · MIC AKTIF"
                 tvRxInfo.setTextColor(Color.parseColor("#F43F5E"))
@@ -1758,7 +2036,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
                 if (p != null) {
                     tvTg.text = "TG ${p.talkgroup}"
                     tvTg.setTextColor(Color.parseColor("#38BDF8"))
-                    tvCallsignId.text = CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign)
+                    setCallsignDisplayText(CallbookManager.resolveStationLabel(this, p.dmrId, p.callsign))
                 } else {
                     updateProfileDisplay()
                 }
@@ -1790,6 +2068,7 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
         statusPulseAnimator?.cancel()
         unregisterPttBroadcastReceiver()
         unregisterHeadsetPlugReceiver()
+        unregisterBatteryReceiver()
         pttCalibDialog?.dismiss()
         pttCalibDialog = null
         if (isBound) {
@@ -1798,6 +2077,56 @@ class MainActivity : AppCompatActivity(), DmrService.Listener {
             isBound = false
         }
         super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            applyImmersiveFullscreen()
+        }
+    }
+
+    private fun applyImmersiveFullscreen() {
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        )
+    }
+
+    private fun registerBatteryReceiver() {
+        batteryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent == null) return
+                val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                        status == BatteryManager.BATTERY_STATUS_FULL
+                val pct = if (scale > 0 && level >= 0) (level * 100) / scale else level
+                val chargingIndicator = if (isCharging) "⚡" else ""
+                tvBattery.text = "$chargingIndicator$pct%"
+                tvBattery.setTextColor(
+                    when {
+                        isCharging -> Color.parseColor("#38BDF8")
+                        pct <= 15 -> Color.parseColor("#F43F5E")
+                        pct <= 30 -> Color.parseColor("#FBBF24")
+                        else -> Color.parseColor("#A3E635")
+                    }
+                )
+            }
+        }
+        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    }
+
+    private fun unregisterBatteryReceiver() {
+        try {
+            batteryReceiver?.let { unregisterReceiver(it) }
+            batteryReceiver = null
+        } catch (_: Exception) {}
     }
 
     companion object {

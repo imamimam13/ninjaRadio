@@ -147,6 +147,11 @@ if os.path.exists(bm):
             src = src.replace(target_crc, replace_crc)
             print('✓ Patched FreeDMR: exempt CORE-BRIDGE from duplicate payload drop')
 
+    # Prevent KeyError: 'DEFAULT_UA_TIMER' when PEER systems (CORE-BRIDGE) dynamically activate unbridged TGs (e.g. TG 555)
+    if "['DEFAULT_UA_TIMER']" in src:
+        src = src.replace("['DEFAULT_UA_TIMER']", ".get('DEFAULT_UA_TIMER', 60)")
+        print('✓ Patched FreeDMR: safe .get(DEFAULT_UA_TIMER, 60) lookup for PEER systems')
+
     open(bm, 'w', encoding='utf-8').write(src)
 PYEOF
 

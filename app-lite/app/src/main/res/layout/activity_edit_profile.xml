@@ -254,7 +254,7 @@
                         android:textSize="16sp"
                         android:textStyle="bold"
                         android:paddingStart="8dp"
-                        android:inputType="number"
+                        android:inputType="text"
                         android:singleLine="true"
                         android:hint="1025"
                         android:textColorHint="#666666" />

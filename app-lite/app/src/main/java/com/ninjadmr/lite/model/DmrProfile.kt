@@ -16,6 +16,7 @@ data class DmrProfile(
     var essid: Int = 1,
     var options: String = "",
     var rxGroup: String = "", // Multi TG: "*" for All/Promiscuous, or comma-separated e.g. "1025,91,510"
+    var savedTalkgroups: String = "", // Permanent Multi-TG list so dynamic switching never loses talkgroups
     var location: String = "Mobile, ID",
     var software: String = "20260911_WPSD",
     var hardware: String = "MMDVM_MMDVM_HS_Hat",
@@ -34,6 +35,43 @@ data class DmrProfile(
             }
         } else 0
 
+    fun getAllTalkgroups(): List<Int> {
+        val list = mutableListOf<Int>()
+        // 1. Permanent saved talkgroups list
+        if (savedTalkgroups.isNotBlank()) {
+            val matches = Regex("""\d+""").findAll(savedTalkgroups)
+            for (m in matches) {
+                val tg = m.value.toIntOrNull()
+                if (tg != null && tg > 0 && !list.contains(tg)) {
+                    list.add(tg)
+                }
+            }
+        }
+        // 2. Extra talkgroups from rxGroup
+        if (rxGroup.isNotBlank() && rxGroup != "*" && !rxGroup.equals("ALL", ignoreCase = true)) {
+            val matches = Regex("""\d+""").findAll(rxGroup)
+            for (m in matches) {
+                val tg = m.value.toIntOrNull()
+                if (tg != null && tg > 0 && !list.contains(tg)) {
+                    list.add(tg)
+                }
+            }
+        }
+        // 3. Current talkgroup
+        if (talkgroup > 0 && !list.contains(talkgroup)) {
+            list.add(talkgroup)
+        }
+        // Auto-persist back to savedTalkgroups AND rxGroup so disk always preserves all of them!
+        if (list.size > 1) {
+            val str = list.joinToString(", ")
+            savedTalkgroups = str
+            if (rxGroup != "*" && !rxGroup.equals("ALL", ignoreCase = true)) {
+                rxGroup = str
+            }
+        }
+        return list
+    }
+
     fun toJson(): JSONObject {
         val json = JSONObject()
         json.put("id", id)
@@ -48,6 +86,7 @@ data class DmrProfile(
         json.put("essid", essid)
         json.put("options", options)
         json.put("rxGroup", rxGroup)
+        json.put("savedTalkgroups", savedTalkgroups)
         json.put("location", location)
         json.put("software", software)
         json.put("hardware", hardware)
@@ -74,6 +113,7 @@ data class DmrProfile(
                 essid = json.optInt("essid", 1),
                 options = json.optString("options", ""),
                 rxGroup = json.optString("rxGroup", ""),
+                savedTalkgroups = json.optString("savedTalkgroups", ""),
                 location = json.optString("location", "Mobile, ID"),
                 software = json.optString("software", "20260911_WPSD"),
                 hardware = json.optString("hardware", "MMDVM_MMDVM_HS_Hat"),

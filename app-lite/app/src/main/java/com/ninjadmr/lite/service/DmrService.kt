@@ -29,6 +29,7 @@ import com.ninjadmr.lite.dmr.Dmr
 import com.ninjadmr.lite.dmr.DmrCall
 import com.ninjadmr.lite.dmr.Dmrd
 import com.ninjadmr.lite.dmr.HbpClient
+import com.ninjadmr.lite.dmr.TalkerAliasDecoder
 import com.ninjadmr.lite.model.DmrProfile
 import com.ninjadmr.lite.model.ProfileStore
 import com.ninjadmr.lite.ptt.PttManager
@@ -44,9 +45,11 @@ class DmrService : Service(), HbpClient.Callback {
     interface Listener {
         fun onStateChanged(state: HbpClient.State, info: String)
         fun onRxStateChanged(active: Boolean, srcId: Int, talkgroup: Int = 0)
+        fun onTalkerAliasReceived(srcId: Int, alias: String) {}
         fun onTxStateChanged(active: Boolean)
         fun onAudioLevel(level: Float, isTx: Boolean)
         fun onChannelSwitched(profile: DmrProfile, channelIndex: Int, totalChannels: Int) {}
+        fun onTalkgroupSwitched(talkgroup: Int, index: Int, total: Int) {}
     }
 
     inner class LocalBinder : Binder() {
@@ -61,6 +64,12 @@ class DmrService : Service(), HbpClient.Callback {
     private val audio = AudioEngine()
     private var vocoder: AmbeVocoder = com.example.hblink.NullVocoder()
     private lateinit var profileStore: ProfileStore
+
+    private val taDecoder = TalkerAliasDecoder { srcId, alias ->
+        mainHandler.post {
+            listener?.onTalkerAliasReceived(srcId, alias)
+        }
+    }
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var pttReceiver: BroadcastReceiver? = null
@@ -289,6 +298,81 @@ class DmrService : Service(), HbpClient.Callback {
         return nextProfile
     }
 
+    fun updateActiveProfile(newProfile: DmrProfile) {
+        val cur = activeProfile
+        if (cur != null && cur.id == newProfile.id) {
+            cur.name = newProfile.name
+            cur.host = newProfile.host
+            cur.port = newProfile.port
+            cur.password = newProfile.password
+            cur.callsign = newProfile.callsign
+            cur.dmrId = newProfile.dmrId
+            cur.essid = newProfile.essid
+            cur.talkgroup = newProfile.talkgroup
+            cur.slot = newProfile.slot
+            cur.rxGroup = newProfile.rxGroup
+            cur.savedTalkgroups = newProfile.savedTalkgroups
+            cur.options = newProfile.options
+            cur.location = newProfile.location
+            cur.software = newProfile.software
+            cur.hardware = newProfile.hardware
+            cur.description = newProfile.description
+            cur.slotMode = newProfile.slotMode
+            cur.rxFreq = newProfile.rxFreq
+            cur.txFreq = newProfile.txFreq
+            cur.colorCode = newProfile.colorCode
+            activeProfile = cur
+        } else {
+            activeProfile = newProfile
+        }
+        mainHandler.post {
+            val tgs = activeProfile?.getAllTalkgroups() ?: emptyList()
+            val tg = activeProfile?.talkgroup ?: 0
+            val idx = tgs.indexOf(tg).let { if (it >= 0) it + 1 else 1 }
+            listener?.onTalkgroupSwitched(tg, idx, tgs.size.coerceAtLeast(1))
+        }
+    }
+
+    fun switchTalkgroup(delta: Int): Int? {
+        val profile = activeProfile ?: profileStore.getActiveProfile() ?: return null
+        val tgs = profile.getAllTalkgroups()
+        if (tgs.isEmpty()) return null
+        val currentIndex = tgs.indexOf(profile.talkgroup).let { if (it >= 0) it else 0 }
+        val nextIndex = (currentIndex + delta).let {
+            if (it < 0) tgs.size - 1 else if (it >= tgs.size) 0 else it
+        }
+        val nextTg = tgs[nextIndex]
+        profile.talkgroup = nextTg
+        profileStore.saveOrUpdateProfile(profile)
+        if (isRx) {
+            endRx()
+        }
+        client?.updateTalkgroupSubscription(profile.slot, nextTg)
+        NinjaAudioFx.playShuriken(this)
+        mainHandler.post {
+            listener?.onTalkgroupSwitched(nextTg, nextIndex + 1, tgs.size)
+        }
+        return nextTg
+    }
+
+    fun setTalkgroup(newTg: Int): Boolean {
+        if (newTg <= 0) return false
+        val profile = activeProfile ?: profileStore.getActiveProfile() ?: return false
+        val tgs = profile.getAllTalkgroups()
+        profile.talkgroup = newTg
+        profileStore.saveOrUpdateProfile(profile)
+        if (isRx) {
+            endRx()
+        }
+        client?.updateTalkgroupSubscription(profile.slot, newTg)
+        val index = tgs.indexOf(newTg).let { if (it >= 0) it + 1 else 1 }
+        NinjaAudioFx.playShuriken(this)
+        mainHandler.post {
+            listener?.onTalkgroupSwitched(newTg, index, tgs.size.coerceAtLeast(1))
+        }
+        return true
+    }
+
     fun connectWithProfile(profile: DmrProfile) {
         if (client != null) {
             disconnect(manual = false)
@@ -379,12 +463,8 @@ class DmrService : Service(), HbpClient.Callback {
         if (p.slot != profile.slot) return
 
         val rxGrp = profile.rxGroup.trim()
-        val allowAll = rxGrp == "*" || rxGrp.equals("ALL", ignoreCase = true) || profile.talkgroup == 0
-        val allowedTgs = if (rxGrp.isNotEmpty() && !allowAll) {
-            rxGrp.split(',').mapNotNull { it.trim().toIntOrNull() }.toSet()
-        } else emptySet()
-
-        val tgMatches = allowAll || p.dst == profile.talkgroup || allowedTgs.contains(p.dst)
+        val isPromiscuous = rxGrp == "*" || rxGrp.equals("ALL", ignoreCase = true) || profile.talkgroup == 0
+        val tgMatches = isPromiscuous || p.dst == profile.talkgroup
         if (!p.isPrivate && !tgMatches) return
         if (p.isPrivate && p.dst != profile.dmrId) return
         if (p.src == profile.dmrId) return
@@ -422,6 +502,7 @@ class DmrService : Service(), HbpClient.Callback {
             rxStream = p.streamId
         }
         rxLastMs = System.currentTimeMillis()
+        taDecoder.processBurst(p.payload, p.src)
 
         if (vocoder.available) {
             val pcmAll = (vocoder as? com.example.hblink.Md380AmbeVocoder)?.decodeDmrd(p.payload)
@@ -455,6 +536,7 @@ class DmrService : Service(), HbpClient.Callback {
         currentRxDst = p.dst
         isRx = true
         voxHotFrames = 0
+        taDecoder.reset(p.src)
         mainHandler.post {
             listener?.onRxStateChanged(true, p.src, p.dst)
         }
@@ -464,6 +546,7 @@ class DmrService : Service(), HbpClient.Callback {
         if (!isRx) return
         audio.flushRxBuffer()
         isRx = false
+        taDecoder.reset(0)
         currentRxSrc = 0
         val lastDst = currentRxDst
         currentRxDst = 0
