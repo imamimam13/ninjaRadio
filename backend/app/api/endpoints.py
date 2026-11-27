@@ -7,6 +7,8 @@ import asyncio
 import psutil
 import time
 import os
+import json
+import copy
 import logging
 
 logger = logging.getLogger("NinjaRadio-Endpoints")
@@ -3893,6 +3895,34 @@ async def get_zello_status():
         "details": "Zello Channel API Ready" if has_key else "Private key needed"
     }
 
+@router.get("/zello/token")
+async def get_zello_token():
+    """Returns dynamic JWT auth token generated securely by zello-bridge using channel private key."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get("http://zello-bridge:12350/token")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception as e:
+        logger.warning(f"Could not reach zello-bridge token generator: {e}")
+
+    cfg = read_config_file()
+    z_cfg = cfg.get("zello_config", {})
+    dev_token = z_cfg.get("dev_token", "")
+    if dev_token:
+        return {
+            "status": "SUCCESS",
+            "token": dev_token,
+            "channel": z_cfg.get("channel", "NINJARADIOZL"),
+            "issuer": z_cfg.get("issuer", "")
+        }
+    return {
+        "status": "ERROR",
+        "token": "",
+        "message": "Belum ada Zello Private Key atau Dev Token di konfigurasi server."
+    }
+
 @router.get("/zello/logs")
 async def get_zello_logs():
     """Returns recent log lines from zello bridge."""
@@ -4796,3 +4826,238 @@ async def run_callbook_autosync_loop():
         except Exception as e:
             logger.debug(f"Callbook auto-sync loop note: {e}")
         await asyncio.sleep(900)  # Check every 15 minutes
+
+
+# ----------------- Audio Information System & Master Normalizer Admin Endpoints -----------------
+
+PRESET_PROFILES = {
+    "broadcast_warm": {
+        "master": {
+            "target_rms": 4200.0,
+            "agc_enabled": True,
+            "max_agc_gain": 4.0,
+            "limiter_threshold": 18000.0,
+            "filter_hpf": True,
+            "filter_lpf": True,
+            "filter_deemph": True
+        },
+        "modes": {
+            "dmr": {"rx_gain": 2.8, "tx_gain": 1.0, "name": "DMR Direct RF Vocoder", "description": "Incoming DMR bursts via mbelib-neo & outgoing OpenDMR frames"},
+            "web": {"tx_gain": 1.0, "rx_gain": 1.3, "name": "Web PTT & Audio Player", "description": "Browser Microphone (/radio) and Live Audio Monitor (/)"},
+            "mumble": {"ingress_gain": 1.1, "egress_gain": 1.3, "name": "Mumble VoIP Bridge", "description": "Mumla / Mumble desktop client audio in and out"},
+            "svxlink": {"ingress_gain": 1.1, "egress_gain": 1.3, "name": "SvxLink / EchoLink Reflector", "description": "Analog FM Repeaters & SvxReflector multi-TG gateway"},
+            "zello": {"ingress_gain": 1.0, "egress_gain": 1.25, "name": "Zello Channel Bridge", "description": "Zello Push-to-Talk Channel Gateway audio stream"},
+            "dvswitch": {"ingress_gain": 1.0, "egress_gain": 1.25, "name": "DVSwitch Mobile USRP", "description": "DVSwitch Mobile Android/iOS app on UDP port 32345"}
+        }
+    },
+    "loud_punchy": {
+        "master": {
+            "target_rms": 5200.0,
+            "agc_enabled": True,
+            "max_agc_gain": 5.0,
+            "limiter_threshold": 21000.0,
+            "filter_hpf": True,
+            "filter_lpf": True,
+            "filter_deemph": True
+        },
+        "modes": {
+            "dmr": {"rx_gain": 3.4, "tx_gain": 1.2, "name": "DMR Direct RF Vocoder", "description": "High-impact RF HT audio"},
+            "web": {"tx_gain": 1.2, "rx_gain": 1.5, "name": "Web PTT & Audio Player", "description": "Boosted web playback"},
+            "mumble": {"ingress_gain": 1.3, "egress_gain": 1.4, "name": "Mumble VoIP Bridge", "description": "Loud Mumble audio"},
+            "svxlink": {"ingress_gain": 1.3, "egress_gain": 1.4, "name": "SvxLink / EchoLink Reflector", "description": "Crisp repeater FM punch"},
+            "zello": {"ingress_gain": 1.2, "egress_gain": 1.4, "name": "Zello Channel Bridge", "description": "Punchy Zello volume"},
+            "dvswitch": {"ingress_gain": 1.2, "egress_gain": 1.4, "name": "DVSwitch Mobile USRP", "description": "High speaker output"}
+        }
+    },
+    "studio_flat": {
+        "master": {
+            "target_rms": 3500.0,
+            "agc_enabled": False,
+            "max_agc_gain": 2.0,
+            "limiter_threshold": 24000.0,
+            "filter_hpf": False,
+            "filter_lpf": False,
+            "filter_deemph": False
+        },
+        "modes": {
+            "dmr": {"rx_gain": 2.2, "tx_gain": 1.0, "name": "DMR Direct RF Vocoder", "description": "Transparent flat vocoder"},
+            "web": {"tx_gain": 1.0, "rx_gain": 1.0, "name": "Web PTT & Audio Player", "description": "1:1 linear Web PTT"},
+            "mumble": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "Mumble VoIP Bridge", "description": "Flat Mumble"},
+            "svxlink": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "SvxLink / EchoLink Reflector", "description": "Flat repeater gateway"},
+            "zello": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "Zello Channel Bridge", "description": "Flat Zello gateway"},
+            "dvswitch": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "DVSwitch Mobile USRP", "description": "Flat USRP"}
+        }
+    },
+    "outdoor_noise": {
+        "master": {
+            "target_rms": 4800.0,
+            "agc_enabled": True,
+            "max_agc_gain": 4.5,
+            "limiter_threshold": 17000.0,
+            "filter_hpf": True,
+            "filter_lpf": True,
+            "filter_deemph": True
+        },
+        "modes": {
+            "dmr": {"rx_gain": 3.0, "tx_gain": 1.0, "name": "DMR Direct RF Vocoder", "description": "Aggressive bandpass & smoothing"},
+            "web": {"tx_gain": 1.1, "rx_gain": 1.3, "name": "Web PTT & Audio Player", "description": "Clear outdoor web monitor"},
+            "mumble": {"ingress_gain": 1.1, "egress_gain": 1.3, "name": "Mumble VoIP Bridge", "description": "Mumble noise-reduced"},
+            "svxlink": {"ingress_gain": 1.1, "egress_gain": 1.3, "name": "SvxLink / EchoLink Reflector", "description": "Noise-gated repeater"},
+            "zello": {"ingress_gain": 1.1, "egress_gain": 1.3, "name": "Zello Channel Bridge", "description": "Field radio Zello"},
+            "dvswitch": {"ingress_gain": 1.1, "egress_gain": 1.3, "name": "DVSwitch Mobile USRP", "description": "Field DVSwitch"}
+        }
+    },
+    "unity_zero_db": {
+        "master": {
+            "target_rms": 3000.0,
+            "agc_enabled": False,
+            "max_agc_gain": 1.0,
+            "limiter_threshold": 28000.0,
+            "filter_hpf": True,
+            "filter_lpf": True,
+            "filter_deemph": True
+        },
+        "modes": {
+            "dmr": {"rx_gain": 2.5, "tx_gain": 1.0, "name": "DMR Direct RF Vocoder", "description": "Unity standard"},
+            "web": {"tx_gain": 1.0, "rx_gain": 1.0, "name": "Web PTT & Audio Player", "description": "0 dB unity"},
+            "mumble": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "Mumble VoIP Bridge", "description": "0 dB unity"},
+            "svxlink": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "SvxLink / EchoLink Reflector", "description": "0 dB unity"},
+            "zello": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "Zello Channel Bridge", "description": "0 dB unity"},
+            "dvswitch": {"ingress_gain": 1.0, "egress_gain": 1.0, "name": "DVSwitch Mobile USRP", "description": "0 dB unity"}
+        }
+    }
+}
+
+@router.get("/admin/audio-settings")
+async def get_admin_audio_settings():
+    """Returns persistent audio calibration settings and dynamically dispatches to core."""
+    cfg = read_config_file()
+    audio_cfg = cfg.get("audio_settings")
+    if not audio_cfg or not isinstance(audio_cfg, dict):
+        audio_cfg = json.loads(json.dumps(PRESET_PROFILES["broadcast_warm"]))
+        # Populate peers from configured peering list
+        peers_dict = {}
+        for p in cfg.get("peering", []):
+            p_name = p.get("name") or p.get("host")
+            if p_name:
+                peers_dict[p_name] = {
+                    "rx_gain": 1.15,
+                    "tx_gain": 1.0,
+                    "mute": False,
+                    "solo": False,
+                    "name": p_name
+                }
+        audio_cfg["peers"] = peers_dict
+        audio_cfg["presets"] = {"current_preset": "broadcast_warm", "available": list(PRESET_PROFILES.keys())}
+    
+    # Ensure all peers in config.json exist in audio_cfg["peers"]
+    existing_peers = audio_cfg.setdefault("peers", {})
+    for p in cfg.get("peering", []):
+        p_name = p.get("name") or p.get("host")
+        if p_name and p_name not in existing_peers:
+            existing_peers[p_name] = {
+                "rx_gain": 1.1,
+                "tx_gain": 1.0,
+                "mute": False,
+                "solo": False,
+                "name": p_name
+            }
+
+    return {
+        "status": "success",
+        "data": audio_cfg,
+        "presets": PRESET_PROFILES
+    }
+
+@router.post("/admin/audio-settings")
+async def save_admin_audio_settings(
+    settings_payload: dict,
+    _: None = Depends(_require_admin_pin)
+):
+    """Saves updated audio normalization & multi-peer gain settings and hot-reloads core."""
+    import httpx
+    cfg = read_config_file()
+    cfg["audio_settings"] = settings_payload
+    
+    # Save to /app/data/config.json
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config.json: {e}")
+
+    # Forward to core:5000/api/audio-settings for immediate memory update
+    core_updated = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.post("http://core:5000/api/audio-settings", json=settings_payload)
+            core_updated = (r.status_code == 200)
+    except Exception as e:
+        logger.debug(f"Could not hot-reload core audio settings via HTTP: {e}")
+
+    return {
+        "status": "success",
+        "message": "Pengaturan audio berhasil disimpan dan diterapkan ke seluruh mode & peer!",
+        "core_hot_reloaded": core_updated,
+        "data": settings_payload
+    }
+
+@router.post("/admin/audio-settings/preset/{preset_name}")
+async def apply_audio_preset(
+    preset_name: str,
+    _: None = Depends(_require_admin_pin)
+):
+    """Applies a preset sound profile across all modes and peers."""
+    clean_p = preset_name.lower().strip()
+    if clean_p not in PRESET_PROFILES:
+        raise HTTPException(status_code=400, detail=f"Preset '{preset_name}' tidak ditemukan.")
+
+    base_preset = json.loads(json.dumps(PRESET_PROFILES[clean_p]))
+    cfg = read_config_file()
+    current_audio = cfg.get("audio_settings", {})
+    # Preserve existing peer list
+    base_preset["peers"] = current_audio.get("peers", {})
+    base_preset["presets"] = {"current_preset": clean_p, "available": list(PRESET_PROFILES.keys())}
+
+    cfg["audio_settings"] = base_preset
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.post("http://core:5000/api/audio-settings", json=base_preset)
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "preset": clean_p,
+        "message": f"Preset '{clean_p}' berhasil diterapkan ke semua mode!",
+        "data": base_preset
+    }
+
+@router.get("/admin/audio-meter")
+async def get_live_audio_meter():
+    """Returns telemetry of current audio streams and levels across the server."""
+    active_list = []
+    for sk, s in list(ACTIVE_STREAMS.items()):
+        active_list.append({
+            "stream_key": sk,
+            "callsign": s.get("callsign"),
+            "name": s.get("name"),
+            "talkgroup": s.get("talkgroup"),
+            "slot": s.get("slot"),
+            "mode": s.get("mode"),
+            "rssi": s.get("rssi"),
+            "duration": s.get("duration", "Active")
+        })
+    return {
+        "active_streams_count": len(ACTIVE_STREAMS),
+        "streams": active_list,
+        "vocoder": "mbelib-neo (TIA-102.BABA Adaptive Smoothing & FFT Synthesis)",
+        "timestamp": get_current_iso_utc()
+    }

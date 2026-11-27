@@ -196,7 +196,7 @@ def encode_emblc(_lc):
     
     emblc_d = bitarray(endian='big')
     emblc_d.extend([_binlc[8], _binlc[24],_binlc[40],_binlc[56],_binlc[72],_binlc[88],_binlc[104],_binlc[120]])
-    emblc_d.extend([_binlc[9], _binlc[24],_binlc[41],_binlc[57],_binlc[73],_binlc[89],_binlc[105],_binlc[121]])
+    emblc_d.extend([_binlc[9], _binlc[25],_binlc[41],_binlc[57],_binlc[73],_binlc[89],_binlc[105],_binlc[121]])
     emblc_d.extend([_binlc[10],_binlc[26],_binlc[42],_binlc[58],_binlc[74],_binlc[90],_binlc[106],_binlc[122]])
     emblc_d.extend([_binlc[11],_binlc[27],_binlc[43],_binlc[59],_binlc[75],_binlc[91],_binlc[107],_binlc[123]])
     

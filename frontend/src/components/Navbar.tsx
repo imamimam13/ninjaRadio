@@ -17,6 +17,7 @@ import {
   Unlock, 
   KeyRound, 
   AlertCircle, 
+  SlidersHorizontal,
   X 
 } from "lucide-react";
 import { getIsAdminUnlocked, setAdminUnlocked, verifyAdminPin, ADMIN_AUTH_EVENT } from "@/lib/adminAuth";
@@ -92,6 +93,7 @@ export const Navbar = ({ isConnected }: { isConnected: boolean }) => {
 
   // Protected server daemon tabs - Accessible via Admin dropdown when unlocked
   const protectedNavItems = [
+    { href: "/admin/dashboard", label: "AUDIO MASTER", icon: SlidersHorizontal, tag: "DASHBOARD", desc: "Sistem Informasi & Audio Master", isProtected: true },
     { href: "/admin/registrations", label: "REGISTRATIONS", icon: Users, tag: "APPROVAL", desc: "Verifikasi Callsign", isProtected: true },
     { href: "/serverdmr", label: "DMR MASTER", icon: Cpu, tag: "PORT 62031", desc: "Hotspot & Peering", isProtected: true },
     { href: "/dvswitch", label: "DVSWITCH", icon: Terminal, tag: "PORT 32345", desc: "Mobile USRP Audio", isProtected: true },
