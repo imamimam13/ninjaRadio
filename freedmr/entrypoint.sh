@@ -99,7 +99,7 @@ if os.path.exists(hb_path):
         "                if self._config.get('MAX_PEERS', 1) <= 1:\n"
         "                    self._CONFIG['SYSTEMS'][self._system]['OPTIONS'] = _this_peer['OPTIONS'].decode()"
     )
-    if old_rpto in src:
+    if "self._config.get('MAX_PEERS', 1) <= 1:" not in src and old_rpto in src:
         src = src.replace(old_rpto, new_rpto)
         print('✓ Patched FreeDMR hblink.py: protected multi-peer MASTER OPTIONS from single-peer RPTO overwrite')
 
