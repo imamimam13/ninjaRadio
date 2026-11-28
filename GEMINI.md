@@ -52,14 +52,15 @@
   - **Hangover Timer**: Ketika level audio turun di bawah release threshold, transmisi tidak langsung mati, melainkan menunggu jeda hangover (misal 400–600ms). Jika setelah jeda tersebut tetap hening, barulah kirim sinyal unkey secara bersih.
   - **Hard Time-Out Timer (TOT)**: Batas maksimal transmisi terus-menerus (misal 120-180 detik) untuk mencegah open-mic permanen jika ada noise statis tinggi.
 
-## 8. Verified Golden Stable Milestone: v2.5.0-stable (c2b7ef0)
-- **Tag Rilis**: [`v2.5.0-stable`](https://github.com/imamimam13/ninjaRadio/releases/tag/v2.5.0-stable) & `stable-production` (Commit `c2b7ef0`).
+## 8. Verified Golden Stable Milestone: v2.6.0-stable (e480b10)
+- **Tag Rilis**: [`v2.6.0-stable`](https://github.com/imamimam13/ninjaRadio/releases/tag/v2.6.0-stable) & `stable-production` (Commit `e480b10`).
 - **Status Operasional**:
-  - Direct DMR Bi-Directional Peer (`HomeBrewClient` Anti-Collision Guard).
-  - FreeDMR Master & MMDVM Hotspot Bridge (`rules.py` dynamic generator fix).
-  - SvxReflector & SvxLink Multi-TG Bridge (Auto-Clear override & dynamic per-burst talker delegation).
+  - Direct DMR Bi-Directional Peer (`HomeBrewClient` Anti-Collision Guard & Slot Locking Golden `0476be0` tanpa preemption liar).
+  - FreeDMR Master & MMDVM Hotspot Bridge (`rules.py` dynamic generator fix & isolasi RPTO per-peer multi-master).
+  - SvxReflector & SvxLink Multi-TG Bridge (Golden `68b16a9` audio pipeline, zero dropped packets, dan universal v2/v3 UDP endpoint updater untuk klien cellular CGNAT roaming).
+  - High-Fidelity Vocoder: `mbelib-neo` AMBE+2 vocoder dengan adaptive smoothing dan FFT synthesis.
   - Zello Channel Gateway Bi-Directional Bridge.
   - Core Engine Mutual Exclusion TG Lock (Zero collision antara HT, Gateway, dan Peer).
-- **Aturan Ketat**: Setiap perubahan di masa mendatang HARUS menjadikan commit `c2b7ef0` ini sebagai baseline acuan dan DILARANG merusak alur pipeline yang telah stabil ini.
+- **Aturan Ketat**: Setiap perubahan di masa mendatang HARUS menjadikan commit `e480b10` ini sebagai baseline acuan dan DILARANG merusak alur pipeline yang telah stabil ini.
 
 
