@@ -192,6 +192,14 @@ if os.path.exists(bm):
             src = src.replace(t_cont_1, r_cont_1, 1)
             print('✓ Patched FreeDMR: bypassed bridgeHBP contention for CORE-BRIDGE & released VTERM channels')
 
+        t_cont_2_clean = "                        if ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < _target_system['GROUP_HANGTIME'])):"
+        r_cont_2_clean = (
+            "                        if _target.get('SYSTEM') == 'CORE-BRIDGE' or self._system == 'CORE-BRIDGE':  # NINJA_CORE_BRIDGE_CONTENTION_BYPASS\n"
+            "                            pass\n"
+            "                        elif _target_status[_target['TS']].get('TX_TYPE') == HBPF_SLT_VTERM and _target_status[_target['TS']].get('RX_TYPE') == HBPF_SLT_VTERM:\n"
+            "                            pass\n"
+            "                        elif ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < _target_system['GROUP_HANGTIME'])):"
+        )
         t_cont_2 = "                        if _target_system.get('MAX_PEERS', 1) > 1:  # NINJA_MULTI_PEER_CONTENTION_BYPASS"
         r_cont_2 = (
             "                        if _target.get('SYSTEM') == 'CORE-BRIDGE' or self._system == 'CORE-BRIDGE':  # NINJA_CORE_BRIDGE_CONTENTION_BYPASS\n"
@@ -203,6 +211,9 @@ if os.path.exists(bm):
         if t_cont_2 in src:
             src = src.replace(t_cont_2, r_cont_2, 1)
             print('✓ Patched FreeDMR: bypassed routerHBP contention for CORE-BRIDGE & released VTERM channels')
+        elif t_cont_2_clean in src:
+            src = src.replace(t_cont_2_clean, r_cont_2_clean, 1)
+            print('✓ Patched FreeDMR: bypassed routerHBP contention (clean) for CORE-BRIDGE & released VTERM channels')
 
     open(bm, 'w', encoding='utf-8').write(src)
 PYEOF

@@ -1,21 +1,19 @@
 # FreeDMR Conference Bridge & Rules Configuration
-# Automatically maintained by NinjaRadio Web Admin
+#
+# IMPORTANT: Keep this EMPTY.
+# HOTSPOT-MASTER uses GENERATOR, so FreeDMR renames it at runtime into
+# HOTSPOT-MASTER-0 .. HOTSPOT-MASTER-99. Any static rule that references
+# 'HOTSPOT-MASTER' points to a system that no longer exists and crashes the
+# router with KeyError: 'HOTSPOT-MASTER' (no TG gets through).
+#
+# Routing is built dynamically instead:
+#   - Hotspot static TGs  -> TS1_STATIC / TS2_STATIC in [HOTSPOT-MASTER]
+#   - CORE-BRIDGE (PEER)  -> always ACTIVE member of every TG bridge
+#                            (patched into bridge_master.py by entrypoint.sh)
 
-BRIDGES = {
-    '555': [
-        {'SYSTEM': 'HOTSPOT-MASTER', 'TS': 2, 'TGID': 555, 'ON': [555], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-        {'SYSTEM': 'CORE-BRIDGE', 'TS': 2, 'TGID': 555, 'ON': [555], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-    ],
-    '1025': [
-        {'SYSTEM': 'HOTSPOT-MASTER', 'TS': 2, 'TGID': 1025, 'ON': [1025], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-        {'SYSTEM': 'CORE-BRIDGE', 'TS': 2, 'TGID': 1025, 'ON': [1025], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-    ],
-    '51024': [
-        {'SYSTEM': 'HOTSPOT-MASTER', 'TS': 2, 'TGID': 51024, 'ON': [51024], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-        {'SYSTEM': 'CORE-BRIDGE', 'TS': 2, 'TGID': 51024, 'ON': [51024], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-    ],
-    '510991': [
-        {'SYSTEM': 'HOTSPOT-MASTER', 'TS': 2, 'TGID': 510991, 'ON': [510991], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-        {'SYSTEM': 'CORE-BRIDGE', 'TS': 2, 'TGID': 510991, 'ON': [510991], 'OFF': [], 'TIMEOUT': 600, 'ACTIVE': True},
-    ],
-}
+BRIDGES = {}
+
+if __name__ == '__main__':
+    from pprint import pprint
+    pprint(BRIDGES)
+
