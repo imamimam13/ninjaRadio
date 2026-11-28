@@ -102,6 +102,11 @@ Thumbs.db
 *.apk
 *.aab
 
+# Mobile / Android Apps (kept local only, excluded from server repo)
+app-*/
+ninja apps/
+ninja-apps/
+
 # Gradle build cache & local properties
 .gradle/
 **/.gradle/

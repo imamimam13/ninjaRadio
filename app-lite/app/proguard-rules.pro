@@ -1,2 +1,0 @@
--keep class com.example.hblink.NativeAmbeVocoder { *; }
--keep class com.ninjadmr.lite.** { *; }
