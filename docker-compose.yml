@@ -20,8 +20,10 @@ services:
     networks:
       - ninjaradio_net
 
-  # 1. Official Battle-Tested FreeDMR Master Engine (HBlink3 Based)
+  # 1. Optional FreeDMR Master Engine (disabled when using Native Core DMR Master on 62031)
   freedmr:
+    profiles:
+      - freedmr
     build:
       context: ./freedmr
       dockerfile: Dockerfile
@@ -40,7 +42,7 @@ services:
     networks:
       - ninjaradio_net
 
-  # 1b. Radio DV Core Engine (Audio Bridges, Vocoders & DVSwitch USRP)
+  # 1b. Radio DV Core Engine (Native Multi-TG DMR Master, Audio Bridges, Vocoders & DVSwitch USRP)
   core:
     build:
       context: ./core
@@ -48,14 +50,15 @@ services:
     container_name: ninjaradio_core
     restart: unless-stopped
     ports:
+      # Native Multi-TG DMR Master / Hotspot MMDVM Port (Pi-Star / WPSD / Hytera / OpenGD77)
+      - "${DMR_MASTER_PORT:-62031}:${DMR_MASTER_PORT:-62031}/udp"
       # DVSwitch Mobile Android & USRP Audio Port
       - "${USRP_AUDIO_PORT:-32345}:${USRP_AUDIO_PORT:-32345}/udp"
     environment:
       - TZ=${TZ:-Asia/Jakarta}
+      - DMR_MASTER_PORT=${DMR_MASTER_PORT:-62031}
       - USRP_AUDIO_PORT=${USRP_AUDIO_PORT:-32345}
-      - USE_FREEDMR=true
-    depends_on:
-      - freedmr
+      - USE_FREEDMR=false
     volumes:
       - ./core:/app
       - ninjaradio_data:/app/data
