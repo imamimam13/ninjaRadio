@@ -178,6 +178,32 @@ if os.path.exists(bm):
         )
         print('✓ Patched FreeDMR: fixed _sysslot UnboundLocalError on >180s stream timeout')
 
+    # Bypass contention blocking on CORE-BRIDGE and immediately release channels on VTERM for instant turnaround
+    if 'NINJA_CORE_BRIDGE_CONTENTION_BYPASS' not in src:
+        t_cont_1 = "                    if ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < _target_system['GROUP_HANGTIME'])):"
+        r_cont_1 = (
+            "                    if _target.get('SYSTEM') == 'CORE-BRIDGE' or self._system == 'CORE-BRIDGE':  # NINJA_CORE_BRIDGE_CONTENTION_BYPASS\n"
+            "                        pass\n"
+            "                    elif _target_status[_target['TS']].get('TX_TYPE') == HBPF_SLT_VTERM and _target_status[_target['TS']].get('RX_TYPE') == HBPF_SLT_VTERM:\n"
+            "                        pass\n"
+            "                    elif ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and ((pkt_time - _target_status[_target['TS']]['RX_TIME']) < _target_system['GROUP_HANGTIME'])):"
+        )
+        if t_cont_1 in src:
+            src = src.replace(t_cont_1, r_cont_1, 1)
+            print('✓ Patched FreeDMR: bypassed bridgeHBP contention for CORE-BRIDGE & released VTERM channels')
+
+        t_cont_2 = "                        if _target_system.get('MAX_PEERS', 1) > 1:  # NINJA_MULTI_PEER_CONTENTION_BYPASS"
+        r_cont_2 = (
+            "                        if _target.get('SYSTEM') == 'CORE-BRIDGE' or self._system == 'CORE-BRIDGE':  # NINJA_CORE_BRIDGE_CONTENTION_BYPASS\n"
+            "                            pass\n"
+            "                        elif _target_status[_target['TS']].get('TX_TYPE') == HBPF_SLT_VTERM and _target_status[_target['TS']].get('RX_TYPE') == HBPF_SLT_VTERM:\n"
+            "                            pass\n"
+            "                        elif _target_system.get('MAX_PEERS', 1) > 1:  # NINJA_MULTI_PEER_CONTENTION_BYPASS"
+        )
+        if t_cont_2 in src:
+            src = src.replace(t_cont_2, r_cont_2, 1)
+            print('✓ Patched FreeDMR: bypassed routerHBP contention for CORE-BRIDGE & released VTERM channels')
+
     open(bm, 'w', encoding='utf-8').write(src)
 PYEOF
 
